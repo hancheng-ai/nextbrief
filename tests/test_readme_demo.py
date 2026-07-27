@@ -64,6 +64,18 @@ class FixtureIsCommitted(unittest.TestCase):
         self.assertEqual(len(actions), 5, "four rejected claims plus one that resolves")
 
 
+
+def _without_optional_tools(text: str) -> str:
+    """The brief minus the "Optional tools missing: ..." reminder.
+
+    Whether that line exists depends on what is installed on the machine, so it
+    cannot be part of a fixed transcript in a README that other people read.
+    """
+    return "\n".join(
+        ln for ln in text.splitlines()
+        if "Optional tools missing" not in ln and "\u53ef\u9009\u5de5\u5177\u7f3a\u5931" not in ln
+    )
+
 class ReadmeDemoReproduces(TempCase):
     """Run what the README tells the reader to run, then diff the two outputs."""
 
@@ -131,9 +143,16 @@ class ReadmeDemoReproduces(TempCase):
                 "%s prints a log/rejected.jsonl that the documented commands no "
                 "longer produce" % name,
             )
+            # The optional-tools reminder is dropped from both sides before
+            # comparing. scc and ccusage are optional by contract: absent, the
+            # brief gains a line saying which measure degraded. That line is
+            # therefore a fact about the machine, not about the demonstration,
+            # and it is exactly why this assertion passed here and failed on a
+            # runner with neither tool installed. Everything else in the brief
+            # is compared byte for byte.
             self.assertEqual(
-                fenced_block(doc, "markdown", "# Daily brief"),
-                brief_md,
+                _without_optional_tools(fenced_block(doc, "markdown", "# Daily brief")),
+                _without_optional_tools(brief_md),
                 "%s prints a BRIEF.md that the documented commands no longer "
                 "produce" % name,
             )
