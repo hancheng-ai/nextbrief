@@ -1,0 +1,72 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-07-27
+
+Initial public release. The engine had been running nightly against a private
+multi-project workspace for some months before being extracted into a package;
+this is that code, with the workspace removed and the interfaces made
+configurable.
+
+### Added
+
+- **Three-stage pipeline.** `sense` walks the projects you own and writes a
+  deterministic `state/snapshot.json`; a model reads a compact digest of it and
+  writes `state/brief.json`; `render` turns that into `BRIEF.md` and
+  `BRIEF.html`. Only the middle stage involves a model.
+- **Evidence gate.** Every claim the model makes must cite a source that
+  resolves against the snapshot. Claims that do not resolve are never rendered —
+  they go to `log/rejected.jsonl` with a reason code. The check lives in the
+  renderer rather than the prompt, so it cannot be drifted from.
+- **Non-goals gate.** Things a project has declared it will not do are lifted
+  verbatim into the snapshot; proposals that collide with one are flagged rather
+  than removed.
+- **Write-permission gate.** Backlog items are diffed field-by-field against
+  their committed versions and out-of-bounds edits are reverted. No agent can
+  set a terminal status; it may only propose one for a human to confirm.
+- **Caps gate.** Per-section limits with overflow written to
+  `log/deferred.jsonl`, so the brief cannot grow without bound and nothing is
+  lost when it hits the limit.
+- **Two renderings, one dataset.** `BRIEF.md` for terminals and diffs,
+  `BRIEF.html` for reading — expandable items, copy-to-clipboard commands,
+  light/dark, fully offline. The HTML re-decides nothing, so the two cannot
+  disagree.
+- **`launch` context builder.** Proposes candidate working directories for a
+  backlog item, ordered by how likely each is to be the right one, and opens a
+  session pre-loaded with context. No input is treated as cancel.
+- **Pluggable providers and sinks.** The model backend and the notification
+  channel are both swappable modules with narrow contracts.
+- **English and Simplified Chinese locales**, with all user-facing strings in
+  catalogs rather than in code.
+- **JSONC configuration.** `registry.jsonc` declares what your projects are and
+  which documents to read; `config.jsonc` holds thresholds and weights. Comments
+  and trailing commas are permitted, because configuration you cannot annotate
+  is configuration nobody maintains.
+- **Idempotence self-check** that exits `3` when a re-run would change the
+  snapshot, so the nightly job is safe to trigger at any time.
+- **Cost controls.** A compact digest is sent to the model instead of the full
+  snapshot; on the reference workspace this cut per-run cost from $4.37 to
+  $0.74, mostly by reducing agent turns rather than bytes. See
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### Design constraints
+
+Not features, but the reasons the code looks the way it does:
+
+- **Zero runtime dependencies**, standard library only, Python 3.9 and up. The
+  nightly run is started by a GUI scheduler with a minimal `PATH` and must work
+  under the system interpreter.
+- **Read-only outside the workspace.** The engine reads your projects and writes
+  only its own directory, so it can never damage anything it observes.
+- **Fail-open throughout.** A parser that cannot understand a file records the
+  path and returns nothing; external tools are optional. One bad document does
+  not cost you the brief.
+
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0

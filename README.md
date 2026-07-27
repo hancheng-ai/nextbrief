@@ -1,0 +1,462 @@
+# nextbrief
+
+[![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/nextbrief.svg)](https://pypi.org/project/nextbrief/)
+[![Python versions](https://img.shields.io/pypi/pyversions/nextbrief.svg)](https://pypi.org/project/nextbrief/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+**A daily brief across every project you own — where every claim is checked against evidence before it is allowed to print.**
+
+[中文文档 →](README.zh.md)
+
+---
+
+Once a day, from the files your projects already keep, nextbrief answers three
+questions: **what moved, what to do next, and what is stuck.**
+
+It does that in three stages, and the middle one is the only place a model appears:
+
+```
+stage 1   sense      no model    your projects (read-only) ──►  state/snapshot.json
+                                                                state/digest.json
+stage 2   interpret  a model     digest.json ──────────────►    state/brief.json
+                                                                (claims + evidence)
+stage 3   render     no model    brief.json + snapshot.json ►   BRIEF.md · BRIEF.html
+```
+
+Stage 2 never sees `snapshot.json`. Stage 3 does. **Every claim the model writes
+must cite a source, and the renderer resolves each source against the file the
+model never saw. A claim whose evidence does not resolve is not rendered at all** —
+the original text goes to `log/rejected.jsonl` instead.
+
+## What that looks like when it fires
+
+Below is a real run against the [example workspace](examples/workspace) in this
+repository. The model was asked to summarise six fictional projects. It produced,
+among other things, this sentence:
+
+> Sign off the tenancy decision — the per-tenant p95 numbers came back clean last week
+
+That sentence is false. The benchmark was never re-run; that is the entire reason
+the decision is still open. The model cited a benchmark report to support it. The
+report does not exist.
+
+```console
+$ nextbrief run
+sense: 6 projects | 3 hot | 0 parse failures | snapshot 35KB / digest 13KB
+render: BRIEF.md | 45 lines | v1 | notify: first run
+  4 unverifiable claim(s) dropped -> log/rejected.jsonl
+```
+
+`log/rejected.jsonl`, verbatim:
+
+```jsonl
+{"at": "2026-03-16T12:00:00", "evidence_kind": "file_mtime", "kind": "unresolvable_evidence", "source": "orchard-api/bench/results/tenancy-p95.md", "text": "Sign off the tenancy decision -- the per-tenant p95 numbers came back clean last week", "where": "next_actions", "why": "source does not resolve in snapshot.evidence_index"}
+{"at": "2026-03-16T12:00:00", "actual": ["doc_declared", "file_mtime"], "declared": "commit", "kind": "evidence_kind_mismatch", "source": "tidepool-docs/HANDBOOK_STATUS.md", "where": "next_actions", "why": "that source cannot supply commit-grade evidence"}
+{"at": "2026-03-16T12:00:00", "kind": "bad_none", "text": "Quarry is progressing steadily and needs no attention this week", "where": "next_actions", "why": "kind=none is only allowed with the 'no signal' phrasing"}
+{"at": "2026-03-16T12:00:00", "kind": "no_evidence", "text": "Rotate the fixture capture keys", "where": "next_actions", "why": "claim carries no evidence array"}
+```
+
+Four sentences the model was willing to print. None of them reached the page. What
+reached the page was the one item whose evidence resolved — plus a line in the
+brief that says four were dropped, so a gate that starts failing is visible rather
+than silent.
+
+Read the four rejections again as a set. One was a fabricated file. One cited a
+status document to support a commit count — a status document can say anything;
+a commit is a fact with a hash. One dressed up "no evidence at all" as "progressing
+steadily". One simply forgot to cite anything. All four are the ordinary,
+unremarkable ways a model produces a confident sentence about a thing that did not
+happen.
+
+**The usual fix for this is a line in the prompt.** *Do not claim anything you
+cannot support.* That works most of the time, which is exactly the problem: an
+instruction is a request to a process that is allowed to interpret it, its failure
+mode is a plausible false statement, and a plausible false statement looks like all
+the true ones. So nextbrief does not ask. The check lives one layer downstream, in
+code, in a stage with no model in it, and it runs on every claim on every run.
+
+The cost of this is real and worth naming: a *true* claim the model failed to cite
+properly gets dropped too. That trade is taken deliberately. A brief that is quietly
+missing something stays trustworthy — you see the gap, and the count is printed. A
+brief containing one confident fabrication is not trustworthy anywhere.
+
+Everything above is reproducible: `examples/workspace/scripts/build-example.sh`,
+then `nextbrief --workspace . sense --as-of 2026-03-16 && nextbrief --workspace . render`.
+
+---
+
+## 60-second quickstart
+
+```sh
+pipx install nextbrief          # or: pip install nextbrief
+nextbrief init ~/brief          # scaffold a workspace; it offers nearby projects
+nextbrief v0                    # build a brief with no model at all
+nextbrief open                  # read it in your browser
+```
+
+**`v0` costs zero tokens and needs no API key.** It runs stage 1 and stage 3 and
+skips the model entirely, so you can evaluate the whole thing — the sensing, the
+signals, the stalled-project detection, the HTML — before deciding whether to spend
+anything at all. Everything `v0` prints is a fact read off your filesystem.
+
+`v0` is also the floor the rest of the system stands on. When the model stage is
+missing, broken, offline, or unpaid for, `nextbrief run` degrades to exactly this
+instead of producing nothing.
+
+Zero runtime dependencies, Python 3.9+, macOS and Linux. The nightly job is
+launched by a system scheduler with a minimal `PATH`, so the package has to work
+under the system interpreter with nothing installed alongside it.
+
+## A brief
+
+From the fictional example workspace — six invented projects, three backlog items:
+
+```markdown
+# Daily brief · 2026-03-16 (Mon) 12:00
+> first run | 6 tracked | 1 awaiting a decision | 2 stalled | 3 in the backlog
+
+## Do these first (across the portfolio, not a few per project)
+1. **Re-run the tenancy benchmark with per-tenant p95 instead of an aggregate** · 45 min · you
+   Evidence: commit 260de3e
+   The decision has been open since the rewrite landed behind a flag.
+
+## One line per project
+
+| Project | Signal | Evidence | Next |
+|---|---|---|---|
+| Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page |
+| Lantern Site | 🌤 warm | 2 commits/30d · last commit 2026-03-06 · 5 active days/30d |  |
+| Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 3 active days/30d | **stalled: no next step** |
+| Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 7 active days/30d | **Go get the evidence that answers it** (below) |
+| Kiln | 🔥 hot | 1 commits/30d · last commit 2026-03-14 · 1 active days/30d | → OPERATIONS_LOG.md |
+| Quarry | ❄️ dormant | last commit 2025-12-05 · **2 uncommitted** | **stalled: no next step** |
+
+## Awaiting a decision (not procrastination — missing evidence)
+- **Orchard API** — Per-tenant schemas, or stay on a shared schema with a tenant_id column?
+  - Evidence that would settle it: p95 query latency per tenant at current row counts, for the ten largest tenants
+  - **The evidence already exists**: orchard-api/bench/results/*.json — the harness already records per-tenant timings
+  - Why it is still open: The report aggregates across tenants, so the tail that actually matters is averaged away
+
+## Stalled (no next step) — the column GTD cares about most
+- **Beacon Portal** — Give it a concrete next step, or archive it on purpose.
+- **Quarry** — 2 uncommitted change(s) left sitting there. Either commit them and name a next step, or move the tier to dormant so it stops showing up.
+
+## Waiting on people / approvals
+- `NA-0002` Publish the March essay once the draft arrives — waiting on external-party
+
+## What an agent could do for you tonight
+- `NA-0001` Re-run the tenancy benchmark reporting p95 per tenant — left for you: reading the resulting tail and deciding whether it justifies the rewrite
+
+## Reminders
+- ⚠ **Dropped 4 claim(s)** whose evidence would not check out (see `log/rejected.jsonl`).
+- ⚠ No git in: Tidepool Docs — progress there can only come from file timestamps, and **a bad delete is unrecoverable**.
+- `orchard-api/docs/BENCH_NOTES.md` and `orchard-api/PROJECT_STATUS.md` contradict each other about "whether the tenancy benchmark is finished" — the registry rules in favour of `orchard-api/PROJECT_STATUS.md`.
+- Status documents gone stale: 5. The oldest: `tidepool-docs/HANDBOOK_STATUS.md` (134 days).
+
+---
+*Generated by `nextbrief render` at 2026-03-16 12:00. Every claim here passed the evidence gate; whatever could not be verified was not rendered.*
+```
+
+Two artefacts come out of every run, rendered from **the same gated dataset**:
+
+- **`BRIEF.html`** — what you actually read. Each item expands into "what an agent
+  can take over / what only you can do / the cheapest probe that would settle it",
+  with a copy button per command. Dark mode, offline, one file.
+- **`BRIEF.md`** — for the terminal and for `git diff`.
+
+The HTML re-decides nothing — no re-ranking, no second opinion — so the two cannot
+drift apart.
+
+## The four gates
+
+All four live in stage 3. All four are deterministic. All four leave a record.
+
+| Gate | What it does | Where the record goes |
+|---|---|---|
+| **1 · evidence** | Every claim's cited source must resolve in the snapshot the model never saw. Unresolvable → dropped, not softened. Deadlines are read only from the registry, where a human wrote them; a date found in prose is never promoted. | `log/rejected.jsonl` |
+| **2 · non-goals** | Projects declare what they have decided *not* to do. A proposal that collides with one is **flagged, not removed** — matching is textual, so silently deleting a good suggestion would be the worse error. | in the brief |
+| **3 · write permission** | Backlog items are files with frontmatter. Each field is diffed against its committed version in git; anything out of bounds is reverted. **Nothing automated may write a terminal status.** An agent may propose `done`; only you write it. | `log/rejected.jsonl` |
+| **4 · caps** | Hard section limits: at most three next actions *across the whole portfolio*, not three per project. Overflow is deferred, never dropped. | `log/deferred.jsonl` |
+
+Gate 3 is the load-bearing one for trust. A missed item resurfaces tomorrow; a
+falsely closed item never resurfaces at all, and you stop looking for it.
+
+Full reasoning, including why the evidence check lives in the renderer rather than
+in the prompt: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+## Cost, as measured
+
+Measurements, not estimates — from a reference workspace of nine projects with a
+working backlog. Your numbers will differ; the *shape* is what transfers.
+
+Stage 1 writes two files. `snapshot.json` is complete and is what the renderer
+resolves evidence against. `digest.json` is a compact projection of it and is the
+only thing the model receives. That split is not tidiness. It is the whole cost story.
+
+| what the model was given | rounds | output | cacheRead | per run | per month |
+|---|---|---|---|---|---|
+| each backlog file read individually, plus a ~104 KB snapshot read twice | 36 | 66.8k | 3.24M | **$4.37** | $131 |
+| one read of a ~25 KB `digest.json` | 9 | 38.8k | 410k | $1.09 | $33 |
+| the same, at low reasoning effort | 7 | 14.5k | 238k | **$0.74** | **$22** |
+
+**Cached input cost is roughly rounds × context size, so round count dominates — not
+file size.** The expensive run was not expensive because the snapshot was large. It
+was expensive because fourteen separate file reads meant thirty-six turns, and every
+turn re-read the entire accumulated context. Collapsing the same information into one
+pre-assembled file cut the bill by a factor of four while giving the model *the same
+facts*. The optimisation is not "send less data", it is "send it in fewer turns".
+
+**High reasoning effort buys almost nothing here.** Most of those output tokens were
+thinking. But stage 1 has already computed the dates, classified the signals, and
+extracted the non-goals verbatim; what is left is grouping and phrasing over a table
+of known values. Dropping the effort level cut output by two thirds with no loss of
+quality. Reasoning effort pays where a model must *derive* facts, not where the facts
+arrive pre-derived.
+
+Both point the same way as correctness does: every unit of work moved out of the model
+and into deterministic Python makes the run cheaper *and* makes it more trustworthy.
+
+## `nextbrief do` — from "here is what to do" to actually doing it
+
+A brief that tells you what to do next and then leaves you to re-explain the task to
+an agent has not saved you much. The backlog entry already contains the briefing:
+what an agent can take over, what only you can do, the cheapest probe, where the item
+came from, what "done" means. `nextbrief do` turns that into an opening message and
+works out *where* the session should run.
+
+```console
+$ nextbrief do NA-0001
+
+> NA-0001 · Re-run the tenancy benchmark reporting p95 per tenant instead of aggregated
+  Project: Orchard API
+
+  Where should this happen?
+  > 1) ~/code/orchard-api                                        project directory
+    2) ~/code/orchard-api/docs                                   directory the item came from
+    3) ~/code/orchard-api                                        git repository root
+    4) ~/code                                                    workspace root
+
+  Enter for the first  ·  a number  ·  or type a path  ·  p to see the prompt  ·  q to cancel
+  >
+```
+
+Candidates are ordered most-likely-first: the project's declared paths, then **the
+directory the item came from** (cross-project work is filed under one project and
+lives in another far more often than you would expect), then the repository root,
+then the portfolio root. You can type any path — `~`-rooted, absolute, or relative
+to the portfolio root.
+
+`p` prints the opening message before you commit to it:
+
+```markdown
+I am working on backlog item **NA-0001: Re-run the tenancy benchmark reporting p95
+per tenant instead of aggregated** (project: Orchard API).
+
+The full entry is in `~/brief/backlog/NA-0001-orchard-tenancy-latency-split.md`. Read it first.
+
+**What you can do**: Change the reporter to group by tenant_id and emit p50/p95/p99
+per tenant for the ten largest by row count; the harness already records per-request
+timings, so nothing new has to be measured.
+**What I have to do myself**: Reading the resulting tail and deciding whether it
+justifies per-tenant schemas. That is a product judgement, not a query. -- do not do
+these for me; stop and tell me when you reach one.
+**Cheapest first step**: "python bench/harness.py --report --group-by tenant --top 10"
+against the existing results/ directory -- one run, no new data collection.
+**Came from**: `orchard-api/docs/TENANCY_DECISION.md` Section 4, Open questions (the
+source document claims it was last updated 2026-03-11, so it may already be out of
+date -- check before acting on it)
+
+**Done when**:
+- [ ] #1 A table of p50/p95/p99 per tenant, covering the ten largest tenants
+- [ ] #2 The question "does the tail get worse with tenant size" is answered yes or no
+- [ ] #3 The answer is written into TENANCY_DECISION.md and the decision is either
+      taken or explicitly deferred with a date
+
+Ground rules: credentials, OAuth consent, publishing or sending anything, and writes
+to shared or remote systems all need my go-ahead first. When you are done, tell me
+whether this should be closed -- I do the closing myself (`nextbrief done NA-0001`).
+```
+
+Three properties of that picker are deliberate:
+
+- **It proposes; it never chooses.** `-y` uses the first suggestion without asking,
+  and is for scripts.
+- **No input means cancel.** End-of-file — a pipe running dry, a Ctrl-D — cancels.
+  Falling back to the suggested directory would open an agent session in a directory
+  nobody agreed to, which is the exact failure the picker exists to prevent.
+- **The session is interactive, never headless.** These tasks touch real files. You
+  should be at the keyboard when they do.
+
+## Commands
+
+```
+nextbrief run            all three stages: sense → a model reads it → render
+nextbrief v0             sense + render only, no model at all: zero tokens
+nextbrief sense          stage 1 only; refresh state/snapshot.json
+nextbrief render         stage 3 only; re-render from the existing brief.json
+nextbrief check          idempotence self-check; exit code 3 means out of date
+
+nextbrief open           open BRIEF.html in a browser
+nextbrief brief          print BRIEF.md to the terminal
+nextbrief log [-n N]     show the last few runs
+
+nextbrief do <id>        open an agent session in the right directory  (-y: don't ask)
+nextbrief show <id>      print one item in full
+nextbrief ok <id>        confirm an item: it is real, and written the way you meant it
+nextbrief done <id>      mark it done          nextbrief drop <id>   drop it
+nextbrief ls             list every open item
+nextbrief prune          list items worth revisiting
+
+nextbrief init [dir]     create a workspace     (-y, --no-scan)
+```
+
+Global flags: `--workspace DIR`, `--out DIR`, `--locale LANG`, `--version`.
+`sense` also takes `--check`, `--stdout`, `--as-of ISO`, `--timing`;
+`render` takes `--no-notify` and `--dry-run`.
+
+`check` exits `3` when re-running stage 1 would change the output, which is the
+whole scheduling contract — anything that runs nextbrief on a timer can branch on
+it without parsing text:
+
+```cron
+30 21 * * *  /usr/local/bin/nextbrief run >> ~/brief/log/cron.log 2>&1
+```
+
+### What "confirmed" means
+
+Items with a `.` in the `ok` column of `nextbrief ls` were drafted *for* you by a
+pass over your project documents. You have not nodded at them yet.
+
+- `nextbrief ok <id>` — "this is real, and written the way I meant it". Automatic
+  decay will never touch it again.
+- Not confirming does not delete anything. It only sinks in the ranking over time.
+- `nextbrief drop <id>` if you disagree. The file stays; so does its git history.
+
+`ok` / `done` / `drop` **commit immediately**, and that is not bookkeeping. Gate 3
+diffs backlog files against `git HEAD`. If your `done` is sitting uncommitted in the
+working tree, the gate cannot tell "the owner closed this" from "an agent quietly
+wrote `done`" — and it will revert *your* action.
+
+## Configuration
+
+**Workspace resolution**, first hit wins:
+
+1. `--workspace DIR`
+2. `$NEXTBRIEF_WORKSPACE`
+3. the pointer file written by `nextbrief init` (`~/.config/nextbrief/workspace`)
+4. the current directory, or the nearest ancestor, containing `registry.jsonc`
+
+If none match, nextbrief refuses to run. A workspace that silently defaulted to an
+empty directory would render a clean, plausible, entirely content-free brief — which
+reads as "nothing is happening" rather than "you are not configured".
+
+The engine (this package) and the workspace (your registry, backlog, state, logs) are
+separate, the way a program is separate from its documents. **Nothing you own is
+inside the package, and the package writes nowhere but the workspace.**
+
+```
+registry.jsonc        what each project is, who owns it, which documents to read.  Edited monthly.
+config.jsonc          thresholds, weights, caps, model tiers.                      Edited rarely.
+backlog/*.md          one file per item, with frontmatter.                          Edited daily.
+prompts/daily.*.md    the stage-2 prompt. Yours wins over the packaged one.
+BRIEF.md · BRIEF.html the current state, overwritten every run.
+log/YYYY-MM-DD.md     what changed that day. Appended, never rewritten.
+log/runs.jsonl        duration, counts, success sentinel, cost, per run.
+log/rejected.jsonl    claims the gates dropped; writes they reverted.
+log/deferred.jsonl    proposals over the caps. A cap never loses information.
+state/snapshot.json   stage 1 output. snapshot.prev.json is yesterday's, for diffing.
+```
+
+`registry.jsonc` and `config.jsonc` are **JSONC** — JSON plus `//` comments and
+trailing commas. The reason is practical: these files need comments (a threshold
+without its rationale gets "tidied" by someone in six months), the package may not
+add a YAML dependency, and stripping comments from JSON is a dozen lines of
+deterministic code where a hand-rolled YAML subset is a permanent maintenance surface.
+
+**Provider.** Stage 2 is the only place money is spent, and which runner does it is
+configuration:
+
+```jsonc
+"model": {
+  "provider": "auto",              // auto | claude | codex | ollama | openai_compat | none
+  "effort": "low",
+  "ollama":        { "model": "your-local-model" },
+  "openai_compat": { "base_url": "https://api.example.invalid/v1",
+                     "model": "your-model",
+                     "api_key_env": "YOUR_API_KEY" }
+}
+```
+
+`auto` probes for a usable runner and takes the first one; `none` skips the stage
+entirely, which is a supported mode, not a degraded one. Agent runners (`claude`,
+`codex`) read the digest and write the brief themselves; completion endpoints
+(`ollama`, `openai_compat`) get the digest inlined and their reply persisted.
+**API keys are named, never stored** — config gives the name of an environment
+variable, and the value is read from the environment at call time. A workspace is a
+directory you might commit; a key must never be able to end up in it.
+
+Whatever the provider does, a failure there is a warning and a deterministic brief,
+never a missing one.
+
+**Locale.** `en` and `zh` ship, and neither is a machine translation of the other;
+CI asserts the two catalogs have identical key sets. Precedence: `--locale`, then
+`"locale"` in `config.jsonc`, then `$NEXTBRIEF_LOCALE`, then `en`.
+
+**Notifications.** One line when something has actually changed, through a sink that
+degrades to silence rather than failing the run. A system that tells you on time every
+day that nothing happened gets muted in week three, so `notify.only_if` decides when
+it is allowed to speak.
+
+## Deliberately not doing
+
+These are decisions, not gaps. They are most of the reason the tool stays small.
+
+| Not doing | Why |
+|---|---|
+| A database, a daemon, or a dedicated issue store | Files plus git are enough at this size, and any agent can read them without an integration |
+| Two-way sync with Linear / Notion / Obsidian / GitHub Projects | Any non-filesystem store creates a sync problem, and stale status is the number-one cause of death for these systems. They may **read** `BRIEF.md`; nextbrief never reads them |
+| Letting anything automated close an item | A false completion is far worse than a missed one: the missed item comes back tomorrow, the falsely closed one never does. An agent may propose `done`; a human writes it |
+| Writing anywhere outside the workspace | nextbrief can never damage another project, and if nextbrief dies nothing else notices |
+| Time tracking, burndown charts, velocity | Maintenance surface with no decision attached to the output |
+| A dashboard per project | Projects already have their own. nextbrief is only the layer *across* them, and duplicating a project's own status doc is how the two start disagreeing |
+| Bulk import from git history, TODO comments, or specs | This is precisely how you get a 500-item graveyard nobody reads. Every item enters one at a time, with a source |
+| Running in the cloud | No local file access, and most directories worth watching are not repositories |
+| A backlog past 40 items | A hard ceiling. At the ceiling no new items may be created that day, and the brief says so instead of quietly growing |
+
+## Privacy
+
+The registry can mark paths that must **never** be read. For those, stage 1 records a
+single integer count — the contents are not read and *the filenames do not enter the
+snapshot either*, because the filename is often the sensitive part. Since nothing
+about them reaches the snapshot, nothing about them can reach the model or the page.
+
+Content read out of a project directory is **data to report, never a command to
+follow**. The example workspace ships a fixture that tries exactly that
+(`handoff-inbox/vendor-notes.md`, which instructs the reader to mark every task
+complete) so the behaviour is testable rather than aspirational.
+
+## Contributing
+
+Four extension points, all deliberately unglamorous — a dict and a module, no plugin
+scanning, no entry points:
+
+1. **`providers/`** — a new model backend. Four names and a function.
+2. **`sinks/`** — a new notifier. Two functions, and it must degrade to silence.
+3. **`locales/`** — a new language. CI enforces key parity with English.
+4. **Parsers** — teach the sense stage another project's status format. Fail open:
+   return `None` and record the path; never raise.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first — especially the design contract, the
+3.9 floor, the zero-dependency rule, and the no-personal-data rule. Tests are plain
+`unittest`, no test framework to install:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).
+
+**[中文文档 →](README.zh.md)**
