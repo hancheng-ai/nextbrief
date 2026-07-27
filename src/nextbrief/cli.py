@@ -27,6 +27,7 @@ import os
 import shlex
 import subprocess
 import sys
+import unicodedata
 import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -582,22 +583,56 @@ def cmd_drop(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
     )
 
 
+def _width(text: str) -> int:
+    """Display width in terminal cells, not characters.
+
+    A CJK glyph occupies two cells, so "%-4s" pads a two-character Chinese header
+    to four *characters* and six *cells*, and every column to its right drifts.
+    Localised headers are the normal case for half this tool's readers, so the
+    table has to measure what the terminal will actually draw.
+    """
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+
+
+def _pad(text: Any, cells: int) -> str:
+    """Left-align `text` in `cells` terminal columns, truncating on cell width."""
+    s = str(text)
+    if _width(s) <= cells:
+        return s + " " * (cells - _width(s))
+    out, used = "", 0
+    for ch in s:
+        w = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if used + w > cells:
+            break
+        out += ch
+        used += w
+    return out + " " * (cells - used)
+
+
+# Column widths in terminal cells. The title is last and takes what is left.
+_LS_COLS = (9, 3, 4, 16, 4)
+
+
 def _print_rows(rows: Sequence[Tuple[Any, ...]], cat: Optional[Catalog]) -> None:
-    head = "%-9s %-3s %-4s %-16s %-4s %s" % (
+    headers = (
         tr(cat, "cli.ls.col.id", "id"),
         tr(cat, "cli.ls.col.priority", "P"),
         tr(cat, "cli.ls.col.age", "age"),
         tr(cat, "cli.ls.col.project", "project"),
         tr(cat, "cli.ls.col.confirmed", "ok"),
-        tr(cat, "cli.ls.col.title", "title"),
     )
-    print(head)
+    # A header wider than its column widens that column rather than shifting the
+    # ones after it; the alternative is a table that only lines up in English.
+    widths = [max(w, _width(h)) for w, h in zip(_LS_COLS, headers)]
+
+    # No rstrip: the last fixed column's padding is what puts the title header
+    # over the title data.
+    print(" ".join(_pad(h, w) for h, w in zip(headers, widths))
+          + " " + tr(cat, "cli.ls.col.title", "title"))
     print("-" * 92)
     for priority, age, item_id, title, _status, confirmed, project in rows:
-        print(
-            "%-9s %-3s %-4s %-16s %-4s %s"
-            % (item_id, priority, age, project[:15], "*" if confirmed else ".", title[:40])
-        )
+        cells = (item_id, priority, age, project, "*" if confirmed else ".")
+        print(" ".join(_pad(c, w) for c, w in zip(cells, widths)) + " " + _pad(title, 40).rstrip())
 
 
 def cmd_ls(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
