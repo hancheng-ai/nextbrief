@@ -27,14 +27,12 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python: ["3.9", "3.11", "3.13"]
         exclude:
-          # No arm64 CPython 3.9 exists in the setup-python manifest, and
-          # macos-latest is arm64. Covered by the macos-13 entry below instead
-          # of silently dropping the oldest interpreter on macOS -- that is the
-          # one an unattended launcher is most likely to pick up.
+          # No arm64 CPython 3.9 exists in the setup-python manifest and
+          # macos-latest is arm64. Rather than pin a retired x86 image to get
+          # one, the macos-system-python job below tests the interpreter that
+          # actually matters on macOS: /usr/bin/python3, which is 3.9 and is
+          # what an unattended launcher with a minimal PATH will pick up.
           - os: macos-latest
-            python: "3.9"
-        include:
-          - os: macos-13
             python: "3.9"
 
     steps:
@@ -47,6 +45,12 @@ jobs:
       - name: Show interpreter
         run: python -VV
 
+      # Generated, not committed -- see examples/workspace/scripts/build-example.sh.
+      # The suite builds it on demand too; doing it here as well keeps the failure
+      # legible if the script itself breaks.
+      - name: Build example workspace
+        run: examples/workspace/scripts/build-example.sh
+
       # Installed, not run from the source tree: this is also the check that the
       # package is importable from an installed layout, not just from src/.
       - name: Install package
@@ -54,6 +58,24 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+  macos-system-python:
+    name: macOS system python (unattended path)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No setup-python on purpose. The scheduled run is started by a GUI
+      # launcher with a minimal PATH, so it gets /usr/bin/python3 and nothing
+      # else. If the package stops working there, the nightly brief stops.
+      - name: Show interpreter
+        run: /usr/bin/python3 -VV
+
+      - name: Build example workspace
+        run: examples/workspace/scripts/build-example.sh
+
+      - name: Run tests against the system interpreter
+        run: PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests
 
   lint:
     name: ruff
@@ -228,6 +250,12 @@ jobs:
       # string it is looking for.
       - name: Scan tracked files for private-workspace identifiers
         run: |
+          # errexit is deliberately OFF. GitHub runs `run:` steps under
+          # `bash -e {0}`, and this whole check is built on git grep, which exits
+          # 1 to mean "found nothing" -- the success case. Left on, the first
+          # clean scan kills the script and the job fails with no output at all,
+          # which looks exactly like a leak that cannot be located.
+          set +e
           set -uo pipefail
           scan=':!.github/workflows/ci.yml'
           tmp="${RUNNER_TEMP:-/tmp}"

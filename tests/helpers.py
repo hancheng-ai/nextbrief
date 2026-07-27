@@ -38,6 +38,40 @@ if str(SRC_DIR) not in sys.path:
 EXAMPLE_WORKSPACE = REPO_ROOT / "examples" / "workspace"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
+_EXAMPLE_BUILT = False
+
+
+def ensure_example_built() -> None:
+    """Generate examples/workspace/projects/ if it is not there yet.
+
+    The project tree is generated rather than committed -- it contains real git
+    repositories, and its file mtimes have to be pinned for the snapshot to be
+    reproducible. That means a fresh checkout has no fixture at all, and the
+    whole sense/render suite fails with 'defaults.root ... does not exist',
+    which reads as a code bug rather than a missing build step.
+
+    Building on demand keeps `python -m unittest discover -s tests` working as
+    the first thing a contributor types, with no README lookup in between.
+    """
+    global _EXAMPLE_BUILT
+    if _EXAMPLE_BUILT or (EXAMPLE_WORKSPACE / "projects").is_dir():
+        _EXAMPLE_BUILT = True
+        return
+    script = EXAMPLE_WORKSPACE / "scripts" / "build-example.sh"
+    if not script.is_file():
+        raise unittest.SkipTest("example workspace build script is missing: %s" % script)
+    proc = subprocess.run(
+        ["bash", str(script)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "could not build the example workspace (%s):\n%s"
+            % (script, proc.stdout.decode("utf-8", "replace"))
+        )
+    _EXAMPLE_BUILT = True
+
 
 def fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
@@ -88,8 +122,7 @@ def git(cwd, *args, **kwargs):
     return subprocess.run(
         ["git", "-C", str(cwd)] + list(args),
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
 
@@ -577,6 +610,7 @@ class TempCase(unittest.TestCase):
         checkout has no artifacts; only the person who actually used the example
         does. The list mirrors examples/workspace/.gitignore.
         """
+        ensure_example_built()
         dest = self.tmp / name
         shutil.copytree(
             str(EXAMPLE_WORKSPACE),
