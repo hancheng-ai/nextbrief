@@ -9,7 +9,8 @@ and it used macOS ``open``. Under argparse, ``webbrowser`` and
 
 What was preserved on purpose:
 
-* ``ok`` / ``done`` / ``drop`` commit immediately -- see ``_commit_human``.
+* ``ok`` / ``done`` / ``drop`` commit immediately, and refuse rather than report a
+  success the next run would revert -- see ``_mark`` and ``_commit_human``.
 * ``do`` proposes directories and never picks one for you -- see ``cmd_do``.
 * Stage 2 is allowed to fail. A missing or broken model provider degrades to the
   deterministic brief instead of producing nothing.
@@ -25,6 +26,7 @@ import datetime as dt
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import unicodedata
@@ -88,6 +90,14 @@ def _opt(args: argparse.Namespace, name: str):
     overwrite a value the main parser already captured; that makes them absent
     rather than None when unused."""
     return getattr(args, name, None)
+
+
+def _os_error_line(exc: OSError) -> str:
+    """One line, naming the path the OS refused. ``str(exc)`` alone gives
+    "[Errno 13] Permission denied" with no clue which file that was."""
+    paths = [str(p) for p in (exc.filename, getattr(exc, "filename2", None)) if p]
+    detail = exc.strerror or str(exc)
+    return "%s: %s" % (" -> ".join(paths), detail) if paths else detail
 
 
 def _tilde(path: str) -> str:
@@ -223,6 +233,61 @@ def _git(root: Path, *args: str) -> Tuple[int, str, str]:
     )
 
 
+def _baseline_gap(ws: Workspace) -> Optional[str]:
+    """Why this workspace has no git baseline, ready to print, or ``None`` when it
+    has one.
+
+    A gap is not an error. The write-permission gate disables itself for exactly
+    the same two reasons, so with no baseline there is also nothing that will
+    revert the edit -- the command succeeds, and says what is missing.
+    """
+    if shutil.which("git") is None:
+        return (
+            "note: git is not installed, so this change has no baseline and the "
+            "write-permission gate cannot run at all."
+        )
+    if (ws.root / ".git").exists():
+        return None
+    rc, top, _ = _git(ws.root, "rev-parse", "--show-toplevel")
+    if rc == 0 and top:
+        return None
+    return (
+        "note: %s is not a git repository, so this change has no baseline.\n"
+        "  The write-permission gate needs one: run `git init && git add -A && "
+        "git commit` here." % ws.root
+    )
+
+
+def _identity_problem(ws: Workspace) -> Optional[str]:
+    """Why git could not commit under the user's own name, ready to print, or
+    ``None`` when it can.
+
+    Asked *before* anything is written, because a change that cannot be committed
+    is a change that will be destroyed: the write-permission gate reverts any
+    backlog field that differs from ``git HEAD``, so an uncommitted ``done`` is
+    undone by the very next run. There is no fallback identity -- a package that
+    commits under someone else's name is worse than one that refuses.
+    """
+    missing = []
+    for key in ("user.email", "user.name"):
+        rc, value, _ = _git(ws.root, "config", "--get", key)
+        if rc != 0 or not value.strip():
+            missing.append(key)
+    if not missing:
+        return None
+    lines = [
+        "error: git has no %s here, so this change could not be committed -- and an "
+        "uncommitted change is exactly what the write-permission gate reverts on the "
+        "next run. Nothing was written." % " or ".join(missing),
+        "  Set an identity, then run the same command again:",
+    ]
+    if "user.email" in missing:
+        lines.append('    git config --global user.email "you@example.com"')
+    if "user.name" in missing:
+        lines.append('    git config --global user.name "Your Name"')
+    return "\n".join(lines)
+
+
 def _commit_human(ws: Workspace, path: Path, action: str, item_id: str) -> bool:
     """Commit a human's own edit immediately. This is not bookkeeping.
 
@@ -231,22 +296,9 @@ def _commit_human(ws: Workspace, path: Path, action: str, item_id: str) -> bool:
     "the human closed this item" from "an agent quietly wrote status: done", and
     it will revert *your* action. Committing makes your edit the new baseline.
 
-    Identity comes from the user's own git config; there is no fallback identity,
-    because a package that commits under someone else's name is worse than one
-    that refuses to commit. A refusal here is reported but does not fail the
-    command: the field was already changed, and re-running would be a no-op, so
-    exiting non-zero would only make the state harder to reason about.
+    Callers must treat ``False`` as a failed command. Reporting success for an
+    edit the next run will revert is worse than reporting nothing at all.
     """
-    if not (ws.root / ".git").exists():
-        rc, top, _ = _git(ws.root, "rev-parse", "--show-toplevel")
-        if rc != 0 or not top:
-            _err(
-                "note: %s is not a git repository, so this change has no baseline.\n"
-                "  The write-permission gate needs one: run `git init && git add -A && "
-                "git commit` here." % ws.root
-            )
-            return False
-
     # Re-running `done` on an item that is already done changes nothing, and a
     # commit attempt would only produce a scary "nothing to commit" warning about
     # a file that is already the baseline.
@@ -254,21 +306,16 @@ def _commit_human(ws: Workspace, path: Path, action: str, item_id: str) -> bool:
     if rc == 0 and not dirty:
         return True
 
-    rc, email, _ = _git(ws.root, "config", "user.email")
-    if rc != 0 or not email:
-        _err(
-            "error: git has no user.email, so your change was written but not committed.\n"
-            "  Set one and commit it yourself, or the write-permission gate may revert it:\n"
-            '    git config --global user.email "you@example.com"\n'
-            '    git config --global user.name "Your Name"\n'
-            "    git -C %s commit -m 'backlog: %s %s' -- %s" % (ws.root, action, item_id, path)
-        )
-        return False
-
     _git(ws.root, "add", "--", str(path))
     rc, _, err = _git(ws.root, "commit", "-q", "-m", "backlog: %s %s" % (action, item_id), "--", str(path))
     if rc != 0:
-        _err("warning: could not commit %s: %s" % (path.name, err or "git returned %d" % rc))
+        _err(
+            "error: %s was written but could not be committed: %s\n"
+            "  The write-permission gate reverts uncommitted backlog edits, so commit it\n"
+            "  yourself before the next run:\n"
+            "    git -C %s commit -m 'backlog: %s %s' -- %s"
+            % (path.name, err or "git returned %d" % rc, ws.root, action, item_id, path)
+        )
         return False
     return True
 
@@ -284,6 +331,17 @@ def _mark(
     path = _find_item(ws, item_id, cat)
     if path is None:
         return EXIT_FAIL
+
+    # Order matters: check that the edit can be made durable before making it. A
+    # written-but-uncommitted field is reverted by the next run, so writing first
+    # and discovering the problem afterwards destroys the user's own action.
+    gap = _baseline_gap(ws)
+    if gap is None:
+        problem = _identity_problem(ws)
+        if problem is not None:
+            _err(problem)
+            return EXIT_FAIL
+
     fields = dict(fields)
     fields["updated_date"] = dt.date.today().isoformat()
     try:
@@ -291,15 +349,26 @@ def _mark(
     except OSError as exc:
         _err("error: cannot write %s: %s" % (path, exc))
         return EXIT_FAIL
-    _commit_human(ws, path, action, item_id)
+
+    if gap is None:
+        if not _commit_human(ws, path, action, item_id):
+            return EXIT_FAIL
+    else:
+        # Nothing will revert this edit either, so the command did succeed. Say
+        # what is missing anyway: the gate is what makes the other guarantees true.
+        _err(gap)
     print(message)
     return EXIT_OK
 
 
-def _open_rows(ws: Workspace) -> List[Tuple[int, int, str, str, str, bool, str]]:
-    """Every item that is still live, as sortable tuples."""
-    today = dt.date.today()
-    rows: List[Tuple[int, int, str, str, str, bool, str]] = []
+# A row is (priority, age, id, title, status, confirmed, project) -- sortable in
+# that order, which is the order the table is meant to be read in.
+Row = Tuple[int, int, str, str, str, bool, str]
+
+
+def _open_entries(ws: Workspace) -> List[Tuple[Path, Dict[str, Any]]]:
+    """Frontmatter of every item that is still live, in filename order."""
+    entries: List[Tuple[Path, Dict[str, Any]]] = []
     for path in sorted(ws.backlog.glob("*.md")):
         try:
             fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -307,28 +376,41 @@ def _open_rows(ws: Workspace) -> List[Tuple[int, int, str, str, str, bool, str]]
             continue
         if not fm:
             continue
-        status = str(fm.get("status") or "")
-        if status not in OPEN_STATUSES:
+        if str(fm.get("status") or "") not in OPEN_STATUSES:
             continue
-        try:
-            age = (today - dt.date.fromisoformat(str(fm.get("updated_date")))).days
-        except (TypeError, ValueError):
-            age = 0
-        try:
-            priority = int(fm.get("priority"))
-        except (TypeError, ValueError):
-            priority = 9
-        rows.append(
-            (
-                priority,
-                age,
-                str(fm.get("id") or path.stem),
-                str(fm.get("title") or ""),
-                status,
-                fm.get("human_confirmed") is True,
-                str(fm.get("project") or ""),
-            )
-        )
+        entries.append((path, fm))
+    return entries
+
+
+def _age_days(fm: Dict[str, Any], today: dt.date) -> Optional[int]:
+    """Days since ``updated_date``. ``None`` when the field is missing or unparseable
+    -- prune must not select an item on an age it had to invent."""
+    try:
+        return (today - dt.date.fromisoformat(str(fm.get("updated_date")))).days
+    except (TypeError, ValueError):
+        return None
+
+
+def _row(path: Path, fm: Dict[str, Any], today: dt.date) -> Row:
+    try:
+        priority = int(fm.get("priority"))
+    except (TypeError, ValueError):
+        priority = 9
+    return (
+        priority,
+        _age_days(fm, today) or 0,
+        str(fm.get("id") or path.stem),
+        str(fm.get("title") or ""),
+        str(fm.get("status") or ""),
+        fm.get("human_confirmed") is True,
+        str(fm.get("project") or ""),
+    )
+
+
+def _open_rows(ws: Workspace) -> List[Row]:
+    """Every item that is still live, as sortable tuples."""
+    today = dt.date.today()
+    rows = [_row(path, fm, today) for path, fm in _open_entries(ws)]
     rows.sort()
     return rows
 
@@ -624,6 +706,11 @@ def _print_rows(rows: Sequence[Tuple[Any, ...]], cat: Optional[Catalog]) -> None
     # A header wider than its column widens that column rather than shifting the
     # ones after it; the alternative is a table that only lines up in English.
     widths = [max(w, _width(h)) for w, h in zip(_LS_COLS, headers)]
+    # Same reasoning for the ids themselves, and here it is not cosmetic: an id is
+    # meant to be pasted straight into `nextbrief ok <id>`, and a truncated one is
+    # an id that does not exist.
+    if rows:
+        widths[0] = max(widths[0], max(_width(str(r[2])) for r in rows))
 
     # No rstrip: the last fixed column's padding is what puts the title header
     # over the title data.
@@ -663,12 +750,162 @@ def cmd_ls(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
     return EXIT_OK
 
 
+# The shipped config.jsonc values, repeated here because prune must still answer
+# the question when the `decay` block is missing or damaged -- and because both
+# defaults are the conservative direction: a missing prefix must not widen
+# selection to items a human wrote, and an unreadable window must not shorten it.
+_DECAY_AFTER_DAYS = 60
+_DECAY_PREFIX = "nextbrief-"
+
+
+def _decay_rules(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """The `decay` block of config.jsonc, normalised."""
+    block = cfg.get("decay")
+    block = block if isinstance(block, dict) else {}
+    requires = block.get("auto_drop_requires")
+    requires = requires if isinstance(requires, dict) else {}
+    try:
+        after = int(block.get("auto_drop_after_days", _DECAY_AFTER_DAYS))
+    except (TypeError, ValueError):
+        after = _DECAY_AFTER_DAYS
+    prefix = requires.get("created_by_prefix")
+    return {
+        "after_days": max(1, after),
+        "prefix": prefix if isinstance(prefix, str) and prefix else _DECAY_PREFIX,
+        # Absent means required. Only an explicit `false` turns the evidence
+        # condition off, and turning it off can only ever select more items.
+        "zero_evidence": requires.get("zero_project_evidence") is not False,
+    }
+
+
+def _project_evidence(ws: Workspace) -> Optional[Dict[str, Any]]:
+    """Days since each project's freshest evidence, from the last sense run, or
+    ``None`` when there is no readable snapshot.
+
+    This command never walks the projects itself -- that is stage 1's job, and it
+    takes seconds. Without a snapshot there is no honest answer to "has this
+    project shown any evidence", so prune reports the gap instead of guessing.
+    """
+    if not ws.snapshot.is_file():
+        return None
+    try:
+        snap = json.loads(ws.snapshot.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(snap, dict):
+        return None
+    days: Dict[str, Optional[int]] = {}
+    for entry in snap.get("projects") or []:
+        if not isinstance(entry, dict):
+            continue
+        evidence = entry.get("evidence")
+        value = evidence.get("days_since") if isinstance(evidence, dict) else None
+        days[str(entry.get("id"))] = value if isinstance(value, int) else None
+    run = snap.get("run")
+    return {"days": days, "as_of": str((run or {}).get("as_of_date") or "")}
+
+
+def _decay_candidates(
+    ws: Workspace, cfg: Dict[str, Any]
+) -> Tuple[List[Tuple[Row, List[str]]], List[Tuple[Row, List[str]]], Dict[str, Any]]:
+    """Split the open backlog into (selected, blocked-on-missing-evidence, rules).
+
+    An item reaches the first list only when every configured condition is met.
+    Two of them are the promise the whole feature rests on and are enforced here
+    rather than trusted to config: an item a human confirmed, or one a human
+    created, is never a candidate.
+    """
+    rules = _decay_rules(cfg)
+    evidence = _project_evidence(ws)
+    today = dt.date.today()
+    selected: List[Tuple[Row, List[str]]] = []
+    unknown: List[Tuple[Row, List[str]]] = []
+
+    for path, fm in _open_entries(ws):
+        if fm.get("human_confirmed") is True:
+            continue
+        created_by = str(fm.get("created_by") or "")
+        if not created_by.startswith(rules["prefix"]):
+            continue
+        age = _age_days(fm, today)
+        if age is None or age < rules["after_days"]:
+            continue
+
+        why = [
+            "created by %s, not by you" % created_by,
+            "you have never confirmed it",
+            "untouched for %d days (rule: %d or more)" % (age, rules["after_days"]),
+        ]
+        row = _row(path, fm, today)
+        if not rules["zero_evidence"]:
+            selected.append((row, why))
+            continue
+
+        project = str(fm.get("project") or "")
+        if evidence is None or project not in evidence["days"]:
+            unknown.append((row, why + ["project evidence unknown"]))
+            continue
+        days = evidence["days"][project]
+        if days is None:
+            selected.append((row, why + ["%s has never shown any evidence" % project]))
+        elif days >= rules["after_days"]:
+            selected.append(
+                (row, why + ["%s has shown no evidence for %d days" % (project, days)])
+            )
+        # Anything else means the project is alive, so the item is not decaying.
+
+    return selected, unknown, rules
+
+
+def _print_why(pairs: Sequence[Tuple[Row, List[str]]]) -> None:
+    """One line per item: the id, then every condition that put it there.
+
+    Selection a reader cannot audit is selection a reader has to trust, and this
+    list exists precisely for people who do not want to trust it.
+    """
+    width = max(_width(row[2]) for row, _why in pairs)
+    for row, why in pairs:
+        print("  %s  %s" % (_pad(row[2], width), " · ".join(why)))
+
+
 def cmd_prune(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
-    rows = _open_rows(ws)
-    if not rows:
-        print(tr(cat, "cli.ls.empty", "Nothing open in the backlog."))
-        return EXIT_OK
-    _print_rows(rows, cat)
+    selected, unknown, rules = _decay_candidates(ws, _load_config(ws))
+    print(
+        tr(
+            cat,
+            "cli.prune.rules",
+            "Decay rules: open for {days} days or more · created_by starts with "
+            "'{prefix}' · never confirmed by you · the project has shown no evidence "
+            "in the same window.",
+            days=rules["after_days"],
+            prefix=rules["prefix"],
+        )
+    )
+
+    if selected:
+        print()
+        _print_rows([row for row, _why in selected], cat)
+        print()
+        print(tr(cat, "cli.prune.why", "Why each one is here:"))
+        _print_why(selected)
+    elif not unknown:
+        # Only when there is nothing to report at all: with items held back for
+        # want of a snapshot, "nothing matches" would read as a verdict on them.
+        print()
+        print(tr(cat, "cli.prune.none", "Nothing matches those rules."))
+
+    if unknown:
+        print()
+        print(
+            tr(
+                cat,
+                "cli.prune.no_snapshot",
+                "These match every other rule, but project evidence cannot be checked "
+                "without state/snapshot.json. Run `nextbrief sense` and ask again.",
+            )
+        )
+        _print_why(unknown)
+
     print()
     # Say out loud what decay can and cannot do. A user who believes the tool might
     # silently delete their own commitments will stop trusting the whole brief.
@@ -681,13 +918,14 @@ def cmd_prune(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
             "Anything you wrote or confirmed is never dropped for you.",
         )
     )
-    print(
-        tr(
-            cat,
-            "cli.prune.how",
-            "Work through them with: nextbrief ok <id>  ·  done <id>  ·  drop <id>",
+    if selected or unknown:
+        print(
+            tr(
+                cat,
+                "cli.prune.how",
+                "Work through them with: nextbrief ok <id>  ·  done <id>  ·  drop <id>",
+            )
         )
-    )
     return EXIT_OK
 
 
@@ -890,6 +1128,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("sense", "stage 1 only")
     p.add_argument("--check", action="store_true", help="exit 3 if the output would change")
     p.add_argument("--stdout", action="store_true", help="print instead of writing files")
+    # Declared, though `_stage_args` forwards them from the raw argv either way:
+    # a flag the README documents and `--help` does not mention reads as a flag
+    # that was removed.
+    p.add_argument("--as-of", dest="as_of", metavar="ISO",
+                   help="pin the run date (YYYY-MM-DD or a full ISO timestamp)")
+    p.add_argument("--timing", action="store_true", help="print phase timings to stderr")
     p.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
 
     p = add("render", "stage 3 only")
@@ -986,7 +1230,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return EXIT_FAIL
     except BrokenPipeError:
         # `nextbrief brief | head` is a normal thing to do and must not traceback.
+        # Listed before OSError, which it is a subclass of.
         return EXIT_OK
+    except OSError as exc:
+        # An unreadable file, a vanished directory, a full disk: operational
+        # failures, not defects in this program. A traceback buries the only fact
+        # the reader can act on -- which path failed -- under a call stack that
+        # concerns nobody but a maintainer.
+        _err("error: %s" % _os_error_line(exc))
+        return EXIT_FAIL
 
 
 if __name__ == "__main__":  # pragma: no cover

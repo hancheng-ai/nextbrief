@@ -7,15 +7,40 @@ ignoring it, forward stage flags verbatim, and be safe to run twice.
 
 from __future__ import annotations
 
+import datetime as dt
+import errno
 import json
 import os
+import subprocess
 import unittest
+from unittest import mock
 
-from helpers import AS_OF, TempCase, capture, requires_git, write_backlog_item
+from helpers import (
+    AS_OF,
+    BASE_CONFIG,
+    TempCase,
+    capture,
+    git_init,
+    make_project_entry,
+    make_snapshot,
+    requires_git,
+    write_backlog_item,
+    write_snapshot,
+)
 
 from nextbrief import cli
 from nextbrief.frontmatter import parse_frontmatter
 from nextbrief.paths import pointer_file
+
+
+def days_ago(n: int) -> str:
+    """An ``updated_date`` relative to the real today.
+
+    Item age is the one thing in this suite that cannot be pinned with
+    ``--as-of``: the backlog commands read the wall clock, because a human runs
+    them now. Deriving the fixture dates from today keeps the age fixed anyway.
+    """
+    return (dt.date.today() - dt.timedelta(days=n)).isoformat()
 
 
 class Parser(TempCase):
@@ -175,6 +200,296 @@ class BacklogCommands(TempCase):
         # from an agent's, so the CLI says so instead of failing quietly.
         _code, _out, err = self._run("done", "NA-0001")
         self.assertIn("write-permission gate", err)
+
+    def test_a_long_id_is_printed_in_full(self):
+        # An id is meant to be pasted into `nextbrief ok <id>`. Truncated to the
+        # column width it becomes an id that does not exist.
+        write_backlog_item(self.ws, "HUMAN-CONF", title="A wide identifier")
+        code, out, err = self._run("ls")
+        self.assertEqual(code, 0, err)
+        self.assertIn("HUMAN-CONF", out)
+
+    def test_an_operational_failure_is_one_line_naming_the_path(self):
+        # A traceback buries the only fact the reader can act on: which path the
+        # OS refused.
+        target = str(self.ws / "state" / "snapshot.json")
+
+        def boom(ws, args, cat):
+            raise OSError(errno.EACCES, "Permission denied", target)
+
+        original = cli._HANDLERS["ls"]
+        cli._HANDLERS["ls"] = boom
+        self.addCleanup(lambda: cli._HANDLERS.__setitem__("ls", original))
+
+        code, _out, err = self._run("ls")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(err.strip().splitlines(), ["error: %s: Permission denied" % target])
+
+
+class Durability(TempCase):
+    """`ok` / `done` / `drop` may only report success when the change survives.
+
+    The write-permission gate reverts any backlog field that differs from git
+    HEAD, so an edit that was written but not committed is an edit the next run
+    destroys -- while the user has already been told it worked.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        self.item = write_backlog_item(self.ws, "NA-0001", title="An open item")
+        # No system-wide git identity may leak in; the point of these tests is a
+        # machine where nobody has configured one.
+        os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+
+    def _fields(self):
+        return parse_frontmatter(self.item.read_text(encoding="utf-8"))[0]
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _repo_without_identity(self):
+        subprocess.run(
+            ["git", "-C", str(self.ws), "init", "-q"],
+            env=dict(os.environ, GIT_CONFIG_NOSYSTEM="1"),
+            capture_output=True,
+        )
+
+    @requires_git
+    def test_done_writes_nothing_when_git_has_no_identity(self):
+        self._repo_without_identity()
+        code, out, err = self._run("done", "NA-0001")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self._fields()["status"], "open")
+        self.assertIsNot(self._fields()["human_confirmed"], True)
+        self.assertNotIn("-> done", out)
+        self.assertIn('git config --global user.email "you@example.com"', err)
+        self.assertIn('git config --global user.name "Your Name"', err)
+
+    @requires_git
+    def test_ok_does_not_promise_a_guarantee_it_cannot_establish(self):
+        # "automatic decay will never touch it again" is only true once the
+        # confirmation is committed.
+        self._repo_without_identity()
+        code, out, _err = self._run("ok", "NA-0001")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("confirmed", out)
+        self.assertIsNot(self._fields()["human_confirmed"], True)
+
+    @requires_git
+    def test_a_failed_commit_is_a_failed_command(self):
+        # Identity is fine here; git refuses for some other reason (a hook, a
+        # locked index, a read-only .git). The user must not be told it worked.
+        git_init(self.ws)
+        real_git = cli._git
+
+        def flaky(root, *args):
+            if args and args[0] == "commit":
+                return 1, "", "fatal: cannot lock ref"
+            return real_git(root, *args)
+
+        cli._git = flaky
+        self.addCleanup(lambda: setattr(cli, "_git", real_git))
+
+        code, out, err = self._run("done", "NA-0001")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("-> done", out)
+        self.assertIn("cannot lock ref", err)
+
+    def test_a_machine_without_git_can_still_close_an_item(self):
+        # No git means no write-permission gate either, so nothing will revert the
+        # edit: this is a note, not a refusal.
+        with mock.patch("shutil.which", return_value=None):
+            code, out, err = self._run("done", "NA-0001")
+        self.assertEqual(code, 0, err)
+        self.assertIn("-> done", out)
+        self.assertIn("git is not installed", err)
+        self.assertEqual(self._fields()["status"], "done")
+
+    @requires_git
+    def test_a_successful_close_leaves_nothing_uncommitted(self):
+        # The success line means exactly this: the gate now sees your edit as the
+        # baseline rather than as an agent's write.
+        git_init(self.ws)
+        code, out, err = self._run("done", "NA-0001")
+        self.assertEqual(code, 0, err)
+        self.assertIn("-> done", out)
+        proc = subprocess.run(
+            ["git", "-C", str(self.ws), "status", "--porcelain", "--", str(self.item)],
+            capture_output=True,
+        )
+        self.assertEqual(proc.stdout.decode("utf-8", "replace").strip(), "")
+
+
+class Prune(TempCase):
+    """`prune` selects; it is not `ls` with different closing prose.
+
+    Selection follows the `decay` block of config.jsonc, and every selected item
+    has to carry the reasons that put it there -- selection a reader cannot audit
+    is selection they have to trust.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config = json.loads(json.dumps(BASE_CONFIG))
+        config["decay"] = {
+            "auto_drop_after_days": 60,
+            "auto_drop_requires": {
+                "created_by_prefix": "nextbrief-",
+                "human_confirmed": False,
+                "zero_project_evidence": True,
+            },
+        }
+        self.ws = self.workspace(with_git=False, config=config)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _dormant_project(self, days_since=120):
+        write_snapshot(
+            self.ws,
+            make_snapshot(
+                projects=[
+                    make_project_entry(
+                        "orchard",
+                        evidence={
+                            "best_kind": None,
+                            "best_date": None,
+                            "days_since": days_since,
+                            "signal": "dormant",
+                            "caveat_code": None,
+                            "caveat": None,
+                        },
+                    )
+                ]
+            ),
+        )
+
+    def test_an_aged_agent_proposal_is_selected_and_says_why(self):
+        write_backlog_item(
+            self.ws, "NB-0007", title="A stale proposal",
+            created_by="nextbrief-sense", human_confirmed=False,
+            updated_date=days_ago(90),
+        )
+        self._dormant_project()
+        code, out, err = self._run("prune")
+        self.assertEqual(code, 0, err)
+        self.assertIn("NB-0007", out)
+        self.assertIn("untouched for 90 days", out)
+        self.assertIn("created by nextbrief-sense", out)
+        self.assertIn("orchard has shown no evidence for 120 days", out)
+
+    def test_what_you_wrote_or_confirmed_is_never_selected(self):
+        # The documented promise, and the only reason the feature is safe to have.
+        write_backlog_item(
+            self.ws, "NB-HUMAN", title="Yours", created_by="human",
+            human_confirmed=False, updated_date=days_ago(400),
+        )
+        write_backlog_item(
+            self.ws, "NB-CONF", title="Confirmed", created_by="nextbrief-sense",
+            human_confirmed=True, updated_date=days_ago(400),
+        )
+        self._dormant_project()
+        code, out, err = self._run("prune")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("NB-HUMAN", out)
+        self.assertNotIn("NB-CONF", out)
+        self.assertIn("Nothing matches", out)
+
+    def test_a_live_project_keeps_its_items(self):
+        write_backlog_item(
+            self.ws, "NB-0007", title="A stale proposal",
+            created_by="nextbrief-sense", human_confirmed=False,
+            updated_date=days_ago(90),
+        )
+        self._dormant_project(days_since=2)
+        code, out, err = self._run("prune")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("NB-0007", out)
+
+    def test_a_young_item_is_not_selected(self):
+        write_backlog_item(
+            self.ws, "NB-0008", title="Recent proposal",
+            created_by="nextbrief-sense", human_confirmed=False,
+            updated_date=days_ago(3),
+        )
+        self._dormant_project()
+        code, out, err = self._run("prune")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("NB-0008", out)
+
+    def test_a_missing_snapshot_is_reported_rather_than_guessed_around(self):
+        write_backlog_item(
+            self.ws, "NB-0007", title="A stale proposal",
+            created_by="nextbrief-sense", human_confirmed=False,
+            updated_date=days_ago(90),
+        )
+        code, out, err = self._run("prune")
+        self.assertEqual(code, 0, err)
+        self.assertIn("state/snapshot.json", out)
+        self.assertIn("NB-0007", out)
+        self.assertIn("project evidence unknown", out)
+
+    def test_the_configured_window_is_the_one_that_applies(self):
+        config = json.loads(json.dumps(BASE_CONFIG))
+        config["decay"] = {"auto_drop_after_days": 10, "auto_drop_requires": {
+            "created_by_prefix": "nextbrief-", "zero_project_evidence": False}}
+        (self.ws / "config.jsonc").write_text(json.dumps(config), encoding="utf-8")
+        write_backlog_item(
+            self.ws, "NB-0009", title="Two weeks old",
+            created_by="nextbrief-sense", human_confirmed=False,
+            updated_date=days_ago(14),
+        )
+        code, out, err = self._run("prune")
+        self.assertEqual(code, 0, err)
+        self.assertIn("NB-0009", out)
+        self.assertIn("rule: 10 or more", out)
+
+    def test_a_long_id_survives_the_id_column(self):
+        write_backlog_item(
+            self.ws, "HUMAN-CONF", title="A wide identifier",
+            created_by="nextbrief-sense", human_confirmed=False,
+            updated_date=days_ago(90),
+        )
+        self._dormant_project()
+        code, out, _err = self._run("prune")
+        self.assertEqual(code, 0)
+        self.assertIn("HUMAN-CONF", out)
+        self.assertNotIn("HUMAN-CON ", out)
+
+
+class DoPicker(TempCase):
+    """The one guarantee `do` exists for: it never chooses a directory for you.
+
+    Kept under test because the picker is the only interactive code here, and an
+    exec into the wrong tree is not something a user can undo.
+    """
+
+    def test_end_of_input_cancels_and_opens_nothing(self):
+        ws = self.workspace(with_git=False)
+        write_backlog_item(ws, "NA-0001", title="An open item")
+        opened = []
+
+        def record(cfg, target, prompt):
+            opened.append(target)
+            return 0
+
+        with mock.patch.object(cli, "_exec_session", record), \
+                mock.patch("builtins.input", side_effect=EOFError):
+            code, out, err = capture(cli.main, ["--workspace", str(ws), "do", "NA-0001"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(opened, [])
+        self.assertIn("cancelled", out.lower())
+
+
+class SenseHelp(TempCase):
+    def test_the_documented_stage_flags_are_in_the_help(self):
+        # README documents them and they work; a flag missing from --help reads as
+        # a flag that was removed.
+        code, out, _err = capture(cli.main, ["sense", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("--as-of", out)
+        self.assertIn("--timing", out)
 
 
 class Init(TempCase):
