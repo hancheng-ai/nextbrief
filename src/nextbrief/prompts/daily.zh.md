@@ -127,8 +127,10 @@ hook     步骤每次完全相同 —— 固化成确定性脚本/钩子，零�
     {"project": "beacon", "next": "**停滞：无下一步**",
      "evidence": [{"kind": "commit", "source": "<真实 sha>"}]}
   ],
-  "agent_queue":  [ /* blocked_by=agent 或 automation.tier=hook 的条目 */ ],
-  "waiting_for":  [ /* blocked_by=external-party / approval */ ],
+  /* 不要输出 "agent_queue" 和 "waiting_for"。这两栏由渲染层直接从每条 backlog 的
+     blocked_by 与 automation.tier 字段生成——那是结构化数据，不是判断，你加不上
+     任何东西。写了不但费 token，而且这类陈述天然没有可引用的 source，会被证据门
+     每次运行都丢掉一遍。一条每天都因为无害原因亮起的警告，到第三周就没人看了。*/
   "delegated":    { "lantern": "…" },
   "decision_notes": { "atlas": "能回答那个问题的证据是…" },
   "suggestions": [ "建议把 X 日期加进 registry.deadlines" ],

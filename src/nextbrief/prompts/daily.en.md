@@ -127,8 +127,13 @@ Full definition in `{workspace_root}/schema/brief.schema.json`. Skeleton:
     {"project": "beacon", "next": "**Stalled: no next action**",
      "evidence": [{"kind": "commit", "source": "<real sha>"}]}
   ],
-  "agent_queue":  [ /* items with blocked_by=agent or automation.tier=hook */ ],
-  "waiting_for":  [ /* items with blocked_by=external-party / approval */ ],
+  /* Do NOT emit "agent_queue" or "waiting_for". The renderer builds both
+     itself, straight from each backlog item's blocked_by and automation.tier
+     fields -- they are structured data, not a judgement, so there is nothing
+     for you to add. Writing them costs tokens and produces claims that carry
+     no citable source, which the evidence gate then drops on every single
+     run. A warning that fires every day for a harmless reason is a warning
+     nobody reads by week three. */
   "delegated":    { "lantern": "…" },
   "decision_notes": { "atlas": "the evidence that would answer it is…" },
   "suggestions": [ "consider adding date X to registry.deadlines" ],
