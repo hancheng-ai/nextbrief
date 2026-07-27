@@ -834,8 +834,17 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                          items=sep.join(cat.t("reminder.stale_doc_item", path=k, days=v)
                                         for k, v in top)))
     if snap.get("tool_missing"):
-        rem.append(cat.t("reminder.tool_missing",
-                         items=cat.t("sep.semicolon").join(sorted(snap["tool_missing"]))))
+        # Entries are {"tool", "why"} dicts, not strings. Joining them directly
+        # raised TypeError, so the one path that exists to keep a run alive when
+        # an optional tool is absent was the path that killed it -- and only on
+        # machines without scc or ccusage, never on a developer's own.
+        rem.append(cat.t(
+            "reminder.tool_missing",
+            items=cat.t("sep.semicolon").join(
+                cat.t("reminder.tool_missing_item",
+                      tool=str(t.get("tool", "?")), why=str(t.get("why", "")))
+                for t in sorted(snap["tool_missing"], key=lambda t: str(t.get("tool", "")))
+            )))
     if snap.get("parse_failed"):
         rem.append(cat.t("reminder.parse_failed", count=len(snap["parse_failed"])))
     if notes.get("deferred"):

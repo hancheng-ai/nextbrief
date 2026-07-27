@@ -107,6 +107,55 @@ class Idempotence(RenderCase):
         self.assertFalse((self.ws / "log" / "runs.jsonl").exists())
 
 
+class OptionalTools(RenderCase):
+    """External tools are optional by contract: sensing records what was missing
+    and carries on with a documented proxy. That promise is only worth anything
+    if the renderer can then render the record."""
+
+    def _snapshot_with_missing_tools(self):
+        snap = make_snapshot()
+        snap["tool_missing"] = [
+            {"tool": "scc", "why": "cyclomatic complexity is unavailable; line count is used as the proxy"},
+            {"tool": "ccusage", "why": "per-run cost is unavailable"},
+        ]
+        write_snapshot(self.ws, snap)
+
+    def test_a_missing_optional_tool_does_not_break_the_render(self):
+        # These entries are dicts. Joining them as strings raised TypeError, so
+        # the one code path whose entire purpose is to survive a missing tool was
+        # the path that aborted the run -- and only on a machine that lacked the
+        # tool, which is never the machine the author is working on.
+        self._snapshot_with_missing_tools()
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+
+    def test_the_brief_names_the_tool_and_the_consequence(self):
+        # Naming the tool without naming what degrades leaves the reader unable
+        # to judge whether the brief they are reading is weaker than usual.
+        self._snapshot_with_missing_tools()
+        self.assertEqual(self.render()[0], 0)
+        brief = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        self.assertIn("scc", brief)
+        self.assertIn("ccusage", brief)
+        self.assertIn("line count", brief)
+
+    def test_the_order_is_stable(self):
+        # Reminder text feeds the byte-identical guarantee, so it cannot depend
+        # on the order sensing happened to append in.
+        self._snapshot_with_missing_tools()
+        self.assertEqual(self.render()[0], 0)
+        first = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+
+        snap = make_snapshot()
+        snap["tool_missing"] = [
+            {"tool": "ccusage", "why": "per-run cost is unavailable"},
+            {"tool": "scc", "why": "cyclomatic complexity is unavailable; line count is used as the proxy"},
+        ]
+        write_snapshot(self.ws, snap)
+        self.assertEqual(self.render()[0], 0)
+        self.assertEqual((self.ws / "BRIEF.md").read_text(encoding="utf-8"), first)
+
+
 class Contents(RenderCase):
     def test_v0_says_that_nothing_has_interpreted_the_facts(self):
         # Without a model the brief is still a brief; it just has to be honest
