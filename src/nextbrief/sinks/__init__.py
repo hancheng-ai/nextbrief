@@ -83,8 +83,13 @@ def resolve_backend(cfg: Any = None) -> str:
     return "none"
 
 
-def notify(title: str, body: str, cfg: Any = None) -> bool:
+def notify(title: str, body: str, cfg: Any = None, open_url: Optional[str] = None) -> bool:
     """Post one desktop notification. Returns True only if it was delivered.
+
+    ``open_url`` is where the notification should take the reader when clicked --
+    in practice the rendered BRIEF.html. Not every backend can attach an action,
+    so it is a hint rather than a promise; a backend that cannot honour it still
+    delivers the text.
 
     Never raises: see the module docstring.
     """
@@ -101,7 +106,11 @@ def notify(title: str, body: str, cfg: Any = None) -> bool:
     if module is None:
         return False
     try:
-        return bool(module.send(title, body, cfg))
+        try:
+            return bool(module.send(title, body, cfg, open_url=open_url))
+        except TypeError:
+            # A third-party or older sink may only accept the three-argument form.
+            return bool(module.send(title, body, cfg))
     except Exception:
         # A notifier that fails is an annoyance; a notifier that propagates is a
         # lost brief, since this is called at the very end of a successful run.
