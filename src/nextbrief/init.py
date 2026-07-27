@@ -14,8 +14,13 @@ guess, and a guess that installed itself without a keystroke is indistinguishabl
 from a bug. ``--yes`` exists for scripted setups and is the only way to skip the
 question.
 
-Two smaller invariants:
+Three smaller invariants:
 
+* Nothing is invented. The registry init writes lists the projects it actually
+  found and nothing else. The packaged template ships six worked examples
+  because it doubles as the registry's documentation; carrying them into a real
+  workspace would have the first brief report a portfolio nobody owns, under a
+  footer claiming every line of it passed the evidence gate.
 * Re-running is safe. Nothing that already exists is overwritten, least of all a
   registry someone has since edited by hand.
 * The workspace ends up as a git repository with one commit in it. The
@@ -47,6 +52,7 @@ __all__ = ["init_workspace", "main"]
 # package may be running from inside a zipapp, where __file__ names nothing real.
 TEMPLATE_DIR = "templates"
 PROMPT_DIR = "prompts"
+SCHEMA_DIR = "schema"
 
 REGISTRY_TEMPLATE = "registry.example.jsonc"
 CONFIG_TEMPLATE = "config.example.jsonc"
@@ -94,6 +100,31 @@ MAX_CANDIDATES = 40
 
 ACTIVE_DAYS = 30
 MAINTENANCE_DAYS = 180
+
+# Illustrative lists in the packaged template, alongside "projects". They name
+# directories that exist in the worked example and nowhere else, so carrying any
+# of them into a real workspace feeds the snapshot -- and stage 2 -- claims about
+# a portfolio nobody has.
+DEMO_LISTS: Sequence[str] = ("watch", "infra", "ignored", "archived")
+
+# What stands in for the array when nothing was adopted. A bare `[]` reads as a
+# failed install; this is the one place a new reader is guaranteed to look, so it
+# says what to type instead.
+EMPTY_PROJECTS = """\
+    // Empty on purpose: init found nothing, and a brief invents nothing --
+    // including its own subject. Add a project here. `paths` are relative to
+    // defaults.root above; everything else has a sensible default.
+    //
+    //   {
+    //     "id": "my-project",
+    //     "name": "My Project",
+    //     "paths": ["my-project"],
+    //     "git": "auto",
+    //     "tier": "active",
+    //     "horizon": "month",
+    //     "goal_one_line": "in one sentence, what does done look like?",
+    //     "ice": { "impact": 3, "confidence": 3, "effort": 3 }
+    //   }"""
 
 
 def _err(msg: str) -> None:
@@ -318,21 +349,53 @@ def _set_root(text: str, root: str) -> Optional[str]:
     return pattern.sub(lambda m: m.group(1) + json.dumps(root), text, count=1)
 
 
-def _set_projects(text: str, entries: Sequence[Dict[str, Any]]) -> Optional[str]:
-    key = text.find('"projects"')
-    if key == -1:
+def _set_array(
+    text: str,
+    key: str,
+    entries: Sequence[Dict[str, Any]],
+    empty_body: Optional[str] = None,
+) -> Optional[str]:
+    """Replace the array at ``key`` with ``entries``. None if it cannot be found."""
+    at = text.find('"%s"' % key)
+    if at == -1:
         return None
-    start = text.find("[", key)
+    start = text.find("[", at)
     if start == -1:
         return None
     end = _array_end(text, start)
     if end is None:
         return None
-    body = ",\n".join(
-        "\n".join("    " + line for line in json.dumps(e, indent=2, ensure_ascii=False).splitlines())
-        for e in entries
-    )
+    if entries:
+        body = ",\n".join(
+            "\n".join("    " + line for line in json.dumps(e, indent=2, ensure_ascii=False).splitlines())
+            for e in entries
+        )
+    elif empty_body:
+        body = empty_body
+    else:
+        return text[: start + 1] + text[end:]
     return text[: start + 1] + "\n" + body + "\n  " + text[end:]
+
+
+def _registry_is_clean(text: str, entries: Sequence[Dict[str, Any]]) -> bool:
+    """Parse the rendered registry and prove it says only what init actually found.
+
+    The template doubles as the registry's documentation, so it ships six worked
+    examples. A substitution that quietly missed used to leave all six in a
+    stranger's workspace, and the first brief then reported six projects, a
+    pending decision and a deadline months overdue -- every word of it invented,
+    under a footer asserting the evidence gate had passed. So the result is
+    checked rather than assumed, on both the textual path and the JSON fallback.
+    """
+    try:
+        data = loads_jsonc(text)
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if data.get("projects") != list(entries):
+        return False
+    return all(not data.get(key) for key in DEMO_LISTS)
 
 
 def render_registry(template_text: str, root: str, entries: Sequence[Dict[str, Any]]) -> str:
@@ -347,22 +410,37 @@ def render_registry(template_text: str, root: str, entries: Sequence[Dict[str, A
     does not parse is a broken install.
     """
     text = _set_root(template_text, root)
-    if text is not None and entries:
-        text = _set_projects(text, entries)
     if text is not None:
-        try:
-            loads_jsonc(text)
-            return text
-        except ValueError:
-            pass
+        # Unconditional, entries or not. Doing this only when something was
+        # adopted is what shipped the worked examples to everyone who adopted
+        # nothing, which is the majority of first runs.
+        text = _set_array(text, "projects", entries, EMPTY_PROJECTS)
+    if text is not None:
+        for key in DEMO_LISTS:
+            emptied = _set_array(text, key, ())
+            if emptied is not None:
+                text = emptied
+    if text is not None and _registry_is_clean(text, entries):
+        return text
 
     data = loads_jsonc(template_text)
     if not isinstance(data, dict):
         raise JSONCError("%s is not a JSON object" % REGISTRY_TEMPLATE)
     data.setdefault("defaults", {})["root"] = root
-    if entries:
-        data["projects"] = list(entries)
-    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    data["projects"] = list(entries)
+    for key in DEMO_LISTS:
+        if key in data:
+            data[key] = []
+    out = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if not entries:
+        # json.dumps cannot write the comment, but the file is JSONC and the
+        # reader still needs to be told what to type. Re-run the same textual
+        # substitution over the dumped `"projects": []`, and keep the plain
+        # version if that does not take.
+        commented = _set_array(out, "projects", (), EMPTY_PROJECTS)
+        if commented is not None and _registry_is_clean(commented, entries):
+            return commented
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +599,7 @@ def _write_if_absent(dst: Path, text: Optional[str]) -> bool:
     return True
 
 
-def _next_steps(root: Path, cat: Optional[Catalog]) -> None:
+def _next_steps(root: Path, cat: Optional[Catalog], pointed: bool) -> None:
     print()
     print(tr(cat, "init.next.header", "Next:"))
     print("  nextbrief v0     " + tr(cat, "init.next.v0", "build a brief with no model at all -- zero tokens"))
@@ -529,14 +607,30 @@ def _next_steps(root: Path, cat: Optional[Catalog]) -> None:
     print("  nextbrief ls     " + tr(cat, "init.next.ls", "see what is in the backlog"))
     print("  nextbrief run    " + tr(cat, "init.next.run", "the full three stages, once you have a provider configured"))
     print()
-    print(
-        tr(
-            cat,
-            "init.next.anywhere",
-            "Those work from any directory -- {file} now points here.",
-            file=str(pointer_file()),
+    # Only claim the pointer when it is on disk. This line used to print whether
+    # or not the write succeeded, so a read-only config home produced a confident
+    # "now points here" followed by "no workspace found" from every later command.
+    if pointed:
+        print(
+            tr(
+                cat,
+                "init.next.anywhere",
+                "Those work from any directory -- {file} now points here.",
+                file=str(pointer_file()),
+            )
         )
-    )
+    else:
+        print(
+            tr(
+                cat,
+                "init.next.no_pointer",
+                "No pointer file was written, so say where the workspace is:\n"
+                "    nextbrief --workspace {root} v0\n"
+                "  or, once per shell:\n"
+                "    export NEXTBRIEF_WORKSPACE={root}",
+                root=str(root),
+            )
+        )
 
 
 def init_workspace(
@@ -568,7 +662,12 @@ def init_workspace(
     already = registry_path.is_file()
 
     try:
-        for sub in ("backlog", "prompts", "state", "log"):
+        # schema/ exists because the stage-2 prompt tells the model to read
+        # schema/brief.schema.json and schema/BACKLOG_TEMPLATE.md out of the
+        # workspace. Shipping the prompt without the files it names sends the
+        # model looking for paths that do not exist, and the two contracts it is
+        # meant to honour -- the brief's shape and the backlog's -- go unstated.
+        for sub in ("backlog", "prompts", "schema", "state", "log"):
             (root / sub).mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         _err("error: cannot create %s: %s" % (root, exc))
@@ -585,6 +684,9 @@ def init_workspace(
     for name in resources.list_names(PROMPT_DIR, ".md"):
         if _write_if_absent(root / "prompts" / name, resources.read_text(PROMPT_DIR, name)):
             created.append("prompts/%s" % name)
+    for name in resources.list_names(SCHEMA_DIR):
+        if _write_if_absent(root / "schema" / name, resources.read_text(SCHEMA_DIR, name)):
+            created.append("schema/%s" % name)
 
     if already:
         # Idempotent by contract: a registry someone has edited is the most
@@ -593,10 +695,10 @@ def init_workspace(
         print(tr(cat, "init.exists", "{path} is already a workspace; leaving registry.jsonc alone.", path=str(root)))
         if created:
             print(tr(cat, "init.added", "Added: {files}", files=", ".join(created)))
-        _write_pointer(root, notes)
+        pointed = _write_pointer(root, notes)
         for note in notes:
             print(note)
-        _next_steps(root, cat)
+        _next_steps(root, cat, pointed)
         return 0
 
     adopted: List[Candidate] = []
@@ -616,7 +718,7 @@ def init_workspace(
     created.append("registry.jsonc")
 
     _git_baseline(root, notes)
-    _write_pointer(root, notes)
+    pointed = _write_pointer(root, notes)
 
     print()
     print(tr(cat, "init.done", "Workspace ready: {path}", path=str(root)))
@@ -645,12 +747,16 @@ def init_workspace(
         )
     for note in notes:
         print("  " + note)
-    _next_steps(root, cat)
+    _next_steps(root, cat, pointed)
     return 0
 
 
-def _write_pointer(root: Path, notes: List[str]) -> None:
-    """Record the default workspace so later commands need no flags at all."""
+def _write_pointer(root: Path, notes: List[str]) -> bool:
+    """Record the default workspace so later commands need no flags at all.
+
+    Reports whether it worked, because the caller prints a promise about it and
+    a promise that is not checked is worse than no pointer at all.
+    """
     pointer = pointer_file()
     try:
         pointer.parent.mkdir(parents=True, exist_ok=True)
@@ -660,6 +766,8 @@ def _write_pointer(root: Path, notes: List[str]) -> None:
             "Could not write %s (%s); pass --workspace %s or set NEXTBRIEF_WORKSPACE."
             % (pointer, exc, root)
         )
+        return False
+    return True
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
