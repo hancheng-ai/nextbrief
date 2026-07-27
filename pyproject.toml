@@ -62,4 +62,24 @@ target-version = "py39"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4"]
-ignore = ["E501"]
+ignore = [
+    "E501",
+    # Percent formatting is used throughout, deliberately. The floor is 3.9 and
+    # the code is stdlib-only by contract, so there is nothing to gain from
+    # f-strings here, while converting ~390 call sites would be a large diff
+    # through the evidence and rendering paths for no behavioural change.
+    # Consistency is worth more than the idiom: one style, applied everywhere.
+    "UP031",
+    "UP032",
+    # PEP 585/604 typing (list[str], X | None) reads better but is 3.10 syntax.
+    # It happens to work at 3.9 here only because every module carries
+    # `from __future__ import annotations`, which makes annotations lazy. Relying
+    # on that across ~260 sites means the floor is held up by an import that is
+    # easy to omit in a new file, and the failure would be a runtime TypeError on
+    # the oldest interpreter -- the one the unattended launcher uses, and the one
+    # least likely to be what a contributor is running. Explicit typing imports
+    # cost nothing and cannot break that way.
+    "UP006",
+    "UP035",
+    "UP045",
+]

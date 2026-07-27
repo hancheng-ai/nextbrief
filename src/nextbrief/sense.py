@@ -339,7 +339,7 @@ def walk_project(root, pfilter: PathFilter, as_of: dt.date,
     activity. The private file count is deliberately *not* computed here: this
     walk has already pruned the private directories, which is the point.
     """
-    counts = {w: 0 for w in windows}
+    counts = dict.fromkeys(windows, 0)
     active_days = set()
     newest_mtime = None
     total_files = 0
@@ -733,7 +733,7 @@ DECLARED_PATTERNS = [
 
 def read_head(path, max_bytes: int = 8000) -> Optional[str]:
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return fh.read(max_bytes)
     except OSError:
         return None
@@ -1311,7 +1311,7 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
             "conflicts": p.get("conflicts"),
             "automation_surface": p.get("automation_surface"),
             "notes": p.get("registry_notes"),
-            "cite": sorted(set(c for c in cite if c)),
+            "cite": sorted({c for c in cite if c}),
         })
 
     return {

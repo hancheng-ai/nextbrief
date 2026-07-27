@@ -210,8 +210,7 @@ def _git(root: Path, *args: str) -> Tuple[int, str, str]:
     try:
         proc = subprocess.run(
             ["git", "-C", str(root)] + list(args),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as exc:
