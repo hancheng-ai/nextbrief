@@ -32,6 +32,39 @@ class Naming(unittest.TestCase):
         self.assertEqual(providers.provider_name({}), "auto")
         self.assertEqual(providers.provider_name({"model": {"provider": "ollama"}}), "ollama")
 
+    def test_the_shipped_config_shape_resolves(self):
+        """The mapping form is what templates/config.example.jsonc writes, and
+        therefore what every workspace created by `nextbrief init` contains.
+
+        It used to stringify to "{'name': 'claude', ...}", which is not a known
+        provider. Stage 2 then failed soft exactly as designed, so `run` rendered
+        a v0 brief and exited 0 -- the model stage was skipped on every install
+        that followed the documentation, and the scheduler reported success. The
+        suite missed it because every test here used the model-section spelling.
+        """
+        cfg = {"provider": {"name": "claude", "model": "sonnet", "effort": "low"}}
+        self.assertEqual(providers.provider_name(cfg), "claude")
+
+        opts = providers.provider_options(cfg, "claude")
+        self.assertEqual(opts.get("model"), "sonnet")
+        self.assertEqual(opts.get("effort"), "low")
+
+    def test_every_spelling_of_provider_agrees(self):
+        for cfg in (
+            {"provider": "claude"},
+            {"provider": {"name": "claude"}},
+            {"provider": {"name": "CLAUDE"}},
+            {"model": {"provider": "claude"}},
+        ):
+            self.assertEqual(providers.provider_name(cfg), "claude", cfg)
+
+    def test_a_malformed_provider_entry_falls_back_rather_than_raising(self):
+        # Nothing here should be a crash: an unusable value means "not
+        # configured", and the deterministic brief still gets rendered.
+        for cfg in ({"provider": None}, {"provider": []}, {"provider": {}},
+                    {"provider": {"name": None}}, {"provider": 17}):
+            self.assertIsInstance(providers.provider_name(cfg), str)
+
     def test_options_layer_stage_defaults_then_shared_then_per_provider(self):
         cfg = {
             "model_by_stage": {"daily": {"model": "small", "effort": "low"}},

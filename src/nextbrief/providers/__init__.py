@@ -140,10 +140,35 @@ def _model_section(cfg: Any) -> Dict[str, Any]:
     return {}
 
 
+def _provider_entry(cfg: Any) -> Any:
+    """The raw ``provider`` value, wherever it was written."""
+    section = _model_section(cfg)
+    if "provider" in section:
+        return section["provider"]
+    return _as_dict(cfg).get("provider")
+
+
 def provider_name(cfg: Any) -> str:
-    """Which provider the config asks for; ``auto`` when it says nothing."""
-    name = _model_section(cfg).get("provider") or _as_dict(cfg).get("provider")
-    return str(name).strip().lower() if name else DEFAULT_PROVIDER
+    """Which provider the config asks for; ``auto`` when it says nothing.
+
+    Two spellings are accepted, because both are in the wild:
+
+        "provider": "claude"
+        "provider": { "name": "claude", "model": "sonnet", "effort": "low" }
+
+    The mapping form is what the shipped template and every generated workspace
+    use. This function previously did ``str(value)`` on whatever it found, so the
+    mapping form stringified to ``"{'name': 'claude', ...}"`` -- an unknown
+    provider. Stage 2 then failed soft, exactly as designed, and the run
+    degraded to v0 and exited 0. Every config produced by ``nextbrief init``
+    silently skipped the model, and the scheduler reported success.
+    """
+    raw = _provider_entry(cfg)
+    if isinstance(raw, dict):
+        raw = raw.get("name")
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else None
+    return str(raw).strip().lower() if raw else DEFAULT_PROVIDER
 
 
 def provider_options(cfg: Any, name: str) -> Dict[str, Any]:
@@ -164,6 +189,17 @@ def provider_options(cfg: Any, name: str) -> Dict[str, Any]:
     for key, value in section.items():
         if key != "provider" and not isinstance(value, dict):
             opts[key] = value
+
+    # The mapping form carries its options inline -- {"name": "claude", "model":
+    # "sonnet", "effort": "low"} -- so those have to be read here or a workspace
+    # written from the shipped template would resolve the right provider and then
+    # run it with none of the settings sitting next to the name.
+    entry = _provider_entry(cfg)
+    if isinstance(entry, dict):
+        for key, value in entry.items():
+            if key != "name" and not isinstance(value, dict):
+                opts[key] = value
+        opts.update(_as_dict(entry.get(name)))
 
     opts.update(_as_dict(section.get(name)))
     return opts
