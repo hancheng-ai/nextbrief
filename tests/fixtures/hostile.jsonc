@@ -1,0 +1,37 @@
+// A JSONC document built entirely out of the things that break naive parsers.
+//
+// Kept as a file rather than a string literal so that it is also a paste target:
+// if a bug report arrives with a config that will not load, this is where the
+// reduced case goes, and the assertions in test_jsonc.py grow with it.
+//
+// Every value below is fiction.
+{
+  /* Block comments may span lines,
+     may sit inline, and may contain { braces } and ] brackets
+     that must never be counted as structure. */
+
+  "trailing_comma_object": { "a": 1, "b": 2, },
+  "trailing_comma_array": [1, 2, 3,],
+  "nested": {
+    "deeper": [
+      { "k": "v", },
+    ],
+  },
+
+  // The regression this parser was rewritten for. A regex that stripped
+  // /,(\s*[}\]])/ across the whole document turned the value below into
+  // "foo]bar" -- still valid JSON, silently the wrong string.
+  "comma_then_bracket": "foo, ]bar",
+  "comma_then_brace": "foo, }bar",
+
+  // Comment openers that are only text.
+  "url": "https://example.invalid/handbook?a=1//2",
+  "looks_like_a_block_comment": "/* not a comment */",
+
+  "escaped_quotes": "she said \"foo, ]bar\" out loud",
+  "escaped_backslash": "ends with a backslash \\",
+
+  "unicode": "潮汐 · タイド · tide",
+
+  "after_a_comment": 42   // and a trailing line comment with , ] } in it
+}
