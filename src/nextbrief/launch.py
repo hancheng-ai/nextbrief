@@ -1,0 +1,275 @@
+"""Assemble the launch context for ``nextbrief do <id>``.
+
+The premise: **you should not have to re-explain a task to an agent just to start
+working on it.** The backlog entry already carries the briefing -- what an agent
+can take over, what only you can do, the cheapest probe that would settle the
+question, where the item came from, what "done" means. This module turns that
+into one opening message, and works out *where* the session should be opened.
+
+Two deliberate choices carried over from the original:
+
+* The session is interactive, never ``-p``. These tasks touch real files, and you
+  should be at the keyboard when they do.
+* Directories are *proposed*, never chosen. The list is ordered most-likely-first
+  and a human picks; see ``cli`` for the picker and for why EOF must cancel.
+
+The original printed shell assignments for ``eval`` to consume. Returning a
+dataclass instead keeps quoting bugs impossible and leaves the CLI as the only
+component that has to know how to talk to a human.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from .frontmatter import parse_frontmatter
+from .i18n import Catalog, load_catalog
+from .jsonc import JSONCError, load_jsonc
+from .paths import Workspace, expand
+
+__all__ = ["LaunchContext", "LaunchError", "build_context", "tr"]
+
+GIT_TIMEOUT_SECONDS = 10
+
+
+class LaunchError(RuntimeError):
+    """The item or the registry could not be read well enough to launch."""
+
+
+def tr(cat: Optional[Catalog], key: str, default: str, **kwargs: Any) -> str:
+    """Translate ``key``, falling back to the English string at the call site.
+
+    ``Catalog.t`` renders an unknown key as the key itself. That is right for a
+    rendered brief -- a missing string is loud instead of fatal -- but unreadable
+    in an interactive prompt, where ``cli.do.hint`` tells a human nothing. Here a
+    catalog that has not caught up with a new string degrades to English.
+
+    Lives in this module rather than in ``cli`` because ``cli`` imports ``launch``
+    and not the other way round; a shared helper module for six lines would be
+    worse than this.
+    """
+    if cat is not None and cat.has(key):
+        return cat.t(key, **kwargs)
+    if not kwargs:
+        return default
+    try:
+        return default.format(**kwargs)
+    except (KeyError, IndexError, ValueError):
+        return default
+
+
+@dataclass(frozen=True)
+class LaunchContext:
+    """Everything ``nextbrief do`` needs, with no formatting decisions baked in.
+
+    ``dirs`` is ``[(path, reason)]``, most-likely-first; ``cwd`` is the same as
+    ``dirs[0][0]`` and exists so a ``--yes`` run never has to index into a list.
+    ``root`` is the *projects* root from the registry, which is what a relative
+    path typed at the picker resolves against.
+    """
+
+    cwd: str
+    title: str
+    project: str
+    root: str
+    dirs: List[Tuple[str, str]]
+    prompt: str
+
+
+def _project_entry(reg: Dict[str, Any], project_id: Any) -> Optional[Dict[str, Any]]:
+    for pr in reg.get("projects") or []:
+        if isinstance(pr, dict) and pr.get("id") == project_id:
+            return pr
+    return None
+
+
+def _git_toplevel(start: str) -> Optional[str]:
+    """The enclosing repository root, or None. Never raises: a missing git, a
+    directory that is not a repo and a hung filesystem are all "no answer"."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", start, "rev-parse", "--show-toplevel"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.decode("utf-8", "replace").strip()
+    return out or None
+
+
+def build_context(ws: Workspace, item_path, cat: Optional[Catalog] = None) -> LaunchContext:
+    """Build the launch context for one backlog file.
+
+    ``cat`` is optional so that callers which already loaded a catalog do not load
+    a second one; the default keeps the two-argument signature usable.
+    """
+    cat = cat if cat is not None else load_catalog()
+    path = Path(item_path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise LaunchError("cannot read %s: %s" % (path, exc)) from exc
+
+    fm, body = parse_frontmatter(text)
+    if not fm:
+        raise LaunchError("no readable frontmatter in %s" % path)
+
+    try:
+        reg = load_jsonc(ws.registry_path)
+    except JSONCError as exc:
+        raise LaunchError(str(exc)) from exc
+
+    declared_root = ((reg.get("defaults") or {}).get("root")) or str(ws.root)
+    root = expand(declared_root)
+    if not root.is_absolute():
+        # A relative `defaults.root` ("./projects", as the shipped example
+        # declares) is relative to the workspace, never to the directory the
+        # command happened to be typed in. Resolving it anywhere else proposes
+        # directories that do not exist and lands the session in the wrong tree.
+        root = ws.root / root
+    proj = _project_entry(reg, fm.get("project"))
+    project_name = str((proj or {}).get("name") or fm.get("project") or "")
+
+    # Candidates, ordered "most likely to be right". A human decides; this only
+    # lays the options out, with the reason each one is on the list.
+    cands: List[Tuple[str, str]] = []
+
+    def add(candidate, why: str) -> None:
+        p = Path(candidate)
+        if p.is_dir() and not any(c[0] == str(p) for c in cands):
+            cands.append((str(p), why))
+
+    for rel in (proj or {}).get("paths") or []:
+        add(root / str(rel), tr(cat, "launch.reason.project_dir", "project directory"))
+
+    # The source document's directory is very often where the work actually lives:
+    # an item filed under one project ("give the archive repo a git history") can
+    # have all of its work sitting in a different tree entirely.
+    src = fm.get("source") if isinstance(fm.get("source"), dict) else {}
+    src_doc = (src or {}).get("doc")
+    if src_doc:
+        sp = root / str(src_doc)
+        add(
+            sp.parent if sp.suffix else sp,
+            tr(cat, "launch.reason.source_doc", "directory the item came from"),
+        )
+
+    # The repository root, which differs from the project directory whenever repos
+    # are nested.
+    if cands:
+        top = _git_toplevel(cands[0][0])
+        if top:
+            add(top, tr(cat, "launch.reason.git_root", "git repository root"))
+
+    add(root, tr(cat, "launch.reason.workspace_root", "workspace root"))
+    cwd = cands[0][0] if cands else str(root)
+
+    auto = fm.get("automation") if isinstance(fm.get("automation"), dict) else {}
+    lines: List[str] = []
+    lines.append(
+        tr(
+            cat,
+            "launch.prompt.intro",
+            "I am working on backlog item **{id}: {title}** (project: {project}).",
+            id=fm.get("id"),
+            title=fm.get("title"),
+            project=project_name,
+        )
+    )
+    lines.append("")
+    lines.append(
+        tr(
+            cat,
+            "launch.prompt.read_item",
+            "The full entry is in `{path}`. Read it first.",
+            path=str(path),
+        )
+    )
+    lines.append("")
+    if (auto or {}).get("what_agent_can_do"):
+        lines.append(
+            tr(
+                cat,
+                "launch.prompt.agent_can_do",
+                "**What you can do**: {text}",
+                text=auto["what_agent_can_do"],
+            )
+        )
+    if (auto or {}).get("what_needs_human"):
+        lines.append(
+            tr(
+                cat,
+                "launch.prompt.needs_human",
+                "**What I have to do myself**: {text} -- do not do these for me; "
+                "stop and tell me when you reach one.",
+                text=auto["what_needs_human"],
+            )
+        )
+    if (auto or {}).get("next_probe"):
+        lines.append(
+            tr(
+                cat,
+                "launch.prompt.next_probe",
+                "**Cheapest first step**: {text}",
+                text=auto["next_probe"],
+            )
+        )
+    if (src or {}).get("doc"):
+        anchor = ("  " + str(src["anchor"])) if (src or {}).get("anchor") else ""
+        stale = ""
+        if (src or {}).get("source_last_updated_declared"):
+            stale = tr(
+                cat,
+                "launch.prompt.source_stale",
+                " (the source document claims it was last updated {date}, so it may "
+                "already be out of date -- check before acting on it)",
+                date=src["source_last_updated_declared"],
+            )
+        lines.append(
+            tr(
+                cat,
+                "launch.prompt.source",
+                "**Came from**: `{doc}`{anchor}{stale}",
+                doc=src["doc"],
+                anchor=anchor,
+                stale=stale,
+            )
+        )
+
+    # Acceptance criteria are checkbox lines in the body. Copied verbatim: they are
+    # the definition of done a human wrote, and paraphrasing them would be a way of
+    # quietly moving the goalposts.
+    acs = [ln.strip() for ln in body.splitlines() if ln.strip().startswith("- [")]
+    if acs:
+        lines.append("")
+        lines.append(tr(cat, "launch.prompt.acceptance", "**Done when**:"))
+        lines.extend(acs)
+
+    lines.append("")
+    lines.append(
+        tr(
+            cat,
+            "launch.prompt.rules",
+            "Ground rules: credentials, OAuth consent, publishing or sending anything, "
+            "and writes to shared or remote systems all need my go-ahead first. When "
+            "you are done, tell me whether this should be closed -- I do the closing "
+            "myself (`nextbrief done {id}`).",
+            id=fm.get("id"),
+        )
+    )
+
+    return LaunchContext(
+        cwd=cwd,
+        title=str(fm.get("title") or ""),
+        project=project_name,
+        root=str(root),
+        dirs=cands,
+        prompt="\n".join(lines),
+    )
