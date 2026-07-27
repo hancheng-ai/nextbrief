@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nextbrief"
+version = "0.1.0"
+description = "A daily brief across every project you own — where each claim is checked against evidence before it is allowed to print."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Hancheng Wang", email = "wanghancheng.ai@gmail.com" }]
+keywords = [
+    "project-management", "cli", "llm", "agents", "claude", "briefing",
+    "hallucination", "evidence", "productivity", "gtd",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Natural Language :: English",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Office/Business :: Scheduling",
+    "Typing :: Typed",
+]
+
+# Zero runtime dependencies, on purpose. The nightly job is launched by a GUI
+# scheduler with a minimal PATH and must work under the system Python.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["build>=1.2", "twine>=5.0", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/hancheng-ai/nextbrief"
+Repository = "https://github.com/hancheng-ai/nextbrief"
+Issues = "https://github.com/hancheng-ai/nextbrief/issues"
+Changelog = "https://github.com/hancheng-ai/nextbrief/blob/main/CHANGELOG.md"
+
+[project.scripts]
+nextbrief = "nextbrief.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nextbrief"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "tests/", "examples/", "README.md", "README.zh.md", "LICENSE", "CHANGELOG.md"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = ["E501"]

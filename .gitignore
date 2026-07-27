@@ -1,0 +1,28 @@
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# OS
+.DS_Store
+Icon?
+
+# A workspace must never live inside the engine repo. These are here so that a
+# stray local experiment cannot be committed by accident.
+/registry.jsonc
+/config.jsonc
+/backlog/
+/state/
+/log/
+/BRIEF.md
+/BRIEF.html
