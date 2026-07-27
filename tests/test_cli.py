@@ -574,3 +574,74 @@ class ConfigTolerance(TempCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class Permissions(TempCase):
+    """`permissions --merge-into` edits a file holding someone's entire agent
+    configuration. The only acceptable behaviour is additive: a tool that
+    rewrites more than it was asked to is a tool nobody runs twice."""
+
+    OTHERS = {
+        "model": "some-model",
+        "hooks": {"PreToolUse": [{"matcher": "Bash",
+                                  "hooks": [{"type": "command", "command": "guard.py"}]}]},
+        "statusLine": {"type": "command", "command": "line.py"},
+        "permissions": {"allow": ["Bash(git status:*)"], "deny": ["Bash(rm -rf:*)"]},
+        "autoCompactEnabled": True,
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        self.target = self.tmp / "settings.json"
+
+    def _run(self, *extra):
+        return capture(cli.main, ["--workspace", str(self.ws), "permissions"] + list(extra))
+
+    def _written(self):
+        return json.loads(self.target.read_text(encoding="utf-8"))
+
+    def test_printing_writes_nothing(self):
+        code, out, err = self._run()
+        self.assertEqual(code, 0, err)
+        self.assertIn("permissions", out)
+        self.assertFalse(self.target.exists())
+
+    def test_merging_preserves_every_unrelated_key(self):
+        self.target.write_text(json.dumps(self.OTHERS), encoding="utf-8")
+        self.assertEqual(self._run("--merge-into", str(self.target))[0], 0)
+        got = self._written()
+        for key in ("model", "hooks", "statusLine", "autoCompactEnabled"):
+            self.assertEqual(got[key], self.OTHERS[key], key)
+
+    def test_merging_preserves_existing_rules(self):
+        self.target.write_text(json.dumps(self.OTHERS), encoding="utf-8")
+        self.assertEqual(self._run("--merge-into", str(self.target))[0], 0)
+        perms = self._written()["permissions"]
+        self.assertIn("Bash(git status:*)", perms["allow"])
+        self.assertEqual(perms["deny"], ["Bash(rm -rf:*)"])
+
+    def test_merging_is_idempotent(self):
+        self.target.write_text(json.dumps(self.OTHERS), encoding="utf-8")
+        self._run("--merge-into", str(self.target))
+        first = self.target.read_text(encoding="utf-8")
+        code, out, _ = self._run("--merge-into", str(self.target))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), first)
+
+    def test_a_backup_is_left_behind(self):
+        self.target.write_text(json.dumps(self.OTHERS), encoding="utf-8")
+        self._run("--merge-into", str(self.target))
+        backup = self.target.with_suffix(self.target.suffix + ".nextbrief-backup")
+        self.assertTrue(backup.is_file())
+        self.assertEqual(json.loads(backup.read_text(encoding="utf-8")), self.OTHERS)
+
+    def test_unreadable_json_is_refused_rather_than_replaced(self):
+        self.target.write_text("{ this is not json", encoding="utf-8")
+        code, _, err = self._run("--merge-into", str(self.target))
+        self.assertEqual(code, 1)
+        self.assertIn("refusing", err.lower())
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "{ this is not json")
+
+    def test_a_missing_file_is_created(self):
+        self.assertEqual(self._run("--merge-into", str(self.target))[0], 0)
+        self.assertIn("allow", self._written()["permissions"])

@@ -73,6 +73,7 @@ commands:
   prune        list items worth revisiting, with what to do about them
 
   init [dir]   create a workspace and get to a first brief
+  permissions  print, or merge in, the rules an unattended run needs
 """
 
 
@@ -1068,6 +1069,88 @@ def cmd_init(args: argparse.Namespace, cat: Optional[Catalog]) -> int:
 # parser
 # ---------------------------------------------------------------------------
 
+def cmd_permissions(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Print the pre-approval rules this workspace needs, or merge them into a
+    settings file.
+
+    Exists because the alternative is asking every user to hand-write JSON they
+    have no way to verify, in a file where a typo is silent: a malformed rule
+    does not error, it simply never matches, and the failure surfaces days later
+    as a scheduled run that quietly stopped happening.
+
+    Merging is additive and nothing else. Existing keys, existing rules, key
+    order and formatting are preserved; only rules that are absent get appended.
+    A settings file holds a person's whole agent configuration, and a tool that
+    rewrites more than it was asked to is a tool nobody runs twice.
+    """
+    from .init import agent_permissions
+
+    wanted = agent_permissions(ws.root)
+    target = _opt(args, "merge_into")
+
+    if not target:
+        print(json.dumps(wanted, indent=2))
+        print()
+        print(tr(cat, "perm.hint",
+                 "To apply: nextbrief permissions --merge-into <settings.json>\n"
+                 "  Workspace-level rules only apply to an agent session rooted at\n"
+                 "  {root}. For a scheduler that starts elsewhere, merge into your\n"
+                 "  user-level settings instead.", root=str(ws.root)))
+        return EXIT_OK
+
+    path = expand(target)
+    existing: Dict[str, Any] = {}
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _err("error: %s is not readable JSON (%s); refusing to touch it." % (path, exc))
+            return EXIT_FAIL
+        if not isinstance(existing, dict):
+            _err("error: %s does not contain a JSON object; refusing to touch it." % path)
+            return EXIT_FAIL
+
+    merged = dict(existing)
+    perms = dict(merged.get("permissions") or {})
+    added: List[str] = []
+    for section, rules in wanted["permissions"].items():
+        current = list(perms.get(section) or [])
+        for rule in rules:
+            if rule not in current:
+                current.append(rule)
+                added.append("%s: %s" % (section, rule))
+        perms[section] = current
+    merged["permissions"] = perms
+
+    if not added:
+        print(tr(cat, "perm.already", "{path} already has every rule; nothing to do.",
+                 path=str(path)))
+        return EXIT_OK
+
+    if path.is_file():
+        # A copy before touching someone's agent configuration. Cheap, and the
+        # one moment they would want it is the one moment it would not exist.
+        backup = path.with_suffix(path.suffix + ".nextbrief-backup")
+        try:
+            backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError as exc:
+            _err("error: cannot write %s (%s); refusing to modify the original." % (backup, exc))
+            return EXIT_FAIL
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    except OSError as exc:
+        _err("error: cannot write %s (%s)" % (path, exc))
+        return EXIT_FAIL
+
+    print(tr(cat, "perm.added", "Added {n} rule(s) to {path}:", n=len(added), path=str(path)))
+    for line in added:
+        print("  " + line)
+    print(tr(cat, "perm.kept", "Everything already in that file was left exactly as it was."))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "run": cmd_run,
     "v0": cmd_v0,
@@ -1084,6 +1167,7 @@ _HANDLERS = {
     "drop": cmd_drop,
     "ls": cmd_ls,
     "prune": cmd_prune,
+    "permissions": cmd_permissions,
 }
 
 
@@ -1164,6 +1248,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("ls", "list open items")
     add("prune", "list items worth revisiting")
+
+    p = add("permissions", "print or install the pre-approval rules an agent needs")
+    p.add_argument("--merge-into", metavar="FILE",
+                   help="merge the rules into this settings.json, preserving everything else")
 
     p = add("init", "create a workspace")
     p.add_argument("directory", nargs="?", help="where to create it (default: here)")
