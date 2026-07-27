@@ -145,6 +145,14 @@ chmod +x nextbrief.pyz
 ./nextbrief.pyz --version
 ```
 
+To check it against the published checksums — `--ignore-missing` because
+`SHA256SUMS` also covers the sdist and the wheel, which you did not download:
+
+```sh
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/SHA256SUMS
+shasum -a 256 --ignore-missing -c SHA256SUMS     # sha256sum on Linux
+```
+
 Or build it yourself from a checkout — the script strips bytecode and smoke
 tests the artifact by running `init` and `v0` inside it, because a zipapp that
 builds but cannot read its own locales still answers `--version` correctly:

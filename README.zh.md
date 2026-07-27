@@ -114,6 +114,13 @@ curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/ne
 chmod +x nextbrief.pyz
 ```
 
+要核对校验和——加 `--ignore-missing` 是因为 `SHA256SUMS` 同时覆盖 sdist 与 wheel，而你并没有下载它们：
+
+```sh
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/SHA256SUMS
+shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
+```
+
 把 `nextbrief.pyz` 放到 `PATH` 上任意位置就算装好了；删掉这个文件就算卸载。
 
 > 目前还没打过 tag，所以上面那条 `curl` 暂时取不到东西；从源码构建现在就能用。
