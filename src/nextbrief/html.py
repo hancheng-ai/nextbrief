@@ -22,6 +22,9 @@ from typing import Any, Dict, List, Optional
 
 from .i18n import Catalog
 
+# Markdown checkbox prefix: "- [ ] " / "- [x] " / "* [X] ".
+_AC_PREFIX = re.compile(r"^\s*[-*+]\s*\[[ xX]?\]\s*")
+
 __all__ = ["render_html"]
 
 WEEKDAY_KEYS = [
@@ -197,7 +200,10 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
     missing we call the *same* classifier the renderer uses rather than inventing
     a second opinion.
     """
-    from .render import caps_of, classify   # imported late: render must not import us at module level
+    from .render import (  # imported late: render must not import us at module level
+        caps_of,
+        classify,
+    )
 
     notes = notes or {}
     if meta is None:
@@ -483,7 +489,10 @@ def _item_details(b: Dict[str, Any], P: Dict[Any, Any], cat: Catalog, launchable
         o.append("<div class=kv><div class=k>%s</div><ul class=ac>"
                  % e(cat.t("html.label.acceptance")))
         for ln in acs:
-            o.append("<li>%s</li>" % md_inline(ln.strip().lstrip("- [ ]x").strip()))
+            # Strip the checkbox prefix as a prefix, not as a character set.
+            # lstrip("- [ ]x") removes any leading run of those characters, so
+            # "- [x] xray the logs" lost its x and rendered as "ray the logs".
+            o.append("<li>%s</li>" % md_inline(_AC_PREFIX.sub("", ln.strip(), count=1).strip()))
         o.append("</ul></div>")
     src = b.get("source") or {}
     if src.get("doc"):
