@@ -33,9 +33,17 @@ PRIVACY
   its file names did reach the snapshot. A privacy guarantee that depends on a
   human maintaining a second, unrelated list is not a guarantee.
 
+  All four enforcement points match declarations as globs, against the same
+  rules (see :class:`GlobSet`): ``x``, ``x/`` and ``x/**`` all mean "everything
+  under x", ``**/x/**`` means "any directory called x, at any depth", and an
+  extension pattern is anchored where it is written -- ``*.key`` beside the
+  declaration, ``**/*.key`` at any depth. Reducing a glob to a literal prefix
+  instead is how a declared rule came to enforce nothing, count zero, and say
+  nothing about either.
+
 Usage:
   sense                write state/snapshot.json and state/digest.json
-  sense --check        exit 3 if the snapshot content would change
+  sense --check        exit 3 if the snapshot or the digest would change
   sense --stdout       print the snapshot, write nothing
 """
 
@@ -128,6 +136,9 @@ class PathFilter:
             else:
                 self.patterns.append(g)
 
+    def __bool__(self) -> bool:
+        return bool(self.prune_names or self.prune_rel or self.patterns)
+
     def prune_dir(self, rel_dir: str, name: str) -> bool:
         if name in self.prune_names:
             return True
@@ -140,6 +151,23 @@ class PathFilter:
             if fnmatch.fnmatch(rel_path, p) or fnmatch.fnmatch(base, p):
                 return True
         return False
+
+    def match_path(self, rel_path: str) -> bool:
+        """Would the walk have skipped this path -- by pruning or by pattern?
+
+        For callers that get paths handed to them instead of walking to them.
+        ``match_file`` alone is not enough there: the pruning forms (``**/x/**``,
+        ``PREFIX/**``) never reach ``patterns``, so a filter that stops a
+        vendored tree during a walk would let every one of its files through when
+        git names them.
+        """
+        parts = rel_path.strip("/").split("/")
+        for i, part in enumerate(parts[:-1]):
+            if part in self.prune_names:
+                return True
+            if "/".join(parts[:i + 1]) in self.prune_rel:
+                return True
+        return self.match_file(rel_path)
 
 
 # ---------------------------------------------------------------------------
@@ -232,18 +260,121 @@ class Timing:
 # Privacy plumbing
 # ---------------------------------------------------------------------------
 
-def _literal_dir(glob: str) -> Optional[str]:
-    """The literal directory a glob names, or None if it is a wildcard pattern.
+def _glob_regex(glob: str) -> str:
+    """Translate one path glob into a regex source string.
 
-    ``member/**`` -> ``member``; ``**/*.wav`` -> None. Used where we need a real
-    path (a git pathspec, a directory to count) rather than a matcher.
+    ``fnmatch`` is not usable here. It compiles ``*`` to ``.*``, so ``**/x/**``
+    never matches ``x/f`` (the ``**`` cannot collapse to nothing) and ``x/*``
+    matches a path it should not. Both errors are silent, and one of them loses a
+    privacy guarantee, so the translation is done here where the rules are stated:
+
+      ``**/``  zero or more leading directories
+      ``/**``  everything strictly inside that directory
+      ``*``    any run of characters within one path segment
+      ``?``    one character within one path segment
     """
-    g = (glob or "").strip("/")
-    if g.endswith("/**"):
-        g = g[:-3]
-    if not g or any(ch in g for ch in "*?["):
-        return None
-    return g
+    out: List[str] = []
+    i, n = 0, len(glob)
+    while i < n:
+        c = glob[i]
+        if c == "*":
+            j = i
+            while j < n and glob[j] == "*":
+                j += 1
+            double = (j - i) > 1
+            if double and glob[j:j + 1] == "/":
+                out.append("(?:[^/]*/)*")
+                i = j + 1
+                continue
+            if double and i > 0 and glob[i - 1] == "/":
+                out.append(".+")          # trailing /** -- strictly inside
+                i = j
+                continue
+            out.append(".*" if double else "[^/]*")
+            i = j
+            continue
+        if c == "?":
+            out.append("[^/]")
+            i += 1
+            continue
+        if c == "[":
+            j = i + 1
+            if j < n and glob[j] in "!^":
+                j += 1
+            if j < n and glob[j] == "]":
+                j += 1
+            while j < n and glob[j] != "]":
+                j += 1
+            if j >= n:                    # unterminated class: a literal bracket
+                out.append("\\[")
+                i += 1
+                continue
+            inner = glob[i + 1:j].replace("\\", "\\\\")
+            if inner[:1] in ("!", "^"):
+                inner = "^" + inner[1:]
+            out.append("[" + inner + "]")
+            i = j + 1
+            continue
+        out.append(re.escape(c))
+        i += 1
+    return "".join(out)
+
+
+class GlobSet:
+    """A compiled set of path globs with the two questions the walk needs answered.
+
+    ``matches`` is the privacy predicate: a path is covered when it matches a
+    glob *or* lives under a directory that does. ``covers_dir`` is the pruning
+    predicate: everything under this directory is covered, so the walk can stop
+    here and record the directory itself -- which is what the git ``:(exclude)``
+    pathspec and the private file count both need, and what reducing a glob to a
+    literal prefix could not give them.
+
+    Patterns are anchored at the base they are written against, the same way the
+    registry's own ``ignore_globs`` examples are: ``*.key`` covers the ``.key``
+    files beside it, ``**/*.key`` covers them at any depth. One rule for all four
+    call sites matters more than which rule it is -- the count, the walk, the git
+    exclusion and the pre-write scan disagreeing is how a name escapes.
+    """
+
+    __slots__ = ("_self", "_cover")
+
+    def __init__(self, globs: Optional[Sequence[str]] = None):
+        self._self: List[Any] = []
+        self._cover: List[Any] = []
+        for raw in globs or []:
+            g = (raw or "").strip().strip("/")
+            if not g:
+                continue
+            self._self.append(re.compile("(?s:" + _glob_regex(g) + ")\\Z"))
+            # A glob whose last segment is `*` or `**` covers its parent
+            # directory entirely; `*.key` covers nothing but the files it names.
+            head = g.rsplit("/", 1)[0] if "/" in g else None
+            if head and g.rsplit("/", 1)[1] in ("*", "**"):
+                self._cover.append(re.compile("(?s:" + _glob_regex(head) + ")\\Z"))
+
+    def __bool__(self) -> bool:
+        return bool(self._self)
+
+    def _hit(self, pats: Sequence[Any], rel: str) -> bool:
+        return any(p.match(rel) for p in pats)
+
+    def matches(self, rel: str) -> bool:
+        rel = (rel or "").strip("/")
+        parts = rel.split("/") if rel else [""]
+        for i in range(1, len(parts) + 1):
+            if self._hit(self._self, "/".join(parts[:i])):
+                return True
+        return False
+
+    def covers_dir(self, rel: str) -> bool:
+        rel = (rel or "").strip("/")
+        parts = rel.split("/") if rel else [""]
+        for i in range(1, len(parts) + 1):
+            cand = "/".join(parts[:i])
+            if self._hit(self._self, cand) or self._hit(self._cover, cand):
+                return True
+        return False
 
 
 def privacy_globs(reg: Dict[str, Any]) -> List[str]:
@@ -280,24 +411,37 @@ def rebase_globs(globs: Sequence[str], base_rel: str) -> List[str]:
     return out
 
 
+_GLOBSET_CACHE: Dict[Tuple[str, ...], GlobSet] = {}
+
+
+def globset(globs: Sequence[str]) -> GlobSet:
+    """Compile once per distinct glob list. ``find_private_leaks`` asks the same
+    question of every string in the snapshot, so the regexes must not be rebuilt
+    per call."""
+    key = tuple(globs or ())
+    gs = _GLOBSET_CACHE.get(key)
+    if gs is None:
+        gs = GlobSet(key)
+        _GLOBSET_CACHE[key] = gs
+    return gs
+
+
 def _matches_private(value: str, globs: Sequence[str], root_str: str = "") -> bool:
     """True if ``value`` looks like a path under a never_read declaration.
 
-    Matching is structural (fnmatch against the whole string), not substring, so
-    human prose that merely *mentions* a private directory is not flagged. Only a
-    string that actually is such a path trips it.
+    Matching is structural (the whole string is matched as a path), not
+    substring, so human prose that merely *mentions* a private directory is not
+    flagged. Only a string that actually is such a path trips it -- including one
+    that merely *lives under* a declared directory, which is the case a
+    literal-prefix reduction used to miss entirely.
     """
     if not value:
         return False
+    gs = globset(globs)
     candidates = [value]
     if root_str and value.startswith(root_str + "/"):
         candidates.append(value[len(root_str) + 1:])
-    for cand in candidates:
-        cand = cand.strip("/")
-        for pat in globs:
-            if fnmatch.fnmatch(cand, pat):
-                return True
-    return False
+    return any(gs.matches(cand) for cand in candidates)
 
 
 def find_private_leaks(obj: Any, globs: Sequence[str], root_str: str = "",
@@ -330,8 +474,47 @@ def find_private_leaks(obj: Any, globs: Sequence[str], root_str: str = "",
 # Filesystem sensing
 # ---------------------------------------------------------------------------
 
+def find_private_paths(base, private: GlobSet) -> List[str]:
+    """Base-relative paths a never_read declaration actually covers, outermost first.
+
+    Walking is the point. The globs are patterns, but the git ``:(exclude)``
+    pathspec and the file count both need *real* paths, and a wildcard pattern
+    cannot be reduced to one: ``**/private/**`` names no directory until you look
+    at the tree. Reducing it instead of walking it is how a declared privacy rule
+    used to end up enforcing nothing at all, silently.
+
+    Returns ``[""]`` when the whole base is covered.
+    """
+    base = Path(base)
+    if not private or not base.exists():
+        return []
+    if private.covers_dir(""):
+        return [""]
+    if base.is_file():
+        return [""] if private.matches(base.name) else []
+
+    out: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(str(base), topdown=True):
+        rel_dir = os.path.relpath(dirpath, str(base))
+        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
+        keep = []
+        for d in sorted(dirnames):
+            rel = (rel_dir + "/" + d).strip("/") if rel_dir else d
+            if private.covers_dir(rel):
+                out.append(rel)      # record the directory, stop descending
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        for fn in sorted(filenames):
+            rel = (rel_dir + "/" + fn).strip("/") if rel_dir else fn
+            if private.matches(rel):
+                out.append(rel)
+    return sorted(out)
+
+
 def walk_project(root, pfilter: PathFilter, as_of: dt.date,
-                 windows: Sequence[int]) -> Optional[Dict[str, Any]]:
+                 windows: Sequence[int],
+                 private: Optional[GlobSet] = None) -> Optional[Dict[str, Any]]:
     """Stat every file under ``root`` once and derive every window from that pass.
 
     Only ``os.stat`` -- contents are never opened. Returns None if ``root`` is
@@ -355,10 +538,23 @@ def walk_project(root, pfilter: PathFilter, as_of: dt.date,
     for dirpath, dirnames, filenames in os.walk(str(root), topdown=True):
         rel_dir = os.path.relpath(dirpath, str(root))
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
-        dirnames[:] = sorted(d for d in dirnames if not pfilter.prune_dir(rel_dir, d))
+        # ``pfilter`` handles the prune-by-name fast path; ``private`` is asked
+        # separately because it must understand every glob form a human may have
+        # written, and a name it lets through is a leaked name (defence 1 of 3).
+        kept = []
+        for d in sorted(dirnames):
+            if pfilter.prune_dir(rel_dir, d):
+                continue
+            rel = (rel_dir + "/" + d).strip("/") if rel_dir else d
+            if private and private.covers_dir(rel):
+                continue
+            kept.append(d)
+        dirnames[:] = kept
         for fn in sorted(filenames):
             rel = (rel_dir + "/" + fn).strip("/") if rel_dir else fn
             if pfilter.match_file(rel):
+                continue
+            if private and private.matches(rel):
                 continue
             try:
                 st = os.stat(os.path.join(dirpath, fn))
@@ -400,19 +596,20 @@ def count_private(root, never_read: Optional[Sequence[str]]) -> int:
     the main walk now prunes, and that separation is the whole design. Activity
     under a private path stays visible as a number so the brief can say "three
     files changed there" without ever being able to say which.
+
+    The declarations are matched as globs, not reduced to a literal prefix. A
+    reduction returned 0 for every wildcard form -- ``**/private/**``, ``x/*``,
+    ``*.key`` -- and a count of 0 is indistinguishable from "nothing private
+    here", which is precisely the sentence the rule exists to prevent.
     """
+    root = Path(root)
     n = 0
-    for pat in never_read or []:
-        base = _literal_dir(pat)
-        if not base:
-            continue
-        d = Path(root) / base
-        if not d.exists():
-            continue
-        if d.is_file():
+    for rel in find_private_paths(root, globset(list(never_read or []))):
+        target = (root / rel) if rel else root
+        if target.is_file():
             n += 1
             continue
-        for _dirpath, _dirnames, filenames in os.walk(str(d)):
+        for _dirpath, _dirnames, filenames in os.walk(str(target)):
             n += len(filenames)
     return n
 
@@ -420,6 +617,18 @@ def count_private(root, never_read: Optional[Sequence[str]]) -> int:
 # ---------------------------------------------------------------------------
 # git sensing
 # ---------------------------------------------------------------------------
+
+def git_args(cwd, *args: str) -> List[str]:
+    """A git command line that cannot write to the repository it is reading.
+
+    Without ``--no-optional-locks`` a plain ``git status`` refreshes and rewrites
+    ``.git/index`` -- and takes ``index.lock`` while doing it -- in every
+    repository sensing touches. That breaks the "writes nowhere outside the
+    workspace" invariant this file opens with, and it can collide with an editor
+    or a build running in the same repository at the same time.
+    """
+    return ["git", "--no-optional-locks", "-C", str(cwd)] + list(args)
+
 
 def git_toplevel(path, cache: Optional[Dict[str, Optional[str]]] = None) -> Optional[str]:
     """Repository root containing ``path``, or None.
@@ -434,16 +643,93 @@ def git_toplevel(path, cache: Optional[Dict[str, Optional[str]]] = None) -> Opti
     key = str(path)
     if cache is not None and key in cache:
         return cache[key]
-    ok, out = run_cmd(["git", "-C", key, "rev-parse", "--show-toplevel"])
+    ok, out = run_cmd(git_args(key, "rev-parse", "--show-toplevel"))
     top = out.strip() if ok and out.strip() else None
     if cache is not None:
         cache[key] = top
     return top
 
 
+def repo_subpath(abs_path, top) -> Optional[str]:
+    """``abs_path`` expressed inside repository ``top``, in the casing git uses.
+
+    Two everyday macOS layouts used to make this return nonsense, and a nonsense
+    pathspec matches nothing while git still exits 0 -- so the project reported
+    no branch, no commits and an empty ``parse_failed``: a live project rendered
+    as dead.
+
+      * a project reached through a symlink: ``rev-parse --show-toplevel``
+        answers with the physical path, so a relpath from the unresolved one
+        escapes the repository entirely.
+      * a registry path whose case differs from the directory on disk, which a
+        case-insensitive filesystem accepts everywhere except in a git pathspec.
+
+    Returns None when the path genuinely is not inside ``top``; the caller must
+    treat that as a failure to record, never as silence to report.
+    """
+    try:
+        a = os.path.realpath(str(abs_path))
+        t = os.path.realpath(str(top)).rstrip(os.sep)
+    except OSError:
+        return None
+    try:
+        rel = os.path.relpath(a, t)
+    except ValueError:                       # different drives on Windows
+        return None
+    if rel.startswith(".."):
+        # A case difference *above* the toplevel: realpath does not normalise
+        # case, so the two spellings look like two unrelated places.
+        if a.lower() == t.lower():
+            return "."
+        if not a.lower().startswith(t.lower() + os.sep):
+            return None
+        rel = a[len(t) + 1:]
+    if rel == ".":
+        return "."
+
+    # Rebuild the tail from the names on disk. A case difference *below* the
+    # toplevel produces a perfectly ordinary-looking relative path that every
+    # filesystem call accepts and no git pathspec matches.
+    cur, out = t, []
+    for part in rel.split(os.sep):
+        try:
+            names = os.listdir(cur)
+        except OSError:
+            return None
+        if part not in names:
+            matches = sorted(n for n in names if n.lower() == part.lower())
+            if not matches:
+                return None
+            part = matches[0]
+        out.append(part)
+        cur = os.path.join(cur, part)
+    return "/".join(out)
+
+
+def repo_private(root, top, private_globs: Sequence[str]) -> Optional[GlobSet]:
+    """Root-relative privacy globs, re-expressed against a repository toplevel.
+
+    git reports paths relative to the repository, which is rarely the portfolio
+    root. Without this translation a privacy check against git output compares
+    two different coordinate systems and passes everything.
+    """
+    if not private_globs:
+        return None
+    inside = repo_subpath(top, root)      # the repository sits under the root
+    if inside is not None and not inside.startswith(".."):
+        return globset(rebase_globs(private_globs, "" if inside == "." else inside))
+    outside = repo_subpath(root, top)     # the root sits under the repository
+    if outside is not None and not outside.startswith(".."):
+        return globset(private_globs if outside == "." else
+                       [outside + "/" + g for g in private_globs])
+    return None
+
+
 def git_facts(root, paths: Sequence[str], as_of: dt.date,
               exclude_subpaths: Optional[Sequence[str]] = None,
-              toplevel_cache: Optional[Dict[str, Optional[str]]] = None):
+              toplevel_cache: Optional[Dict[str, Optional[str]]] = None,
+              problems: Optional[List[Dict[str, Any]]] = None,
+              label: Optional[str] = None):
     """Resolve the toplevel per registered path and group by what git actually says.
 
     Never assume "project root == repository root". Repositories nest, and one
@@ -451,7 +737,16 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
     Getting this wrong silently credits one project's commits to another, which
     is the single most damaging kind of error this file can make: it is invisible
     and it reads as fact.
+
+    ``problems`` receives ``parse_failed`` entries. Anything that leaves a
+    registered path unrepresented in the answer has to be recorded there: a
+    pathspec that resolves to nothing produces exactly the same output as a
+    repository with no commits, and only one of those is a fact.
     """
+    def fail(path: str, code: str, why: str) -> None:
+        if problems is not None:
+            problems.append({"path": path, "code": code, "why": why})
+
     groups: Dict[str, List[str]] = {}
     for rel in paths:
         ap = Path(root) / rel
@@ -460,11 +755,13 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
         top = git_toplevel(ap, toplevel_cache)
         if not top:
             continue
-        try:
-            sub = os.path.relpath(str(ap), top).replace(os.sep, "/")
-        except ValueError:
+        sub = repo_subpath(ap, top)
+        if sub is None:
+            fail(label or rel, "git_path_unresolved",
+                 "%s exists but could not be located inside the repository at %s, "
+                 "so its git history is not reported" % (rel, top))
             continue
-        groups.setdefault(top, []).append("." if sub == "." else sub)
+        groups.setdefault(top, []).append(sub)
 
     if not groups:
         return None
@@ -486,16 +783,21 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
                 continue
             seen_ex.add(ex)
             exa = Path(root) / ex
-            try:
-                exs = os.path.relpath(str(exa), top).replace(os.sep, "/")
-            except ValueError:
-                continue
+            exs = repo_subpath(exa, top) if exa.exists() else None
+            if exs is None:
+                # An exclusion may name a path that no longer exists in the
+                # working tree but still exists in history, and dropping it
+                # would change the commit counts it was written to correct.
+                try:
+                    exs = os.path.relpath(str(exa), top).replace(os.sep, "/")
+                except ValueError:
+                    continue
             if not exs.startswith(".."):
                 pathspec.append(":(exclude)" + exs)
 
         sep = ["--"] + pathspec if pathspec else []
 
-        ok, out = run_cmd(["git", "-C", top, "rev-parse", "--abbrev-ref", "HEAD"])
+        ok, out = run_cmd(git_args(top, "rev-parse", "--abbrev-ref", "HEAD"))
         branch = out.strip() if ok else None
 
         # PERF: one `git log -20` serves both the last commit and the recent-sha
@@ -507,8 +809,8 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
         last = None
         recent_shas: List[str] = []
         ok, out = run_cmd(
-            ["git", "-C", top, "log", "-20",
-             "--format=%H%x1f%h%x1f%ad%x1f%s", "--date=short"] + sep
+            git_args(top, "log", "-20",
+                     "--format=%H%x1f%h%x1f%ad%x1f%s", "--date=short") + sep
         )
         if ok:
             for ln in out.splitlines():
@@ -518,6 +820,20 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
                 recent_shas.extend(p[:2])
                 if last is None:
                     last = {"sha": p[0], "short": p[1], "date": p[2], "subject": p[3]}
+
+        # No commits for this pathspec looks exactly like a repository nobody has
+        # committed to, and only one of those is a fact. Ask git which it is --
+        # but only here, where the answer is already in doubt, because
+        # `ls-files` over a large monorepo is not free.
+        includes = [s for s in pathspec if not s.startswith(":")]
+        if last is None and includes and includes != ["."]:
+            has_head, _ = run_cmd(git_args(top, "rev-parse", "--verify", "-q", "HEAD"))
+            tracked_ok, tracked = run_cmd(git_args(top, "ls-files", "--") + includes)
+            if has_head and not (tracked_ok and tracked.strip()):
+                fail(label or top, "git_pathspec_unmatched",
+                     "git tracks no file under %s in the repository at %s, so its "
+                     "commit history reads as silence rather than as no data"
+                     % (", ".join(includes), top))
 
         # PERF (rejected): these three could be derived from a single
         # `git log --since=<90d> --format=%ct` pass. Not done -- `--since` prunes
@@ -529,14 +845,14 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
         for w in (7, 30, 90):
             since = (as_of - dt.timedelta(days=w)).isoformat()
             ok, out = run_cmd(
-                ["git", "-C", top, "rev-list", "--count", "--since=" + since, "HEAD"] + sep
+                git_args(top, "rev-list", "--count", "--since=" + since, "HEAD") + sep
             )
             commits[str(w)] = int(out.strip()) if ok and out.strip().isdigit() else None
 
-        ok, out = run_cmd(["git", "-C", top, "status", "--porcelain"] + sep)
+        ok, out = run_cmd(git_args(top, "status", "--porcelain") + sep)
         dirty = len([ln for ln in out.splitlines() if ln.strip()]) if ok else None
 
-        ok, out = run_cmd(["git", "-C", top, "remote"])
+        ok, out = run_cmd(git_args(top, "remote"))
         has_remote = bool(ok and out.strip())
 
         repos.append({
@@ -593,18 +909,25 @@ def scc_complexity(scc_bin: Optional[str], root,
 
 
 def git_hotspots(top, pathspec: Sequence[str], as_of: dt.date, limit: int = 5,
-                 scc_map: Optional[Dict[str, Any]] = None):
+                 scc_map: Optional[Dict[str, Any]] = None,
+                 pfilter: Optional[PathFilter] = None,
+                 private: Optional[GlobSet] = None):
     """churn x size hotspots. Churn comes from one `git log --numstat` pass.
 
     The time dimension is the part a code-reading agent cannot get at: it can see
     that a file is complex, but not that it has been rewritten nine times this
     quarter. Real cyclomatic complexity needs ``scc``; without it we use line
     count and say so in the field name rather than pretending.
+
+    ``pfilter`` is the project's own ignore list, and passing it is not cosmetic:
+    git reports vendored trees the walk never sees, so without it a committed
+    ``node_modules`` or ``vendor`` takes every slot in the list and the one signal
+    this function exists to produce is gone.
     """
     since = (as_of - dt.timedelta(days=90)).isoformat()
     sep = ["--"] + list(pathspec) if pathspec else []
     ok, out = run_cmd(
-        ["git", "-C", top, "log", "--since=" + since, "--numstat", "--format="] + sep,
+        git_args(top, "log", "--since=" + since, "--numstat", "--format=") + sep,
         timeout=TOOL_TIMEOUT,
     )
     if not ok:
@@ -616,6 +939,10 @@ def git_hotspots(top, pathspec: Sequence[str], as_of: dt.date, limit: int = 5,
             continue
         a, d, path = parts
         if a == "-" or d == "-":     # binary file
+            continue
+        if pfilter and pfilter.match_path(path):
+            continue
+        if private and private.matches(path):
             continue
         try:
             churn[path] = churn.get(path, 0) + int(a) + int(d)
@@ -834,6 +1161,68 @@ def _rank(order: Sequence[str], kind: Optional[str]) -> int:
         return len(order)
 
 
+_JSON_KIND = {dict: "object", list: "array", str: "string", bool: "boolean",
+              int: "number", float: "number", type(None): "null"}
+
+
+def _kind(value: Any) -> str:
+    if isinstance(value, str) and not value.strip():
+        return "an empty string"
+    return _JSON_KIND.get(type(value), type(value).__name__)
+
+
+def check_shapes(cfg: Any, reg: Any) -> None:
+    """Reject a malformed-but-parseable registry or config with a sentence.
+
+    Parsing only proves the file is JSON. A registry whose ``projects`` is an
+    object, or whose project entry is a bare string, parses cleanly and then dies
+    several hundred lines later with an AttributeError and a traceback -- which
+    reads as a bug in the tool rather than as a typo in a file the reader owns
+    and can fix. The standard here is the one already set by the missing
+    ``defaults.root`` message: name the key, say what it must be.
+    """
+    def want(cond: bool, key: str, expected: str, got: Any) -> None:
+        if not cond:
+            raise SenseError("%s must be %s, not %s" % (key, expected, _kind(got)))
+
+    want(isinstance(cfg, dict), "config.jsonc", "a JSON object", cfg)
+    want(isinstance(reg, dict), "registry.jsonc", "a JSON object", reg)
+
+    for key in ("defaults", "meta"):
+        if reg.get(key) is not None:
+            want(isinstance(reg[key], dict), "registry %s" % key, "an object", reg[key])
+
+    projects = reg.get("projects")
+    if projects is not None:
+        want(isinstance(projects, list), "registry projects", "an array", projects)
+        for i, pr in enumerate(projects):
+            at = "registry projects[%d]" % i
+            want(isinstance(pr, dict), at, "an object", pr)
+            want(isinstance(pr.get("id"), str) and pr["id"].strip(),
+                 "%s.id" % at, "a non-empty string", pr.get("id"))
+            for key in ("paths", "ignore_globs", "exclude_subpaths", "status_docs",
+                        "deadlines", "hard_rules", "conflicts"):
+                if pr.get(key) is not None:
+                    want(isinstance(pr[key], list), "%s.%s" % (at, key), "an array", pr[key])
+            for key in ("privacy", "ice"):
+                if pr.get(key) is not None:
+                    want(isinstance(pr[key], dict), "%s.%s" % (at, key), "an object", pr[key])
+            never = (pr.get("privacy") or {}).get("never_read")
+            if never is not None:
+                want(isinstance(never, list), "%s.privacy.never_read" % at,
+                     "an array of globs", never)
+            for j, sd in enumerate(pr.get("status_docs") or []):
+                want(isinstance(sd, dict) and isinstance(sd.get("path"), str),
+                     "%s.status_docs[%d]" % (at, j), "an object with a path", sd)
+
+    watch = reg.get("watch")
+    if watch is not None:
+        want(isinstance(watch, list), "registry watch", "an array", watch)
+        for i, w in enumerate(watch):
+            want(isinstance(w, dict) and isinstance(w.get("path"), str),
+                 "registry watch[%d]" % i, "an object with a path", w)
+
+
 def resolve_root(ws: Workspace, reg: Dict[str, Any]) -> Path:
     """Resolve ``defaults.root`` once, at the entry point.
 
@@ -861,6 +1250,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
           as_of: dt.date, now: dt.datetime, timer: Optional[Timing] = None) -> Dict[str, Any]:
     """Sense everything the registry declares and return the snapshot structure."""
     timer = timer or Timing(False)
+    check_shapes(cfg, reg)
     root = resolve_root(ws, reg)
     default_globs = list((reg.get("defaults") or {}).get("ignore_globs") or [])
     windows = cfg["signal"]["windows"]
@@ -871,7 +1261,6 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     # project declared them (FIX-1a: a private directory nested in another
     # project's tree used to be walked by that project).
     private_globs = privacy_globs(reg)
-    private_dirs = sorted({d for d in (_literal_dir(g) for g in private_globs) if d})
 
     parse_failed: List[Dict[str, Any]] = []
     no_declared_date: List[str] = []      # a doc that states no date is a fact, not a fault
@@ -922,6 +1311,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         }
         active_days_union = set()
         newest = None
+        # Privacy globs rebased onto each declared path, compiled once: the walk
+        # prunes with them, and the git exclusions below are derived from the
+        # directories they actually match.
+        private_by_rel = {rel: globset(rebase_globs(private_globs, rel)) for rel in paths}
         with timer.phase("walk"):
             for rel in paths:
                 ap = Path(root) / rel
@@ -931,7 +1324,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 # Privacy globs are rebased onto this path so the walk itself can
                 # never collect a private file name (defence 1 of 3).
                 pfilter = PathFilter(default_globs + own_globs + rebase_globs(private_globs, rel))
-                f = walk_project(ap, pfilter, as_of, windows)
+                f = walk_project(ap, pfilter, as_of, windows, private=private_by_rel[rel])
                 if f is None:
                     parse_failed.append({"path": rel, "code": "walk_failed",
                                          "why": "directory could not be walked"})
@@ -974,15 +1367,28 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             # load-bearing: handing git a pathspec at all switches on history
             # simplification, so giving a whole-repo project an irrelevant
             # exclusion silently changes its commit counts.
+            #
+            # The exclusions are the directories and files a never_read glob
+            # actually matched on disk, not the globs themselves: `:(exclude)`
+            # takes a pathspec, and a pattern reduced to a literal prefix
+            # produced an empty one -- an exclusion that excluded nothing and
+            # said nothing about it.
             own_ex = list(pr.get("exclude_subpaths") or [])
-            bases = [p.strip("/") for p in paths]
-            excludes = own_ex + [
-                d for d in private_dirs
-                if d not in own_ex and any(d == b or d.startswith(b + "/") for b in bases)
-            ]
+            private_here: List[str] = []
+            if private_globs:
+                with timer.phase("private_paths"):
+                    for rel in paths:
+                        gs = private_by_rel.get(rel)
+                        if not gs:
+                            continue
+                        base = rel.strip("/")
+                        for m in find_private_paths(Path(root) / rel, gs):
+                            private_here.append((base + "/" + m).strip("/") if m else base)
+            excludes = own_ex + [d for d in sorted(set(private_here)) if d not in own_ex]
             with timer.phase("git_facts"):
                 repos = git_facts(root, paths, as_of, exclude_subpaths=excludes,
-                                  toplevel_cache=toplevel_cache)
+                                  toplevel_cache=toplevel_cache,
+                                  problems=parse_failed, label=pid)
             if repos:
                 git_out = repos
                 for r in repos:
@@ -994,9 +1400,17 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 main_repo = repos[0]
                 with timer.phase("scc"):
                     scc_map = scc_complexity(scc_bin, main_repo["toplevel"], scc_cache)
+                # git names paths the walk never sees, so the project's own
+                # ignore list has to be applied here as well or a vendored tree
+                # owns the hotspot list. Prune-by-name globs (`**/vendor/**`)
+                # carry across; a path-anchored one only lines up when the
+                # project is the repository root, which is the common case.
                 with timer.phase("git_hotspots"):
                     hs = git_hotspots(main_repo["toplevel"], main_repo["pathspec"], as_of,
-                                      scc_map=scc_map)
+                                      scc_map=scc_map,
+                                      pfilter=PathFilter(default_globs + own_globs),
+                                      private=repo_private(root, main_repo["toplevel"],
+                                                           private_globs))
                 if hs is not None:
                     hotspots = hs
             elif paths:
@@ -1010,6 +1424,13 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             dp = Path(root) / sd["path"]
             entry: Dict[str, Any] = {"path": sd["path"], "kind": sd.get("kind"),
                                      "authority": sd.get("authority"), "exists": dp.exists()}
+            # A registry that declares the same file both "read it" and "never
+            # read it" is contradicting itself. Do not open it: the pre-write
+            # guard refuses the run over the path a moment later, and it should
+            # refuse without this file ever having been read.
+            if _matches_private(sd["path"], private_globs):
+                docs.append(entry)
+                continue
             if dp.exists():
                 try:
                     entry["mtime_date"] = dt.date.fromtimestamp(dp.stat().st_mtime).isoformat()
@@ -1111,6 +1532,23 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             add_ev("session:" + pid, "session", sess.get("last_active_date"))
 
         no_git = pr.get("git") == "none"
+        # Name the measure this list was actually ranked by. `scc` being
+        # installed is not the same as `scc` having reported on these files -- it
+        # skips languages it does not know, and each such file silently falls
+        # back to line count. A label claiming complexity over a list ranked by
+        # lines is a fact the reader cannot check and cannot see is wrong. With
+        # nothing ranked there is nothing to misdescribe, so the label states the
+        # measure that was available.
+        used_complexity = (all(h.get("complexity") is not None for h in hotspots)
+                           if hotspots else bool(scc_bin))
+        if used_complexity:
+            hotspot_metric = "churn_90d x cyclomatic complexity (scc)"
+        elif scc_bin:
+            hotspot_metric = ("churn_90d x line count (scc reported no complexity for "
+                              "at least one of these files; lines stand in)")
+        else:
+            hotspot_metric = ("churn_90d x line count (scc not installed; "
+                              "lines stand in for complexity)")
         projects_out.append({
             "id": pid,
             "name": pr.get("name", pid),
@@ -1124,10 +1562,8 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "has_git": bool(git_out),
             "git": git_out,
             "hotspots": hotspots,
-            "hotspot_metric": ("churn_90d x cyclomatic complexity (scc)" if scc_bin
-                               else "churn_90d x line count (scc not installed; "
-                                    "lines stand in for complexity)"),
-            "hotspot_metric_kind": "complexity" if scc_bin else "lines",
+            "hotspot_metric": hotspot_metric,
+            "hotspot_metric_kind": "complexity" if used_complexity else "lines",
             "fs": fs_agg,
             "private_file_count": private_count,
             "sessions": sess or None,
@@ -1163,8 +1599,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     with timer.phase("watch"):
         for w in reg.get("watch", []) or []:
             ap = Path(root) / w["path"]
-            pf = PathFilter(default_globs + rebase_globs(private_globs, w["path"]))
-            f = walk_project(ap, pf, as_of, windows) if ap.exists() else None
+            rebased = rebase_globs(private_globs, w["path"])
+            pf = PathFilter(default_globs + rebased)
+            f = (walk_project(ap, pf, as_of, windows, private=globset(rebased))
+                 if ap.exists() else None)
             watch_out.append({
                 "path": w["path"], "reason": w.get("reason"), "exists": ap.exists(),
                 "newest_file_date": f["newest_file_date"] if f else None,
@@ -1334,7 +1772,11 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
 
 
 def canonical(snap: Dict[str, Any]) -> str:
-    """The snapshot minus the wall clock, for idempotence comparison."""
+    """A generated artifact minus the wall clock, for idempotence comparison.
+
+    Used on both the snapshot and the digest: `run` is the only block either one
+    carries that legitimately differs between two runs of the same inputs.
+    """
     c = dict(snap)
     c.pop("run", None)
     return json.dumps(c, ensure_ascii=False, sort_keys=True, indent=2)
@@ -1371,7 +1813,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--workspace", help="workspace directory (default: discovered)")
     ap.add_argument("--out", help="directory for generated files (default: the workspace)")
     ap.add_argument("--check", action="store_true",
-                    help="exit 3 if the snapshot content would change")
+                    help="exit 3 if the snapshot or the digest content would change")
     ap.add_argument("--stdout", action="store_true", help="print the snapshot, write nothing")
     ap.add_argument("--as-of", dest="as_of", metavar="ISO",
                     help="pin the run date (YYYY-MM-DD or a full ISO timestamp)")
@@ -1379,20 +1821,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     timer = Timing(args.timing)
+    # One handler per input. A shared try block reported an undecodable
+    # config.jsonc as an "--as-of" problem and a broken registry as a problem
+    # with config.jsonc, which sends the reader to edit a file that is fine.
     try:
         ws = resolve_workspace(args.workspace, out=args.out)
-        with timer.phase("load_config"):
-            cfg = load_jsonc(ws.config_path)
-            reg = load_jsonc(ws.registry_path)
-        as_of, now = _parse_as_of(args.as_of)
-    except (WorkspaceError, JSONCError) as exc:
+    except WorkspaceError as exc:
         print("sense: %s" % exc, file=sys.stderr)
         return EXIT_ERROR
+
+    loaded = {}
+    with timer.phase("load_config"):
+        for name, path in (("config", ws.config_path), ("registry", ws.registry_path)):
+            try:
+                loaded[name] = load_jsonc(path)
+            except JSONCError as exc:
+                print("sense: %s" % exc, file=sys.stderr)
+                return EXIT_ERROR
+            except (OSError, ValueError) as exc:
+                # UnicodeDecodeError is a ValueError, and it arrives from
+                # read_text rather than from the parser, so JSONCError does not
+                # cover it. Name the file either way.
+                print("sense: cannot read %s: %s" % (path, exc), file=sys.stderr)
+                return EXIT_ERROR
+    cfg, reg = loaded["config"], loaded["registry"]
+
+    try:
+        as_of, now = _parse_as_of(args.as_of)
     except ValueError as exc:
         print("sense: --as-of is not a valid ISO date: %s" % exc, file=sys.stderr)
         return EXIT_ERROR
 
     try:
+        check_shapes(cfg, reg)
         root_str = str(resolve_root(ws, reg))
         with timer.phase("build"):
             snap = build(ws, cfg, reg, as_of, now, timer=timer)
@@ -1423,8 +1884,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for where, _value in leaks[:10]:
             # Report the location, never the leaked value itself.
             print("  at %s" % where, file=sys.stderr)
-        print("  privacy.never_read paths may contribute a count and nothing else; "
-              "this is a bug in sense, not in your registry.", file=sys.stderr)
+        print("  privacy.never_read paths may contribute a count and nothing else. "
+              "If the registry itself points a status_doc or a project path inside "
+              "a never_read tree, that contradiction is the cause; otherwise this "
+              "is a bug in sense.", file=sys.stderr)
         return EXIT_PRIVACY
 
     if args.stdout:
@@ -1434,18 +1897,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.check:
         timer.report(sys.stderr)
-        if not ws.snapshot.exists():
-            print("sense: %s does not exist yet" % ws.snapshot, file=sys.stderr)
-            return EXIT_STALE
-        try:
-            old = json.loads(ws.snapshot.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return EXIT_STALE
-        if canonical(old) != canonical(snap):
-            print("sense: snapshot is out of date (non-timestamp fields changed)",
-                  file=sys.stderr)
-            return EXIT_STALE
-        print("sense: snapshot is current")
+        # Both artifacts, not just the snapshot. The backlog lives only in the
+        # digest, so every `ok` / `done` / `drop` -- the commands the brief itself
+        # tells you to run -- changes what the next render produces while leaving
+        # the snapshot identical. Checking the snapshot alone reported "current"
+        # for a brief that was already wrong, and a scheduler running
+        # `nextbrief check || nextbrief run` therefore never re-ran.
+        for label, path, fresh in (("snapshot", ws.snapshot, snap),
+                                   ("digest", ws.digest, digest)):
+            if not path.exists():
+                print("sense: %s does not exist yet" % path, file=sys.stderr)
+                return EXIT_STALE
+            try:
+                old = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                print("sense: %s cannot be read back; treating it as out of date" % path,
+                      file=sys.stderr)
+                return EXIT_STALE
+            if canonical(old) != canonical(fresh):
+                print("sense: %s is out of date (non-timestamp fields changed)" % label,
+                      file=sys.stderr)
+                return EXIT_STALE
+        print("sense: snapshot and digest are current")
         return EXIT_OK
 
     ws.ensure_dirs()

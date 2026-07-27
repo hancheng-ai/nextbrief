@@ -13,7 +13,18 @@ import json
 import os
 import unittest
 
-from helpers import AS_OF, AS_OF_DATE, TempCase, capture, requires_git, set_mtime
+from helpers import (
+    AS_OF,
+    AS_OF_DATE,
+    TempCase,
+    base_registry,
+    capture,
+    git_commit_all,
+    requires_git,
+    set_mtime,
+    set_tree_mtime,
+    write_backlog_item,
+)
 
 from nextbrief import sense
 from nextbrief.paths import resolve_workspace
@@ -119,6 +130,330 @@ class CheckMode(TempCase):
         before = (self.ws / "state" / "snapshot.json").stat().st_mtime_ns
         self.assertEqual(self._sense("--check")[0], 0)
         self.assertEqual((self.ws / "state" / "snapshot.json").stat().st_mtime_ns, before)
+
+
+class CheckCoversTheDigest(TempCase):
+    """``check`` has to cover every artifact a re-run would change.
+
+    The backlog lives only in the digest, so ``ok`` / ``done`` / ``drop`` -- the
+    commands the brief itself tells you to run -- leave the snapshot untouched.
+    Comparing the snapshot alone reported "current" for a brief that was already
+    out of date, and a scheduler running `nextbrief check || nextbrief run` on
+    the strength of it never re-ran.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+
+    def _sense(self, *args):
+        return capture(sense.main, ["--workspace", str(self.ws), "--as-of", AS_OF] + list(args))
+
+    def test_a_new_backlog_item_alone_makes_the_run_stale(self):
+        self.assertEqual(self._sense()[0], 0)
+        self.assertEqual(self._sense("--check")[0], sense.EXIT_OK)
+        write_backlog_item(self.ws, "orchard-001", title="Ship the tenancy rewrite")
+        code, _, err = self._sense("--check")
+        self.assertEqual(code, sense.EXIT_STALE)
+        self.assertIn("digest", err)
+
+    def test_an_edited_backlog_item_alone_makes_the_run_stale(self):
+        write_backlog_item(self.ws, "orchard-001", title="Ship the tenancy rewrite")
+        self.assertEqual(self._sense()[0], 0)
+        write_backlog_item(self.ws, "orchard-001", title="Ship the tenancy rewrite",
+                           status="done")
+        code, _, err = self._sense("--check")
+        self.assertEqual(code, sense.EXIT_STALE)
+        self.assertIn("digest", err)
+
+    def test_a_missing_digest_is_stale_even_with_a_current_snapshot(self):
+        self.assertEqual(self._sense()[0], 0)
+        os.remove(str(self.ws / "state" / "digest.json"))
+        code, _, err = self._sense("--check")
+        self.assertEqual(code, sense.EXIT_STALE)
+        self.assertIn("digest.json", err)
+
+    def test_an_unchanged_workspace_is_still_current(self):
+        self.assertEqual(self._sense()[0], 0)
+        code, out, _ = self._sense("--check")
+        self.assertEqual(code, sense.EXIT_OK)
+        self.assertIn("current", out)
+
+
+class GitPathResolution(TempCase):
+    """A project reached through a symlink, or spelled in another case, is a live
+    project. Both used to report as a dead one.
+
+    ``rev-parse --show-toplevel`` answers with the physical path in git's own
+    casing. A relpath computed from the unresolved registry path therefore
+    escapes the repository, and git accepts the resulting pathspec, matches
+    nothing and exits 0 -- so the project came back with no branch, no commits
+    and an empty ``parse_failed``. Silence that reads as fact is the failure mode
+    this file exists to avoid.
+    """
+
+    def _sense(self, ws):
+        return capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+
+    def _orchard(self, ws):
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        return {p["id"]: p for p in snap["projects"]}["orchard"], snap
+
+    def _case_insensitive(self) -> bool:
+        probe = self.tmp / "CaseProbe"
+        probe.mkdir(exist_ok=True)
+        return (self.tmp / "caseprobe").is_dir()
+
+    @requires_git
+    def test_a_project_reached_through_a_symlink_keeps_its_git_evidence(self):
+        ws = self.workspace()
+        real = ws / "projects-real"
+        os.rename(str(ws / "projects"), str(real))
+        os.symlink(str(real), str(ws / "projects"))   # defaults.root now a symlink
+
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, 0, err)
+        orchard, _snap = self._orchard(ws)
+        self.assertTrue(orchard["has_git"])
+        self.assertFalse(orchard["git"][0]["no_commits"])
+        self.assertEqual(orchard["git"][0]["commits_since"]["30"], 1)
+        self.assertEqual(orchard["git"][0]["pathspec"], [])
+
+    @requires_git
+    def test_a_registry_path_in_the_wrong_case_keeps_its_git_evidence(self):
+        if not self._case_insensitive():
+            self.skipTest("filesystem is case-sensitive, so the two paths are two places")
+        ws = self.workspace()
+        # The registry says ./projects; the directory on disk is PROJECTS. Every
+        # part of the OS accepts that except a git pathspec.
+        os.rename(str(ws / "projects"), str(ws / "PROJECTS"))
+
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, 0, err)
+        orchard, _snap = self._orchard(ws)
+        self.assertTrue(orchard["has_git"])
+        self.assertFalse(orchard["git"][0]["no_commits"])
+        self.assertEqual(orchard["git"][0]["commits_since"]["30"], 1)
+
+    @requires_git
+    def test_a_pathspec_matching_nothing_is_recorded_not_reported_as_silence(self):
+        ws = self.workspace()
+        untracked = ws / "projects" / "orchard" / "untracked"
+        untracked.mkdir()
+        (untracked / "notes.md").write_text("# not committed\n", encoding="utf-8")
+        set_tree_mtime(ws / "projects")
+
+        reg = base_registry()
+        reg["projects"] = [dict(reg["projects"][0], id="orchard-sub",
+                                paths=["orchard/untracked"], status_docs=[],
+                                non_goals_doc=None)]
+        (ws / "registry.jsonc").write_text(json.dumps(reg, indent=2), encoding="utf-8")
+
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        failures = [f for f in snap["parse_failed"] if f["code"] == "git_pathspec_unmatched"]
+        self.assertEqual(len(failures), 1, snap["parse_failed"])
+        self.assertEqual(failures[0]["path"], "orchard-sub")
+        # And the empty answer is still reported, just no longer as the whole story.
+        self.assertTrue(snap["projects"][0]["git"][0]["no_commits"])
+
+    def test_repo_subpath_resolves_a_symlinked_path(self):
+        real = self.tmp / "real"
+        (real / "pkg").mkdir(parents=True)
+        link = self.tmp / "link"
+        os.symlink(str(real), str(link))
+        self.assertEqual(sense.repo_subpath(link / "pkg", real), "pkg")
+        self.assertEqual(sense.repo_subpath(link, real), ".")
+
+    def test_repo_subpath_answers_in_the_casing_on_disk(self):
+        if not self._case_insensitive():
+            self.skipTest("filesystem is case-sensitive, so the two paths are two places")
+        repo = self.tmp / "repo"
+        (repo / "apps" / "portal").mkdir(parents=True)
+        self.assertEqual(sense.repo_subpath(repo / "APPS" / "Portal", repo), "apps/portal")
+
+    def test_repo_subpath_refuses_a_path_outside_the_repository(self):
+        repo = self.tmp / "repo"
+        other = self.tmp / "other"
+        repo.mkdir()
+        other.mkdir()
+        self.assertIsNone(sense.repo_subpath(other, repo))
+
+
+class GitIsReadOnly(TempCase):
+    """Sensing must leave every repository it reads exactly as it found it.
+
+    Without ``--no-optional-locks`` git refreshes and rewrites ``.git/index``
+    (taking ``index.lock`` on the way) in every repository it is asked about --
+    which contradicts the invariant this file opens with and can collide with an
+    editor or a build running in the same tree.
+    """
+
+    @requires_git
+    def test_sensing_does_not_rewrite_the_git_index(self):
+        ws = self.workspace()
+        index = ws / "projects" / "orchard" / ".git" / "index"
+        before = (index.read_bytes(), index.stat().st_mtime_ns)
+
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+
+        self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), before)
+        self.assertFalse((index.parent / "index.lock").exists())
+
+
+class Hotspots(TempCase):
+    """Hotspots come from git, which reports paths the walk never sees."""
+
+    VENDOR = "vendor/bundled.js"
+    OWN = "src/engine.py"
+
+    def _workspace(self, scc="/nonexistent/scc"):
+        reg = base_registry()
+        reg["projects"] = [reg["projects"][0]]
+        reg["projects"][0]["ignore_globs"] = ["**/vendor/**"]
+        cfg = None
+        ws = self.workspace(registry=reg, config=cfg)
+        orchard = ws / "projects" / "orchard"
+        for rel, lines in ((self.VENDOR, 200), (self.OWN, 90)):
+            path = orchard / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join("x = %d" % i for i in range(lines)) + "\n",
+                            encoding="utf-8")
+        git_commit_all(orchard, "orchard: vendored dependency and engine")
+        set_tree_mtime(ws / "projects")
+
+        # Pinned to a path that does not exist so the run is the same on a
+        # machine with scc installed and one without.
+        config = json.loads(
+            (ws / "config.jsonc").read_text(encoding="utf-8").split("\n", 1)[1])
+        config["external_tools"] = {"scc": scc}
+        (ws / "config.jsonc").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return ws
+
+    def _hotspots(self, ws):
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        return snap["projects"][0]
+
+    @requires_git
+    def test_an_ignored_vendor_tree_does_not_take_the_hotspot_slots(self):
+        # 200 churned lines of vendored code outrank 90 of your own on every
+        # measure, which is exactly why the ignore list has to reach this far.
+        project = self._hotspots(self._workspace())
+        paths = [h["path"] for h in project["hotspots"]]
+        self.assertIn(self.OWN, paths)
+        self.assertNotIn(self.VENDOR, paths)
+
+    @requires_git
+    def test_the_metric_names_the_measure_that_was_used(self):
+        # A fake scc that parses but reports nothing: installed is not the same
+        # as having answered, and the label may not claim complexity over a list
+        # that was ranked by line count.
+        fake = self.tmp / "bin" / "scc"
+        fake.parent.mkdir(parents=True, exist_ok=True)
+        fake.write_text("#!/bin/sh\necho '[]'\n", encoding="utf-8")
+        os.chmod(str(fake), 0o755)
+
+        project = self._hotspots(self._workspace(scc=str(fake)))
+        self.assertTrue(project["hotspots"])
+        self.assertTrue(all(h["complexity"] is None for h in project["hotspots"]))
+        self.assertEqual(project["hotspot_metric_kind"], "lines")
+        self.assertIn("line count", project["hotspot_metric"])
+
+
+class MisconfiguredInputs(TempCase):
+    """A broken input file names itself. Sending the reader to edit the wrong
+    file, or handing them an AttributeError, is a worse answer than no answer."""
+
+    def _sense(self, ws, *args):
+        return capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF] + list(args))
+
+    def _write_registry(self, ws, registry):
+        (ws / "registry.jsonc").write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+    def test_an_undecodable_config_is_reported_as_a_config_problem(self):
+        # UnicodeDecodeError is a ValueError raised by the read, not the parser,
+        # so a shared handler blamed it on --as-of: a flag the reader never used.
+        ws = self.workspace()
+        (ws / "config.jsonc").write_bytes(b'{"locale": "\xff\xfe not utf-8"}\n')
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("config.jsonc", err)
+        self.assertNotIn("--as-of", err)
+
+    def test_an_undecodable_registry_is_reported_as_a_registry_problem(self):
+        ws = self.workspace()
+        (ws / "registry.jsonc").write_bytes(b'{"meta": "\xff\xfe not utf-8"}\n')
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("registry.jsonc", err)
+        self.assertNotIn("config.jsonc", err)
+
+    def test_a_registry_problem_does_not_blame_config(self):
+        ws = self.workspace()
+        reg = base_registry()
+        del reg["projects"][0]["id"]
+        self._write_registry(ws, reg)
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("projects[0].id", err)
+        self.assertNotIn("config.jsonc", err)
+
+    def test_projects_must_be_an_array(self):
+        ws = self.workspace()
+        reg = base_registry()
+        reg["projects"] = {"orchard": {"paths": ["orchard"]}}
+        self._write_registry(ws, reg)
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("registry projects must be an array, not object", err)
+        self.assertFalse((ws / "state" / "snapshot.json").exists())
+
+    def test_a_project_entry_must_be_an_object(self):
+        ws = self.workspace()
+        reg = base_registry()
+        reg["projects"][1] = "kiln"
+        self._write_registry(ws, reg)
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("registry projects[1] must be an object, not string", err)
+
+    def test_project_paths_must_be_an_array(self):
+        ws = self.workspace()
+        reg = base_registry()
+        reg["projects"][0]["paths"] = "orchard"
+        self._write_registry(ws, reg)
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("projects[0].paths must be an array, not string", err)
+
+    def test_never_read_must_be_an_array(self):
+        ws = self.workspace()
+        reg = base_registry()
+        reg["projects"][1]["privacy"]["never_read"] = "fixtures/private/**"
+        self._write_registry(ws, reg)
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("never_read must be an array of globs", err)
+
+    def test_a_watch_entry_must_carry_a_path(self):
+        ws = self.workspace()
+        reg = base_registry()
+        reg["watch"] = ["projects/orchard"]
+        self._write_registry(ws, reg)
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("registry watch[0] must be an object with a path", err)
+
+    def test_config_must_be_an_object(self):
+        ws = self.workspace()
+        (ws / "config.jsonc").write_text("[]\n", encoding="utf-8")
+        code, _, err = self._sense(ws)
+        self.assertEqual(code, sense.EXIT_ERROR)
+        self.assertIn("config.jsonc must be a JSON object, not array", err)
 
 
 class Determinism(TempCase):
