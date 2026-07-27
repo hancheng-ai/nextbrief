@@ -1,8 +1,9 @@
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/nextbrief.svg)](https://pypi.org/project/nextbrief/)
-[![Python versions](https://img.shields.io/pypi/pyversions/nextbrief.svg)](https://pypi.org/project/nextbrief/)
+[![Release](https://img.shields.io/badge/release-v0.1.0rc1-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc1)
+[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.1.0rc1-blue)](https://test.pypi.org/project/nextbrief/)
+[![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **A daily brief across every project you own — where every claim is checked against evidence before it is allowed to print.**
@@ -41,10 +42,19 @@ That sentence is false. The benchmark was never re-run; that is the entire reaso
 the decision is still open. The model cited a benchmark report to support it. The
 report does not exist.
 
+**Run it yourself.** Stage 2 is the only stage that needs a model, and its output
+from that run is committed at
+[`examples/workspace/state/brief.json`](examples/workspace/state/brief.json) — so
+stages 1 and 3 replay it exactly, with no model, no API key and no network:
+
 ```console
-$ nextbrief run
-sense: 6 projects | 3 hot | 0 parse failures | snapshot 35KB / digest 13KB
-render: BRIEF.md | 45 lines | v1 | notify: first run
+$ cd examples/workspace
+$ ./scripts/build-example.sh
+$ rm -rf log                     # rejected.jsonl is appended to, not rewritten
+$ nextbrief --workspace . sense --as-of 2026-03-16
+sense: 6 projects | 3 hot | 0 parse failures | snapshot 34KB / digest 13KB
+$ nextbrief --workspace . render --no-notify
+render: …/examples/workspace/BRIEF.md | 44 lines | v1 | notify: suppressed (--no-notify; would have been: first run)
   4 unverifiable claim(s) dropped -> log/rejected.jsonl
 ```
 
@@ -52,7 +62,7 @@ render: BRIEF.md | 45 lines | v1 | notify: first run
 
 ```jsonl
 {"at": "2026-03-16T12:00:00", "evidence_kind": "file_mtime", "kind": "unresolvable_evidence", "source": "orchard-api/bench/results/tenancy-p95.md", "text": "Sign off the tenancy decision -- the per-tenant p95 numbers came back clean last week", "where": "next_actions", "why": "source does not resolve in snapshot.evidence_index"}
-{"at": "2026-03-16T12:00:00", "actual": ["doc_declared", "file_mtime"], "declared": "commit", "kind": "evidence_kind_mismatch", "source": "tidepool-docs/HANDBOOK_STATUS.md", "where": "next_actions", "why": "that source cannot supply commit-grade evidence"}
+{"actual": ["doc_declared", "file_mtime"], "at": "2026-03-16T12:00:00", "declared": "commit", "kind": "evidence_kind_mismatch", "source": "tidepool-docs/HANDBOOK_STATUS.md", "where": "next_actions", "why": "that source cannot supply commit-grade evidence"}
 {"at": "2026-03-16T12:00:00", "kind": "bad_none", "text": "Quarry is progressing steadily and needs no attention this week", "where": "next_actions", "why": "kind=none is only allowed with the 'no signal' phrasing"}
 {"at": "2026-03-16T12:00:00", "kind": "no_evidence", "text": "Rotate the fixture capture keys", "where": "next_actions", "why": "claim carries no evidence array"}
 ```
@@ -81,8 +91,12 @@ properly gets dropped too. That trade is taken deliberately. A brief that is qui
 missing something stays trustworthy — you see the gap, and the count is printed. A
 brief containing one confident fabrication is not trustworthy anywhere.
 
-Everything above is reproducible: `examples/workspace/scripts/build-example.sh`,
-then `nextbrief --workspace . sense --as-of 2026-03-16 && nextbrief --workspace . render`.
+`--as-of 2026-03-16` is what pins all of this: the example's commits and file
+timestamps are calibrated against that date, and the run stamp derives from the
+snapshot rather than from the clock, so `rejected.jsonl` comes out byte-identical
+whenever you run it. The one figure that will differ is `snapshot 34KB` — the
+snapshot records absolute repository paths, so its size moves with wherever you
+put the checkout.
 
 ---
 
@@ -121,26 +135,30 @@ Every command also answers to **`nb`**, installed alongside `nextbrief` — `nb 
 the note-taking CLI, the two collide: install with
 `pipx install --suffix @nx nextbrief` and use `nextbrief@nx` instead.
 
-> **PyPI publication is pending.** Anything that resolves through PyPI — `uvx`,
-> `pipx install nextbrief`, `uv tool install nextbrief` — does not work yet. The
-> zipapp and a from-source install do. Every option below says which it is,
-> because a first command that fails is the fastest way to lose a reader.
+> **The current release is `0.1.0rc1`, and it is a prerelease.** It lives on
+> **TestPyPI**, not PyPI, because the release workflow routes any version with a
+> pre-release segment there and publishing an rc to the real index cannot be
+> undone. So every index command below carries an explicit index URL and an
+> explicit version — drop either and you get "no matching distribution".
+>
+> For the same reason, use the **tagged** download URL, not
+> `/releases/latest/`: GitHub's "latest" endpoint skips prereleases, so
+> `/releases/latest/download/…` currently 404s.
 
-**1 · Run it without installing anything** — *needs PyPI; not live yet*
+**1 · Run it without installing anything**
 
 ```sh
-uvx nextbrief v0
+uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc1" v0
 ```
 
-**2 · One file, no package manager** — *works today*
+**2 · One file, no package manager**
 
 A zipapp is the whole program in one executable file — locales, prompts and
-templates included, no `site-packages`, no virtualenv, any Python 3.9 or newer:
-
+templates included, no `site-packages`, no virtualenv, any Python 3.9 or newer.
 Every tagged release attaches a prebuilt `nextbrief.pyz` and a `SHA256SUMS`:
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/nextbrief.pyz
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc1/nextbrief.pyz
 chmod +x nextbrief.pyz
 ./nextbrief.pyz --version
 ```
@@ -149,7 +167,7 @@ To check it against the published checksums — `--ignore-missing` because
 `SHA256SUMS` also covers the sdist and the wheel, which you did not download:
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/SHA256SUMS
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc1/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS     # sha256sum on Linux
 ```
 
@@ -165,18 +183,21 @@ bash nextbrief/scripts/build-zipapp.sh    # writes dist/nextbrief.pyz
 Put `nextbrief.pyz` anywhere on your `PATH` and you are done; deleting the file
 uninstalls it.
 
-> No release is tagged yet, so the `curl` above has nothing to fetch until
-> `v0.1.0` lands. Building from a checkout works now.
-
-**3 · The durable install** — *the short form needs PyPI; the git form works today*
+**3 · The durable install**
 
 ```sh
-pipx install --python /usr/bin/python3 nextbrief             # not live yet
-uv tool install --python /usr/bin/python3 nextbrief          # not live yet
+pipx install --python /usr/bin/python3 \
+  --index-url https://test.pypi.org/simple/ "nextbrief==0.1.0rc1"
+
+uv tool install --python /usr/bin/python3 \
+  --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc1"
 
 pipx install --python /usr/bin/python3 \
-  "git+https://github.com/hancheng-ai/nextbrief"             # works today
+  "git+https://github.com/hancheng-ai/nextbrief"            # straight from main
 ```
+
+No `--extra-index-url` fallback is needed: the package declares zero
+dependencies, so there is nothing for the resolver to go looking for on PyPI.
 
 `--python /usr/bin/python3` is deliberate. The scheduled run is started by a GUI
 launcher with a minimal `PATH`, so pinning the system interpreter means a
@@ -184,35 +205,39 @@ Homebrew Python upgrade — which retires the interpreter a pipx venv was built
 against — cannot break the nightly run. That interpreter is also tested on its
 own in CI, for the same reason.
 
-**4 · Homebrew, macOS** — *pending the first release*
+**4 · Homebrew, macOS** — *no tap yet; the formula installs on its own*
 
 ```sh
-brew tap <owner>/tap
-brew install nextbrief
+git clone --depth 1 https://github.com/hancheng-ai/nextbrief
+brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 ```
 
-`<owner>` is the GitHub account in this repository's URL; the tap is its
-`homebrew-tap` repository. The formula is version-controlled here, in
+The formula is version-controlled here, in
 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb), so it is
-reviewed alongside the change that would break it — and the tap goes live once
-`v0.1.0` is cut.
+reviewed alongside the change that would break it. It is pinned to the
+`v0.1.0rc1` sdist. A `<owner>/homebrew-tap` repository — which would make this
+`brew tap` plus `brew install nextbrief` — has not been created yet; the header
+comment in the formula has the steps.
 
 ### Distribution
 
-Which channels are live and which are not, at a glance:
+Which channels are live and which are not, at a glance. Everything here is
+`0.1.0rc1`, a prerelease.
 
 | Channel | State |
 |---|---|
 | Source checkout — `git clone`, `pip install .` | **live** |
 | Zipapp built from a checkout | **live** |
-| PyPI — `pip`, `pipx`, `uv`, `uvx` | **pending**: Trusted Publishing is already wired up in `.github/workflows/release.yml`, but nothing is published until a `v*` tag is pushed |
-| GitHub release assets — sdist and wheel | **pending** the first tag; the release workflow uploads them |
-| `nextbrief.pyz` as a release asset | **not built**: the release workflow uploads `dist/*` only, so there is no zipapp to download yet |
-| Homebrew tap | **pending**: the formula exists, the tap repository does not |
+| [TestPyPI](https://test.pypi.org/project/nextbrief/) — `pip`, `pipx`, `uv`, `uvx` with an explicit index URL | **live**: `0.1.0rc1`, sdist and wheel |
+| PyPI | **not yet**: the release workflow routes pre-release versions to TestPyPI and only a final version to PyPI. `pip install nextbrief` with no index URL will not resolve |
+| GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.1.0rc1`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc1), with a build-provenance attestation. Use the tagged URL: `/releases/latest/` skips prereleases |
+| Homebrew tap | **pending**: the formula exists and installs from a local path, the tap repository does not |
 
 ## A brief
 
-From the fictional example workspace — six invented projects, three backlog items:
+`BRIEF.md` from the run above — six invented projects, three backlog items, and
+the four dropped claims accounted for in the last section. Pasted as it comes out,
+truncations and all:
 
 ```markdown
 # Daily brief · 2026-03-16 (Mon) 12:00
@@ -227,17 +252,17 @@ From the fictional example workspace — six invented projects, three backlog it
 
 | Project | Signal | Evidence | Next |
 |---|---|---|---|
-| Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page |
+| Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page a new con |
 | Lantern Site | 🌤 warm | 2 commits/30d · last commit 2026-03-06 · 5 active days/30d |  |
-| Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 3 active days/30d | **stalled: no next step** |
-| Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 7 active days/30d | **Go get the evidence that answers it** (below) |
-| Kiln | 🔥 hot | 1 commits/30d · last commit 2026-03-14 · 1 active days/30d | → OPERATIONS_LOG.md |
+| Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 1 files/7d · 3 active days/30d | **stalled: no next step** |
+| Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 4 files/7d · 7 active days/30d | **Go get the evidence that answers it** (below) |
+| Kiln | 🔥 hot | 1 commits/30d · last commit 2026-03-14 · 1 files/7d · 1 active days/30d | → OPERATIONS_LOG.md |
 | Quarry | ❄️ dormant | last commit 2025-12-05 · **2 uncommitted** | **stalled: no next step** |
 
 ## Awaiting a decision (not procrastination — missing evidence)
 - **Orchard API** — Per-tenant schemas, or stay on a shared schema with a tenant_id column?
   - Evidence that would settle it: p95 query latency per tenant at current row counts, for the ten largest tenants
-  - **The evidence already exists**: orchard-api/bench/results/*.json — the harness already records per-tenant timings
+  - **The evidence already exists**: orchard-api/bench/results/*.json -- the harness already records per-tenant timings
   - Why it is still open: The report aggregates across tenants, so the tail that actually matters is averaged away
 
 ## Stalled (no next step) — the column GTD cares about most
@@ -246,15 +271,16 @@ From the fictional example workspace — six invented projects, three backlog it
 
 ## Waiting on people / approvals
 - `NA-0002` Publish the March essay once the draft arrives — waiting on external-party
+- **Lantern Site** — waiting on Draft posts from the site's author
 
 ## What an agent could do for you tonight
-- `NA-0001` Re-run the tenancy benchmark reporting p95 per tenant — left for you: reading the resulting tail and deciding whether it justifies the rewrite
+- `NA-0001` Re-run the tenancy benchmark reporting p95 per tenant instead of aggregated   — left for you: Reading the resulting tail and deciding whether it justifies
 
 ## Reminders
 - ⚠ **Dropped 4 claim(s)** whose evidence would not check out (see `log/rejected.jsonl`).
 - ⚠ No git in: Tidepool Docs — progress there can only come from file timestamps, and **a bad delete is unrecoverable**.
 - `orchard-api/docs/BENCH_NOTES.md` and `orchard-api/PROJECT_STATUS.md` contradict each other about "whether the tenancy benchmark is finished" — the registry rules in favour of `orchard-api/PROJECT_STATUS.md`.
-- Status documents gone stale: 5. The oldest: `tidepool-docs/HANDBOOK_STATUS.md` (134 days).
+- Status documents gone stale: 5. The oldest: `tidepool-docs/HANDBOOK_STATUS.md` (134 days), `quarry/CURRENT_SPRINT.md` (101 days), `atelier/CURRENT_SPRINT.md` (88 days).
 
 ---
 *Generated by `nextbrief render` at 2026-03-16 12:00. Every claim here passed the evidence gate; whatever could not be verified was not rendered.*

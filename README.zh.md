@@ -1,8 +1,9 @@
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/nextbrief.svg)](https://pypi.org/project/nextbrief/)
-[![Python versions](https://img.shields.io/pypi/pyversions/nextbrief.svg)](https://pypi.org/project/nextbrief/)
+[![Release](https://img.shields.io/badge/release-v0.1.0rc1-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc1)
+[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.1.0rc1-blue)](https://test.pypi.org/project/nextbrief/)
+[![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **跨你手上所有项目的每日简报——每一条陈述都要先过证据校验，过不了就不许上页面。**
@@ -34,10 +35,18 @@ stage 2 永远看不到 `snapshot.json`，stage 3 看得到。**模型写下的�
 
 这句是假的。基准测试压根没重跑过——这正是那个决策至今还开着的原因。模型还给它配了一份基准测试报告当证据。那份报告不存在。
 
+**你可以自己跑一遍。** 三段里只有 stage 2 需要模型，而那次运行的 stage 2 产物已经提交在
+[`examples/workspace/state/brief.json`](examples/workspace/state/brief.json)——所以
+stage 1 和 stage 3 能原样重放：不需要模型、不需要 API key、不需要联网。
+
 ```console
-$ nextbrief run
-sense: 6 projects | 3 hot | 0 parse failures | snapshot 35KB / digest 13KB
-render: BRIEF.md | 45 lines | v1 | notify: first run
+$ cd examples/workspace
+$ ./scripts/build-example.sh
+$ rm -rf log                     # rejected.jsonl 是追加写的，不会被覆盖
+$ nextbrief --workspace . sense --as-of 2026-03-16
+sense: 6 projects | 3 hot | 0 parse failures | snapshot 34KB / digest 13KB
+$ nextbrief --workspace . render --no-notify
+render: …/examples/workspace/BRIEF.md | 44 lines | v1 | notify: suppressed (--no-notify; would have been: first run)
   4 unverifiable claim(s) dropped -> log/rejected.jsonl
 ```
 
@@ -45,7 +54,7 @@ render: BRIEF.md | 45 lines | v1 | notify: first run
 
 ```jsonl
 {"at": "2026-03-16T12:00:00", "evidence_kind": "file_mtime", "kind": "unresolvable_evidence", "source": "orchard-api/bench/results/tenancy-p95.md", "text": "Sign off the tenancy decision -- the per-tenant p95 numbers came back clean last week", "where": "next_actions", "why": "source does not resolve in snapshot.evidence_index"}
-{"at": "2026-03-16T12:00:00", "actual": ["doc_declared", "file_mtime"], "declared": "commit", "kind": "evidence_kind_mismatch", "source": "tidepool-docs/HANDBOOK_STATUS.md", "where": "next_actions", "why": "that source cannot supply commit-grade evidence"}
+{"actual": ["doc_declared", "file_mtime"], "at": "2026-03-16T12:00:00", "declared": "commit", "kind": "evidence_kind_mismatch", "source": "tidepool-docs/HANDBOOK_STATUS.md", "where": "next_actions", "why": "that source cannot supply commit-grade evidence"}
 {"at": "2026-03-16T12:00:00", "kind": "bad_none", "text": "Quarry is progressing steadily and needs no attention this week", "where": "next_actions", "why": "kind=none is only allowed with the 'no signal' phrasing"}
 {"at": "2026-03-16T12:00:00", "kind": "no_evidence", "text": "Rotate the fixture capture keys", "where": "next_actions", "why": "claim carries no evidence array"}
 ```
@@ -58,8 +67,10 @@ render: BRIEF.md | 45 lines | v1 | notify: first run
 
 代价是真实的，也值得说清楚：一条**真**的陈述，如果模型没把证据引对，一样会被丢掉。这个交易是刻意接受的。一份「悄悄少了点东西」的简报仍然可信——你看得见缺口，而且丢弃条数就印在简报上；一份含有一句自信编造的简报，则处处不可信。
 
-上面每一行都可复现：跑 `examples/workspace/scripts/build-example.sh`，然后
-`nextbrief --workspace . sense --as-of 2026-03-16 && nextbrief --workspace . render`。
+把这一切钉死的是 `--as-of 2026-03-16`：示例里的提交与文件时间戳都是按那天校准的，
+运行时间戳也取自 snapshot 而不是系统时钟——所以 `rejected.jsonl` 你什么时候跑都逐字节相同。
+唯一会变的是 `snapshot 34KB` 这个数字：snapshot 里存了仓库的绝对路径，
+所以它的体积会随你把 checkout 放在哪里而变。
 
 ---
 
@@ -87,15 +98,21 @@ nextbrief open                  # 在浏览器里读
 如果你同时在用 [xwmx/nb](https://github.com/xwmx/nb)（那个记笔记的 CLI），两者会撞名：
 改用 `pipx install --suffix @nx nextbrief`，命令就是 `nextbrief@nx`。
 
-> **PyPI 尚未发布。** 凡是走 PyPI 解析的——`uvx`、`pipx install nextbrief`、`uv tool install nextbrief`——现在都还不通。zipapp 和从源码装是**现在就能用**的。下面每一条都标了状态：一条一上来就失败的命令，是丢掉读者最快的方式。
+> **当前版本是 `0.1.0rc1`，是一个预发布版。** 它发在 **TestPyPI** 而不是 PyPI：
+> release workflow 会把任何带预发布段的版本路由到 TestPyPI，而往正式索引推一个 rc
+> 是撤不回来的。所以下面每条走索引的命令都显式带上了索引地址和版本号——少任何一个，
+> 你会得到「no matching distribution」。
+>
+> 同理，下载请用**带 tag 的**地址，不要用 `/releases/latest/`：GitHub 的 latest
+> 端点会跳过预发布版，所以 `/releases/latest/download/…` 现在是 404。
 
-**1 · 什么都不装，直接跑** —— *依赖 PyPI，尚未生效*
+**1 · 什么都不装，直接跑**
 
 ```sh
-uvx nextbrief v0
+uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc1" v0
 ```
 
-**2 · 单个文件，不需要包管理器** —— *现在就能用*
+**2 · 单个文件，不需要包管理器**
 
 zipapp 就是把整个程序装进一个可执行文件——locale、提示词、模板都在里面，不需要 `site-packages`，不需要虚拟环境，任意 Python 3.9 及以上：
 
@@ -110,47 +127,50 @@ bash nextbrief/scripts/build-zipapp.sh    # 产出 dist/nextbrief.pyz
 每个打了 tag 的发布都会附带编译好的 `nextbrief.pyz` 与 `SHA256SUMS`：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/nextbrief.pyz
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc1/nextbrief.pyz
 chmod +x nextbrief.pyz
 ```
 
 要核对校验和——加 `--ignore-missing` 是因为 `SHA256SUMS` 同时覆盖 sdist 与 wheel，而你并没有下载它们：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/SHA256SUMS
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc1/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
 ```
 
 把 `nextbrief.pyz` 放到 `PATH` 上任意位置就算装好了；删掉这个文件就算卸载。
 
-> 目前还没打过 tag，所以上面那条 `curl` 暂时取不到东西；从源码构建现在就能用。
-
-**3 · 长期安装** —— *短形式要等 PyPI；git 形式现在就能用*
+**3 · 长期安装**
 
 ```sh
-pipx install --python /usr/bin/python3 nextbrief             # 尚未生效
-uv tool install --python /usr/bin/python3 nextbrief          # 尚未生效
+pipx install --python /usr/bin/python3 \
+  --index-url https://test.pypi.org/simple/ "nextbrief==0.1.0rc1"
+
+uv tool install --python /usr/bin/python3 \
+  --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc1"
 
 pipx install --python /usr/bin/python3 \
-  "git+https://github.com/hancheng-ai/nextbrief"             # 现在就能用
+  "git+https://github.com/hancheng-ai/nextbrief"            # 直接装 main
 ```
+
+不需要再挂一个 `--extra-index-url` 兜底：本包运行时依赖为零，解析器没有任何东西需要回 PyPI 去找。
 
 `--python /usr/bin/python3` 是刻意的。定时任务是被一个 GUI 启动器拉起来的，`PATH` 极简；把解释器钉在系统那一个上，意味着 Homebrew 升级 Python（顺手把 pipx 虚拟环境所依赖的那个旧解释器退役掉）也不会弄坏每晚那次运行。CI 里也单独测这个解释器，理由完全一样。
 
-**4 · Homebrew（macOS）** —— *等第一个 release*
+**4 · Homebrew（macOS）** —— *还没有 tap，formula 可以单独装*
 
 ```sh
-brew tap <owner>/tap
-brew install nextbrief
+git clone --depth 1 https://github.com/hancheng-ai/nextbrief
+brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 ```
 
-`<owner>` 就是本仓 URL 里的那个 GitHub 账号，tap 是它名下的 `homebrew-tap` 仓库。formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review。tap 会在 `v0.1.0` 切出来之后生效。
+formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.1.0rc1` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
 
 （各发布渠道当前是「已生效」还是「待发布」，见英文版的 [Distribution](README.md#distribution) 一节。）
 
 ## 一份简报长什么样
 
-来自那个虚构的示例 workspace——六个编出来的项目、三条 backlog：
+上面那次运行产出的 `BRIEF.md`——六个编出来的项目、三条 backlog，以及在最后一节里被交代清楚的那四条丢弃。原样贴出，包括被截断的地方：
 
 ```markdown
 # Daily brief · 2026-03-16 (Mon) 12:00
@@ -165,27 +185,35 @@ brew install nextbrief
 
 | Project | Signal | Evidence | Next |
 |---|---|---|---|
-| Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page |
+| Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page a new con |
 | Lantern Site | 🌤 warm | 2 commits/30d · last commit 2026-03-06 · 5 active days/30d |  |
-| Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 3 active days/30d | **stalled: no next step** |
-| Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 7 active days/30d | **Go get the evidence that answers it** (below) |
-| Kiln | 🔥 hot | 1 commits/30d · last commit 2026-03-14 · 1 active days/30d | → OPERATIONS_LOG.md |
+| Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 1 files/7d · 3 active days/30d | **stalled: no next step** |
+| Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 4 files/7d · 7 active days/30d | **Go get the evidence that answers it** (below) |
+| Kiln | 🔥 hot | 1 commits/30d · last commit 2026-03-14 · 1 files/7d · 1 active days/30d | → OPERATIONS_LOG.md |
 | Quarry | ❄️ dormant | last commit 2025-12-05 · **2 uncommitted** | **stalled: no next step** |
 
 ## Awaiting a decision (not procrastination — missing evidence)
 - **Orchard API** — Per-tenant schemas, or stay on a shared schema with a tenant_id column?
   - Evidence that would settle it: p95 query latency per tenant at current row counts, for the ten largest tenants
-  - **The evidence already exists**: orchard-api/bench/results/*.json — the harness already records per-tenant timings
+  - **The evidence already exists**: orchard-api/bench/results/*.json -- the harness already records per-tenant timings
   - Why it is still open: The report aggregates across tenants, so the tail that actually matters is averaged away
 
 ## Stalled (no next step) — the column GTD cares about most
 - **Beacon Portal** — Give it a concrete next step, or archive it on purpose.
 - **Quarry** — 2 uncommitted change(s) left sitting there. Either commit them and name a next step, or move the tier to dormant so it stops showing up.
 
+## Waiting on people / approvals
+- `NA-0002` Publish the March essay once the draft arrives — waiting on external-party
+- **Lantern Site** — waiting on Draft posts from the site's author
+
+## What an agent could do for you tonight
+- `NA-0001` Re-run the tenancy benchmark reporting p95 per tenant instead of aggregated   — left for you: Reading the resulting tail and deciding whether it justifies
+
 ## Reminders
 - ⚠ **Dropped 4 claim(s)** whose evidence would not check out (see `log/rejected.jsonl`).
 - ⚠ No git in: Tidepool Docs — progress there can only come from file timestamps, and **a bad delete is unrecoverable**.
 - `orchard-api/docs/BENCH_NOTES.md` and `orchard-api/PROJECT_STATUS.md` contradict each other about "whether the tenancy benchmark is finished" — the registry rules in favour of `orchard-api/PROJECT_STATUS.md`.
+- Status documents gone stale: 5. The oldest: `tidepool-docs/HANDBOOK_STATUS.md` (134 days), `quarry/CURRENT_SPRINT.md` (101 days), `atelier/CURRENT_SPRINT.md` (88 days).
 
 ---
 *Generated by `nextbrief render` at 2026-03-16 12:00. Every claim here passed the evidence gate; whatever could not be verified was not rendered.*

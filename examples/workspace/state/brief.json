@@ -1,0 +1,63 @@
+{
+  "_fixture": "Stage-2 output, captured from a real model run against this example workspace and committed so stage 3 is reproducible without a model or an API key. See the README section 'What that looks like when it fires'. A live `nextbrief run` overwrites this file; `git checkout` brings it back.",
+  "next_actions": [
+    {
+      "project": "orchard-api",
+      "title": "Sign off the tenancy decision -- the per-tenant p95 numbers came back clean last week",
+      "estimate": "15 min",
+      "who": "you",
+      "why": "The rewrite is sitting behind a flag until someone says yes.",
+      "evidence_line": "orchard-api/bench/results/tenancy-p95.md",
+      "evidence": [
+        {"kind": "file_mtime", "source": "orchard-api/bench/results/tenancy-p95.md"}
+      ]
+    },
+    {
+      "project": "tidepool-docs",
+      "title": "Ship the getting-started page -- 3 commits landed against the handbook this week",
+      "estimate": "30 min",
+      "who": "you",
+      "evidence_line": "commit activity in tidepool-docs",
+      "evidence": [
+        {"kind": "commit", "source": "tidepool-docs/HANDBOOK_STATUS.md"}
+      ]
+    },
+    {
+      "project": "quarry",
+      "title": "Quarry is progressing steadily and needs no attention this week",
+      "who": "you",
+      "evidence": [
+        {"kind": "none"}
+      ]
+    },
+    {
+      "project": "kiln",
+      "title": "Rotate the fixture capture keys",
+      "estimate": "20 min",
+      "who": "you",
+      "evidence": []
+    },
+    {
+      "project": "orchard-api",
+      "title": "Re-run the tenancy benchmark with per-tenant p95 instead of an aggregate",
+      "estimate": "45 min",
+      "who": "you",
+      "why": "The decision has been open since the rewrite landed behind a flag.",
+      "evidence_line": "commit 260de3e",
+      "evidence": [
+        {"kind": "commit", "source": "260de3e"}
+      ],
+      "backlog_id": "NA-0001"
+    }
+  ],
+  "project_lines": [
+    {
+      "project": "lantern-site",
+      "text": "Two posts landed this month; nothing is waiting on you here.",
+      "evidence": [
+        {"kind": "commit", "source": "4d88d18"}
+      ]
+    }
+  ],
+  "cost_note": "digest 13KB, low reasoning effort"
+}

@@ -13,9 +13,30 @@ If you only read one section, read [The four extension points](#the-four-extensi
 ```bash
 git clone https://github.com/hancheng-ai/nextbrief
 cd nextbrief
-python -m pip install -e .          # no dependencies to resolve
-python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
 ```
+
+**No install step, and that is not an oversight.** `tests/helpers.py` puts `src/`
+on `sys.path` itself, so the suite runs against the checkout on a bare
+interpreter -- which is the only setup guaranteed to exist on the 3.9 floor
+described below.
+
+You only need an install to get the `nextbrief` command itself, and on 3.9 that
+takes one extra line:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip     # <- required on 3.9
+.venv/bin/python -m pip install -e .
+.venv/bin/nextbrief --version
+```
+
+The upgrade is not hygiene. The build backend is `hatchling`, so an editable
+install goes through PEP 660, which pip only learned in 21.3 -- and the pip
+bundled with macOS's system 3.9 is 21.2.4. Skip the line and pip reports
+`File "setup.py" or "setup.cfg" not found`, which sounds like a broken project
+rather than a stale pip. On 3.11 or newer the bundled pip is new enough and the
+line is a no-op.
 
 That is the whole toolchain. There is no `pytest`, no `tox`, no `make`. The test
 suite is `unittest` from the standard library, and it runs on any Python the
@@ -24,8 +45,8 @@ package supports.
 Before opening a PR:
 
 ```bash
-python -m unittest discover -s tests -v
-python -m pip install ruff && ruff check .
+python3 -m unittest discover -s tests -v
+python3 -m pip install ruff && python3 -m ruff check .
 ```
 
 CI runs both across macOS and Linux on Python 3.9, 3.11 and 3.13, plus four

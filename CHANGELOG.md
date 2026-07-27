@@ -7,12 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-27
+## [0.1.0rc1] - 2026-07-27
 
-Initial public release. The engine had been running nightly against a private
-multi-project workspace for some months before being extracted into a package;
-this is that code, with the workspace removed and the interfaces made
-configurable.
+First public prerelease. On [TestPyPI](https://test.pypi.org/project/nextbrief/),
+not PyPI, and the GitHub release is marked as a prerelease — the version routes
+itself there, because publishing an rc to the real index cannot be undone.
+
+The engine had been running nightly against a private multi-project workspace for
+some months before being extracted into a package; this is that code, with the
+workspace removed and the interfaces made configurable. `0.1.0` will follow once
+the rc has been used by someone who did not write it.
 
 ### Added
 
@@ -68,5 +72,5 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc1...HEAD
+[0.1.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc1
