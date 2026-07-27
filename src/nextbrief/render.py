@@ -1271,8 +1271,18 @@ def main(argv=None) -> int:
         "ok": True,          # <- success sentinel, must be the last thing written
     })
 
+    # Report what happened, not what the rule decided. Printing the reason alone
+    # made a suppressed run read exactly like a delivered one, which is a poor
+    # thing to be unclear about in the output of a build or a scripted run.
+    if args.no_notify:
+        notify_summary = "suppressed (--no-notify; would have been: %s)" % why
+    elif notified:
+        notify_summary = "sent -- %s" % why
+    else:
+        notify_summary = why
     print("render: %s | %d lines | %s | notify: %s"
-          % (ws.brief_md, len(text.splitlines()), "v1" if brief else "v0 (no model)", why))
+          % (ws.brief_md, len(text.splitlines()), "v1" if brief else "v0 (no model)",
+             notify_summary))
     if dropped:
         print("  %d unverifiable claim(s) dropped -> log/rejected.jsonl" % dropped)
     if notes.get("reverted_fields"):
