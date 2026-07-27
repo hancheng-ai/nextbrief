@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# The tag is the only trigger and the only input. Nothing here reads a secret:
+# both indexes are reached through Trusted Publishing (OIDC), so there is no API
+# token to leak, rotate, or forget to rotate.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # provenance attestation
+      attestations: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # A tag that disagrees with pyproject.toml produces an artifact whose
+      # filename and metadata say different things, and PyPI will happily accept
+      # it -- once, permanently, under the wrong number. Cheaper to stop here.
+      - name: Verify tag matches pyproject version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os, re, sys, tomllib
+
+          tag = os.environ["TAG"]
+          if not tag.startswith("v"):
+              sys.exit("tag %r must start with 'v'" % tag)
+          tag_version = tag[1:]
+
+          with open("pyproject.toml", "rb") as fh:
+              declared = tomllib.load(fh)["project"]["version"]
+
+          if tag_version != declared:
+              sys.exit(
+                  "REFUSING TO RELEASE\n"
+                  "  tag             : %s  (-> %s)\n"
+                  "  pyproject.toml  : %s\n"
+                  "Bump the version in pyproject.toml and retag, or delete the tag.\n"
+                  "The tag must carry the PEP 440 normalized form: v1.2.0rc1, not v1.2.0-rc1."
+                  % (tag, tag_version, declared)
+              )
+
+          # Any pre-release or dev segment routes to TestPyPI. Publishing an rc
+          # to the real index is not undoable, so the routing is derived from
+          # the version itself rather than from a checkbox someone has to tick.
+          prerelease = bool(re.search(r"(a|b|rc)\d+|\.dev\d+", tag_version))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("version=%s\n" % tag_version)
+              out.write("prerelease=%s\n" % ("true" if prerelease else "false"))
+
+          print("%s -> %s" % (tag_version, "TestPyPI" if prerelease else "PyPI"))
+          PY
+
+      - name: Install build tooling
+        run: python -m pip install --disable-pip-version-check "build>=1.2" "twine>=5.0"
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: twine check
+        run: twine check --strict dist/*
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ steps.version.outputs.version }}
+          path: dist/
+
+  testpypi:
+    name: publish to TestPyPI
+    needs: build
+    if: needs.build.outputs.prerelease == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/nextbrief
+    permissions:
+      id-token: write       # the only credential; nothing is read from secrets
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ needs.build.outputs.version }}
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # Re-running a failed release job should be boring, and a TestPyPI
+          # version is often uploaded after a partial earlier attempt.
+          skip-existing: true
+
+  pypi:
+    name: publish to PyPI
+    needs: build
+    if: needs.build.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nextbrief
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ needs.build.outputs.version }}
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub Release
+    needs: [build, testpypi, pypi]
+    # Exactly one of the two publish jobs runs; the other is skipped. Without
+    # always() this job would be skipped along with it.
+    if: >-
+      always() && needs.build.result == 'success'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # --generate-notes diffs against the previous tag
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ needs.build.outputs.version }}
+          path: dist/
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          flags=(--title "$TAG" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          # Re-running the workflow on an existing tag should update the release
+          # rather than fail on it.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* "${flags[@]}"
+          fi

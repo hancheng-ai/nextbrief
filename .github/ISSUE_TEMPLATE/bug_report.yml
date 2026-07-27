@@ -1,0 +1,68 @@
+name: Bug report
+description: Something the engine did that it should not have, or did not do that it should have.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: `nextbrief` reads your own project files, so a report often
+        contains real paths, project names, and prose from your workspace.
+        **Redact anything you would not publish.** A minimal fictional
+        reproduction is more useful to us than a real one anyway.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The most useful report is a tiny workspace: a `registry.jsonc`, one
+        status document, and the command you ran. Fictional names please.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Which stage
+      description: If you are not sure, leave it blank.
+      options:
+        - "sense (snapshot.json is wrong or missing something)"
+        - "interpret (the model's brief.json)"
+        - "render (BRIEF.md / BRIEF.html, or something was rejected)"
+        - "cli / launch"
+        - "not sure"
+
+  - type: textarea
+    id: rejected
+    attributes:
+      label: Relevant log lines
+      description: |
+        If a claim disappeared from the brief, `log/rejected.jsonl` says why --
+        that line is usually the whole answer. Redact before pasting.
+      render: json
+
+  - type: input
+    id: version
+    attributes:
+      label: nextbrief version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version and OS
+      description: The output of `python -VV`, plus macOS or Linux.
+      placeholder: "Python 3.9.6 (default, ...) / macOS 14"
+    validations:
+      required: true

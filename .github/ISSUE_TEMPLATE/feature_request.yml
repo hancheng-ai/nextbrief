@@ -1,0 +1,61 @@
+name: Feature request
+description: Propose a change to how the engine behaves.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things worth knowing before you write this up.
+
+        **The project has explicit non-goals.** No database, no daemon, no
+        two-way sync with an issue tracker, no time tracking, no burndown, no
+        writing outside the workspace directory, and no agent ever marking
+        anything done. Those are decisions, not gaps -- see `README.md`. A
+        proposal that lands inside one is not doomed, but it has to argue with
+        the reasoning rather than around it.
+
+        **The four extension points take patches most easily**: providers,
+        sinks, locales, and status-document parsers. If your idea fits one of
+        those, say so -- it is a much shorter path from issue to merged.
+        `CONTRIBUTING.md` describes each.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What happened in your own week that made you want this? Concrete beats
+        general -- "the brief kept surfacing a project I had deliberately parked
+        and I had no way to say so" tells us more than "add a snooze feature".
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does this live
+      options:
+        - "providers/ -- a new model backend"
+        - "sinks/ -- a new notification channel"
+        - "locales/ -- a new language"
+        - "a status-document parser -- reading another tool's format"
+        - "core engine (sense / render / cli)"
+        - "not sure"
+
+  - type: textarea
+    id: contract
+    attributes:
+      label: Does it fit the design contract?
+      description: |
+        Deterministic sense and render; the model only interprets; every claim
+        carries evidence that the renderer resolves; no agent may set a terminal
+        status; nothing is written outside the workspace. If your proposal
+        strains one of these, explain why it is worth it -- that is a real
+        conversation, not a rejection.

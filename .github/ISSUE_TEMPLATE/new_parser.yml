@@ -1,0 +1,70 @@
+name: New status-document parser
+description: Teach the sense stage to read a format it does not understand yet.
+labels: ["enhancement", "parser"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The sense stage learns what a project is doing by reading whatever
+        status document that project already keeps -- a sprint file, a decision
+        log, a runbook, a `TODO.md`. Every new format it can read is a project
+        that needs no extra bookkeeping to appear in the brief.
+
+        This is the single most valuable kind of contribution, and the easiest
+        to review: a parser is a pure function over text with fixtures.
+
+  - type: input
+    id: format
+    attributes:
+      label: What format
+      description: Name the tool or convention, and link a public example if one exists.
+      placeholder: "e.g. a CHANGELOG.md in Keep a Changelog format"
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample
+    attributes:
+      label: A representative sample
+      description: |
+        Fifteen lines is plenty. **Invent it** -- do not paste your real
+        document. The parser has to survive a sloppy real-world file, so an
+        honestly messy fictional sample is better than a tidy one.
+      render: markdown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: fields
+    attributes:
+      label: What can be extracted from it
+      description: |
+        A parser earns its place by returning facts the renderer can resolve
+        evidence against. Anything a human has to interpret does not count.
+      options:
+        - label: "A declared date (last updated, sprint start, release date)"
+        - label: "A declared status word (active, blocked, shipped, parked)"
+        - label: "A list of non-goals -- things the project has decided not to do"
+        - label: "Open items / next actions"
+        - label: "Something else (describe below)"
+
+  - type: textarea
+    id: ambiguity
+    attributes:
+      label: Where would this parser guess wrong?
+      description: |
+        The important question. Parsers here are fail-open: on anything
+        ambiguous they must return nothing and record the path, never a
+        plausible-looking value. A date invented from prose becomes a deadline
+        in someone's brief. Tell us which parts of the format you would refuse
+        to interpret.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Are you offering to write it?
+      options:
+        - label: "Yes -- I will send a PR with fixtures (see CONTRIBUTING.md)"
+        - label: "No, but I would test one"
