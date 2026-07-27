@@ -204,6 +204,188 @@ class EvidenceGate(GateCase):
         self.assertIn("CITED already on the backlog", self.brief())
 
 
+class GatedMaps(GateCase):
+    """``delegated`` and ``decision_notes`` are model prose too.
+
+    They are keyed by project id rather than shaped like an action, and that is
+    the only reason they used to skip the gate -- ``decision_notes`` reaching the
+    reader through BRIEF.html alone, which is the artifact ``nextbrief open``
+    shows, three lines above a footer stating that every claim had passed it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        write_snapshot(
+            self.ws,
+            make_snapshot(
+                projects=[
+                    make_project_entry(pid="lantern",
+                                       has_own_daily_entry="lantern/DECISIONS.md"),
+                    make_project_entry(
+                        pid="atlas", blocked_by="decision",
+                        open_decision={"question": "Does the rewrite ship this quarter?",
+                                       "evidence_needed": "the per-tenant latency split"},
+                    ),
+                ]
+            ),
+        )
+
+    def html(self):
+        return (self.ws / "BRIEF.html").read_text(encoding="utf-8")
+
+    def test_bare_strings_carry_no_evidence_and_are_not_rendered(self):
+        # This is the shape brief.schema.json documents, so it is the shape a
+        # compliant model produces: a sentence with nothing behind it.
+        write_brief_json(self.ws, {
+            "delegated": {"lantern": "UNGATED 3 open questions waiting on you"},
+            "decision_notes": {"atlas": "UNGATED the numbers already say ship it"},
+        })
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+
+        self.assertNotIn("UNGATED", self.brief())
+        self.assertNotIn("UNGATED", self.html())
+        # ...and the deterministic fallback still points at the daily entry, so
+        # dropping the model's line costs the reader nothing they can act on.
+        self.assertIn("DECISIONS.md", self.brief())
+
+        where = sorted(r["where"] for r in self.rejected() if r["kind"] == "no_evidence")
+        self.assertEqual(where, ["decision_notes", "delegated"])
+        self.assertEqual(self.runs()[-1]["dropped_claims"], 2)
+
+    def test_an_unresolvable_source_is_dropped_from_both_artifacts(self):
+        write_brief_json(self.ws, {
+            "delegated": {"lantern": {"text": "FABRICATED 9 open questions",
+                                      "evidence": [{"kind": "file_mtime",
+                                                    "source": "lantern/NOT_A_REAL_FILE.md"}]}},
+            "decision_notes": {"atlas": {"text": "FABRICATED the benchmark cleared it",
+                                         "evidence": [{"kind": "file_mtime",
+                                                       "source": "atlas/NOT_A_REAL_FILE.md"}]}},
+        })
+        self.assertEqual(self.render()[0], 0)
+        self.assertNotIn("FABRICATED", self.brief())
+        self.assertNotIn("FABRICATED", self.html())
+        sources = sorted(r["source"] for r in self.rejected()
+                         if r["kind"] == "unresolvable_evidence")
+        self.assertEqual(sources, ["atlas/NOT_A_REAL_FILE.md", "lantern/NOT_A_REAL_FILE.md"])
+
+    def test_a_sourced_note_reaches_both_artifacts_identically(self):
+        # The gate is not a ban on these sections; it is a requirement. What
+        # survives it must appear in both renderings, or "the two cannot drift
+        # apart" is a claim about only the parts somebody remembered to check.
+        write_brief_json(self.ws, {
+            "delegated": {"lantern": {"text": "SOURCED 3 open questions waiting on you",
+                                      "evidence": GOOD_EVIDENCE}},
+            "decision_notes": {"atlas": {"text": "SOURCED the latency split already exists",
+                                         "evidence": GOOD_EVIDENCE}},
+        })
+        self.assertEqual(self.render()[0], 0)
+        for text in ("SOURCED 3 open questions waiting on you",
+                     "SOURCED the latency split already exists"):
+            self.assertIn(text, self.brief())
+            self.assertIn(text, self.html())
+        self.assertEqual(self.runs()[-1]["dropped_claims"], 0)
+
+    def test_a_renderer_called_directly_cannot_show_ungated_text(self):
+        # The gate writes what survived to its own key rather than back over the
+        # input, so importing a renderer and handing it a raw brief.json is not a
+        # way around gate 1.
+        from nextbrief import html as html_mod
+        from nextbrief.i18n import load_catalog
+
+        snap = json.loads((self.ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        raw = {"delegated": {"lantern": "UNGATED text"},
+               "decision_notes": {"atlas": "UNGATED text"}}
+        cat = load_catalog("en")
+        page = html_mod.render_html(snap, raw, [], {}, {}, cat)
+        md, _meta = render.render_brief(snap, raw, [], {}, {}, cat, {"conflicts": []})
+        self.assertNotIn("UNGATED", page)
+        self.assertNotIn("UNGATED", md)
+
+
+class MalformedBrief(GateCase):
+    """``brief.json`` is model output, so it is malformed sooner or later.
+
+    The module docstring promises fail-open and the loader already tolerates a
+    brief.json that does not parse at all. A shape the evidence gate did not
+    expect used to be *worse* than that: an AttributeError killed the whole run,
+    leaving no BRIEF.md, no success sentinel in runs.jsonl, and yesterday's brief
+    on disk looking current.
+    """
+
+    def setUp(self):
+        super().setUp()
+        write_snapshot(self.ws, make_snapshot())
+
+    SHAPES = {
+        "evidence_is_an_object": {"kind": "doc_declared", "source": "orchard/PROJECT_STATUS.md"},
+        "evidence_is_a_string": "orchard/PROJECT_STATUS.md",
+        "evidence_is_a_number": 5,
+        "evidence_is_null": None,
+        "evidence_is_a_list_of_strings": ["orchard/PROJECT_STATUS.md"],
+        "evidence_is_a_list_of_lists": [["doc_declared", "orchard/PROJECT_STATUS.md"]],
+        "evidence_is_deeply_nested": {"a": {"b": {"c": [{"d": {"kind": "commit"}}]}}},
+        "evidence_is_a_list_of_nulls": [None, None],
+        "evidence_source_is_a_list": [{"kind": "commit", "source": ["a", "b"]}],
+    }
+
+    def test_no_evidence_shape_can_kill_the_run(self):
+        for name, evidence in sorted(self.SHAPES.items()):
+            with self.subTest(shape=name):
+                write_brief_json(self.ws, {
+                    "next_actions": [{"title": "MALFORMED %s" % name,
+                                      "project": "orchard", "evidence": evidence}],
+                })
+                code, _, err = self.render()
+                self.assertEqual(code, 0, err)
+                self.assertTrue((self.ws / "BRIEF.md").is_file())
+                self.assertNotIn("MALFORMED", self.brief())
+                # The sentinel is the only reliable liveness signal there is; a
+                # run that produced a brief must leave one behind.
+                self.assertTrue(self.runs()[-1]["ok"])
+
+    def test_the_shape_is_named_in_the_rejection_log(self):
+        write_brief_json(self.ws, {
+            "next_actions": [{"title": "X", "project": "orchard",
+                              "evidence": {"kind": "commit"}}],
+        })
+        self.assertEqual(self.render()[0], 0)
+        entries = [r for r in self.rejected() if r["kind"] == "no_evidence"]
+        self.assertEqual(len(entries), 1)
+        self.assertIn("dict", entries[0]["why"])
+
+    def test_a_non_object_evidence_entry_is_recorded_as_malformed(self):
+        write_brief_json(self.ws, {
+            "next_actions": [{"title": "X", "project": "orchard",
+                              "evidence": ["orchard/PROJECT_STATUS.md"]}],
+        })
+        self.assertEqual(self.render()[0], 0)
+        entries = [r for r in self.rejected() if r["kind"] == "malformed_evidence"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["where"], "next_actions")
+
+    def test_a_section_that_is_not_an_array_does_not_kill_the_run(self):
+        write_brief_json(self.ws, {"next_actions": {"title": "X"}, "project_lines": "nonsense"})
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.runs()[-1]["ok"])
+        wheres = sorted(r["where"] for r in self.rejected() if r["kind"] == "malformed_section")
+        self.assertEqual(wheres, ["next_actions", "project_lines"])
+
+    def test_a_claim_that_is_not_an_object_does_not_kill_the_run(self):
+        write_brief_json(self.ws, {"next_actions": ["MALFORMED just a string", 7]})
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("MALFORMED", self.brief())
+        self.assertEqual(len([r for r in self.rejected() if r["kind"] == "malformed_claim"]), 2)
+
+    def test_a_brief_json_that_is_not_an_object_degrades_to_v0(self):
+        (self.ws / "state" / "brief.json").write_text("[1, 2, 3]\n", encoding="utf-8")
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.runs()[-1]["mode"], "v0")
+
+
 # ---------------------------------------------------------------------------
 # Gate 2 -- non-goals: flag, never block
 # ---------------------------------------------------------------------------
@@ -352,6 +534,46 @@ class WritePermissionGate(GateCase):
         write_backlog_item(self.ws, "NA-0003", title="Brand new", priority=1)
         self.assertEqual(self.render()[0], 0)
         self.assertEqual(self._fields("NA-0003")["priority"], 1)
+
+    def test_a_renamed_file_is_still_compared_against_its_baseline(self):
+        # Renaming is an ordinary editing action, and looking the baseline up by
+        # filename alone made it a way to switch this gate off for one item while
+        # the run still recorded a clean gate run.
+        old = self.ws / "backlog" / "NA-0001.md"
+        new = self.ws / "backlog" / "NA-0001-an-open-item.md"
+        text = old.read_text(encoding="utf-8")
+        new.write_text(text.replace("status: open", "status: done"), encoding="utf-8")
+        os.remove(str(old))
+
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+
+        fields = parse_frontmatter(new.read_text(encoding="utf-8"))[0]
+        self.assertEqual(fields["status"], "open")
+        entries = [r for r in self.rejected() if r["kind"] == "illegal_field_write"]
+        self.assertEqual([e["field"] for e in entries], ["status"])
+        self.assertEqual(self.runs()[-1]["reverted_fields"], 1)
+        # And the fallback says how the baseline was found, so a rename is
+        # visible rather than merely survivable.
+        renamed = [r for r in self.rejected() if r["kind"] == "renamed_entry"]
+        self.assertEqual([r["id"] for r in renamed], ["NA-0001"])
+
+    def test_an_entry_with_no_baseline_at_all_is_counted_not_called_clean(self):
+        # Zero reverted fields only means "clean" next to "and every entry had a
+        # baseline". An entry the gate could not compare is neither clean nor
+        # dirty, and runs.jsonl used to report it as the former.
+        write_backlog_item(self.ws, "NA-0003", title="Brand new", priority=1)
+        self.assertEqual(self.render()[0], 0)
+        record = self.runs()[-1]
+        self.assertEqual(record["write_gate"], "ran")
+        self.assertEqual(record["reverted_fields"], 0)
+        self.assertEqual(record["write_gate_unchecked"], 1)
+        no_base = [r for r in self.rejected() if r["kind"] == "no_baseline"]
+        self.assertEqual([r["id"] for r in no_base], ["NA-0003"])
+
+    def test_a_fully_committed_backlog_leaves_nothing_unchecked(self):
+        self.assertEqual(self.render()[0], 0)
+        self.assertEqual(self.runs()[-1]["write_gate_unchecked"], 0)
 
 
 class WriteGateDegradation(GateCase):

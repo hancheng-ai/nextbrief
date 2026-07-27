@@ -203,6 +203,7 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
     from .render import (  # imported late: render must not import us at module level
         caps_of,
         classify,
+        gated_text,
     )
 
     notes = notes or {}
@@ -337,7 +338,7 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
         if pid in dec_ids and not na:
             nxt = e(cat.t("html.next.decision"))
         elif p.get("has_own_daily_entry"):
-            d = ((brief or {}).get("delegated") or {}).get(pid)
+            d = gated_text(brief, "delegated", pid)
             nxt = e(d) if d else e(cat.t("brief.next.delegated",
                                          file=str(p["has_own_daily_entry"]).rsplit("/", 1)[-1]))
         elif na:
@@ -367,7 +368,10 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
             if od.get("why_not_answered"):
                 A("<div class=kv><div class=k>%s</div>%s</div>"
                   % (e(cat.t("html.label.why_not_answered")), md_inline(od["why_not_answered"])))
-            note = ((brief or {}).get("decision_notes") or {}).get(p.get("id"))
+            # Read through the same gate helper BRIEF.md uses. This block was
+            # the one place model prose reached the reader with no evidence
+            # check at all, and it is the artifact `nextbrief open` shows.
+            note = gated_text(brief, "decision_notes", p.get("id"))
             if note:
                 A("<div class=kv><div class=k>%s</div>%s</div>"
                   % (e(cat.t("html.label.decision_note")), md_inline(note)))

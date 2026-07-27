@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import unittest
 
 from helpers import (
@@ -236,6 +237,154 @@ class Contents(RenderCase):
         code, _, err = self.render()
         self.assertEqual(code, 2)
         self.assertIn("as_of_date", err)
+
+
+class TableCells(RenderCase):
+    """Every value in the project table is interpolated into Markdown.
+
+    Project names come from a registry a human hand-edits and from directory
+    names on disk, so a ``|`` or a newline is an ordinary accident -- and it
+    corrupts the table for the *reader*, who cannot tell a broken row from a
+    missing project. ANSI escapes are worse: they pass through into the file and
+    then into the terminal of whoever cats it.
+    """
+
+    HOSTILE = "Orchard | prod\nsecond line\x1b[31mred\x1b[0m"
+
+    def setUp(self):
+        super().setUp()
+        write_snapshot(self.ws, make_snapshot(projects=[make_project_entry(name=self.HOSTILE)]))
+
+    def _row(self):
+        rows = [ln for ln in (self.ws / "BRIEF.md").read_text(encoding="utf-8").splitlines()
+                if ln.startswith("| Orchard")]
+        self.assertEqual(len(rows), 1, "the project produced %d rows, not one" % len(rows))
+        return rows[0]
+
+    def test_a_pipe_in_a_project_name_does_not_split_the_row(self):
+        self.assertEqual(self.render()[0], 0)
+        row = self._row()
+        # Four columns means five unescaped delimiters and no more.
+        self.assertEqual(len(re.findall(r"(?<!\\)\|", row)), 5)
+        self.assertIn(r"Orchard \| prod", row)
+
+    def test_a_newline_in_a_project_name_stays_on_one_row(self):
+        self.assertEqual(self.render()[0], 0)
+        self.assertIn("second line", self._row())
+
+    def test_ansi_escapes_never_reach_the_file(self):
+        self.assertEqual(self.render()[0], 0)
+        self.assertNotIn("\x1b", (self.ws / "BRIEF.md").read_text(encoding="utf-8"))
+
+    def test_the_line_cap_never_leaves_a_dangling_escape(self):
+        # A row long enough to be cut, with a pipe positioned so that the cut
+        # lands on its escape. A trailing backslash is a hard line break in
+        # Markdown -- the corruption the escaping exists to prevent.
+        name = "A" * 197 + "|B"
+        write_snapshot(self.ws, make_snapshot(projects=[make_project_entry(name=name)]))
+        self.assertEqual(self.render()[0], 0)
+        for line in (self.ws / "BRIEF.md").read_text(encoding="utf-8").splitlines():
+            self.assertFalse(line.endswith("\\"), "dangling escape: %r" % line[-20:])
+
+    def test_the_escaper_leaves_ordinary_text_alone(self):
+        # Bold and code markers are how the rest of the brief is written; an
+        # escaper that mangled them would be worse than the bug it fixes.
+        self.assertEqual(render.md_cell("**bold** and `code`"), "**bold** and `code`")
+        self.assertEqual(render.md_cell(None), "")
+
+
+class OverdueDeadlines(RenderCase):
+    """"-125 days out" under a heading that reads "Tightest on time" is a
+    sentence nobody parses as "you missed this four months ago"."""
+
+    def setUp(self):
+        super().setUp()
+        write_snapshot(self.ws, make_snapshot(projects=[make_project_entry(
+            deadlines=[{"date": "2025-11-11", "label": "cutover", "days_until": -125,
+                        "lead_days": 14, "hard": True, "in_lead_window": False,
+                        "overdue": True}],
+        )]))
+
+    def test_an_overdue_deadline_does_not_render_as_negative_days_out(self):
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        brief = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        self.assertIn("125 days overdue", brief)
+        self.assertNotIn("-125 days out", brief)
+
+    def test_a_deadline_still_ahead_keeps_the_days_out_wording(self):
+        write_snapshot(self.ws, make_snapshot(projects=[make_project_entry(
+            deadlines=[{"date": "2026-03-20", "label": "cutover", "days_until": 4,
+                        "lead_days": 14, "hard": True, "in_lead_window": True,
+                        "overdue": False}],
+        )]))
+        self.assertEqual(self.render()[0], 0)
+        brief = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        self.assertIn("4 days out", brief)
+        self.assertNotIn("overdue", brief)
+
+
+class LocalisedOutput(RenderCase):
+    def test_the_two_artifacts_print_the_same_signal_word_in_zh(self):
+        # BRIEF.md read signal.* and BRIEF.html read signal.short.*, and only the
+        # second set had been translated -- so the same fact printed as "🔥 hot"
+        # in one artifact and "🔥 热" in the other.
+        code, _, err = self.render("--locale", "zh")
+        self.assertEqual(code, 0, err)
+        md = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        html = (self.ws / "BRIEF.html").read_text(encoding="utf-8")
+        self.assertIn("🔥 热", md)
+        self.assertIn("🔥 热", html)
+        self.assertNotIn("🔥 hot", md)
+
+
+class FirstClause(unittest.TestCase):
+    """Clause splitting is a property of the text, not of the interface language.
+
+    Keyed to the UI locale, an English render split on every '.' -- including the
+    one inside a filename, which is exactly the kind of string this field holds.
+    """
+
+    def test_a_filename_survives_an_english_render(self):
+        self.assertEqual(
+            render._first_clause("rotate config.json before the run; then redeploy"),
+            "rotate config.json before the run",
+        )
+
+    def test_a_sentence_still_ends_at_a_full_stop(self):
+        self.assertEqual(render._first_clause("Approve the spend. Then tell finance."),
+                         "Approve the spend")
+
+    def test_chinese_enders_split_in_an_english_render(self):
+        self.assertEqual(render._first_clause("先批预算。再通知财务"), "先批预算")
+
+    def test_empty_input_is_empty_output(self):
+        self.assertEqual(render._first_clause(None), "")
+
+
+class FirstBriefAdvice(RenderCase):
+    """The empty-backlog reminder is the only actionable instruction a brand new
+    brief gives. It named `nextbrief bootstrap`, which has never existed."""
+
+    def _reminder(self):
+        self.assertEqual(self.render()[0], 0)
+        brief = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        self.assertIn("The backlog is still empty", brief)
+        return brief
+
+    def test_it_does_not_name_a_subcommand_that_does_not_exist(self):
+        self.assertNotIn("nextbrief bootstrap", self._reminder())
+
+    def test_every_command_it_names_is_one_the_cli_accepts(self):
+        from nextbrief import cli
+
+        known = set()
+        for action in cli.build_parser()._subparsers._group_actions:
+            known.update(action.choices)
+        self.assertIn("run", known)  # sanity: the scrape found real subcommands
+        named = set(re.findall(r"`nextbrief ([a-z0-9-]+)", self._reminder()))
+        self.assertTrue(named, "the brief names no command at all")
+        self.assertEqual(sorted(named - known), [])
 
 
 class Ranking(unittest.TestCase):

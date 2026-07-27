@@ -53,8 +53,9 @@ from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
 __all__ = [
     "main", "classify", "render_brief", "score_project", "evidence_phrase",
-    "check_evidence", "non_goal_flag", "enforce_write_permissions",
-    "should_notify", "write_day_log", "append_jsonl", "read_prev_run",
+    "check_evidence", "gate_maps", "gated_text", "md_cell", "non_goal_flag",
+    "enforce_write_permissions", "should_notify", "write_day_log", "append_jsonl",
+    "read_prev_run",
 ]
 
 GENERATOR = "nextbrief render"
@@ -241,11 +242,45 @@ class WriteGate(NamedTuple):
     from "never ran". Since this gate is the enforcement mechanism for the one
     rule the whole system rests on, that ambiguity was the bug: a machine with
     no git binary reported a clean run forever.
+
+    ``unchecked`` is the same argument one level down: a run in which the gate
+    ran but could find no baseline for some entries is not a clean run for those
+    entries, and saying "0 reverted" without saying "n unchecked" reads as one.
     """
 
     state: str          # "ran" | "no_repo" | "no_commits"
     reverted: int
     detail: str         # developer-facing; why it could not run
+    unchecked: int = 0  # entries with no baseline in HEAD, by name or by id
+
+
+def _baseline_by_id(git, ws: Workspace, prefix: str) -> Dict[str, str]:
+    """``{frontmatter id: HEAD text}`` for every backlog file in HEAD.
+
+    Built only when a lookup by filename misses. Looking the baseline up by name
+    alone means *renaming* a backlog file turns this gate off for that item --
+    the file looks new, so nothing is compared, and the run still records a clean
+    gate. Renaming is a normal editing action, so it must not be a way to slip an
+    edit past the one rule the system enforces.
+    """
+    out: Dict[str, str] = {}
+    ok, listing = _run([git, "-C", str(ws.root), "ls-tree", "-r", "--name-only",
+                        "--full-name", "HEAD", "--", ws.backlog.name])
+    if not ok:
+        return out
+    for rel in listing.splitlines():
+        rel = rel.strip()
+        if not rel.endswith(".md"):
+            continue
+        got, text = _run([git, "-C", str(ws.root), "show", "HEAD:" + rel])
+        if not got or not text.strip():
+            continue
+        fm, _body = parse_frontmatter(text)
+        if fm and fm.get("id") is not None:
+            # First wins: two files claiming one id is its own problem, and
+            # picking deterministically keeps the run byte-identical.
+            out.setdefault(str(fm["id"]), text)
+    return out
 
 
 def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> WriteGate:
@@ -289,13 +324,33 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
         return WriteGate("no_commits", 0, "repository has no commits yet")
 
     reverted = 0
+    unchecked = 0
+    by_id: Optional[Dict[str, str]] = None
     for it in items:
         rel = "%s%s/%s" % (prefix, ws.backlog.name, it["_file"])
         got, old_text = _run([git, "-C", str(ws.root), "show", "HEAD:" + rel])
         if not got or not old_text.strip():
-            continue  # new entry, no baseline
+            # The file is not in HEAD under that name. Before believing it is
+            # new, look for the same id under any other name.
+            if by_id is None:
+                by_id = _baseline_by_id(git, ws, prefix)
+            old_text = by_id.get(str(it.get("id"))) or ""
+            if not old_text:
+                unchecked += 1
+                rejected.append({"kind": "no_baseline", "gate": "write_permissions",
+                                 "file": it["_file"], "id": it.get("id"),
+                                 "why": "no copy in HEAD under this name or this id; "
+                                        "nothing was compared for this entry"})
+                continue
+            rejected.append({"kind": "renamed_entry", "gate": "write_permissions",
+                             "file": it["_file"], "id": it.get("id"),
+                             "why": "baseline located by frontmatter id, not by filename"})
         old_fm, _body = parse_frontmatter(old_text)
         if not old_fm:
+            unchecked += 1
+            rejected.append({"kind": "no_baseline", "gate": "write_permissions",
+                             "file": it["_file"], "id": it.get("id"),
+                             "why": "the HEAD copy has no parsable frontmatter"})
             continue
 
         bad = []
@@ -334,27 +389,61 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
                 rewrite_fields(Path(it["_path"]), on_disk)
             except OSError:
                 pass
-    return WriteGate("ran", reverted, "")
+    return WriteGate("ran", reverted, "", unchecked)
 
 
 # ---------------------------------------------------------------------------
 # Gate 1: evidence
 # ---------------------------------------------------------------------------
 
+def _claim_text(claim) -> str:
+    """The reader-facing text of a claim, for the rejection log. Tolerates any
+    shape: this is called on input that has already failed a structural check."""
+    if isinstance(claim, dict):
+        return str(claim.get("text", claim.get("title", "")))[:300]
+    return str(claim)[:300]
+
+
 def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
     """True if the claim may be rendered. A claim whose source does not resolve
     is *not rendered* -- there is no "render it with a warning" option, because a
-    warning next to a fabricated sentence still reads as a fact."""
+    warning next to a fabricated sentence still reads as a fact.
+
+    Every structural surprise is a rejection, never an exception. ``brief.json``
+    is model output: it is malformed sooner or later, and a shape this function
+    did not expect used to abort the whole run -- no BRIEF.md, no success
+    sentinel, and yesterday's brief left on disk looking current. Refusing to
+    render one claim is the correct failure; refusing to render the day is not.
+    """
+    if not isinstance(claim, dict):
+        rejected.append({"kind": "malformed_claim", "where": where,
+                         "text": _claim_text(claim),
+                         "why": "claim is %s, not an object" % type(claim).__name__})
+        return False
     evs = claim.get("evidence") or []
+    if not isinstance(evs, list):
+        # An object, a string or a number here means the model did not produce an
+        # evidence *array*, so there is nothing to resolve -- same outcome as
+        # omitting the field, and recorded as such.
+        rejected.append({"kind": "no_evidence", "where": where,
+                         "text": _claim_text(claim),
+                         "why": "evidence is %s, not an array" % type(evs).__name__})
+        return False
     if not evs:
         rejected.append({"kind": "no_evidence", "where": where,
-                         "text": str(claim.get("text", claim.get("title", "")))[:300],
+                         "text": _claim_text(claim),
                          "why": "claim carries no evidence array"})
         return False
     pat = (cfg.get("evidence") or {}).get("none_allowed_pattern")
     if not pat and cat is not None:
         pat = cat.t("evidence.none_allowed_pattern")
+    pat = str(pat) if pat else None
     for ev in evs:
+        if not isinstance(ev, dict):
+            rejected.append({"kind": "malformed_evidence", "where": where,
+                             "text": _claim_text(claim),
+                             "why": "evidence entry is %s, not an object" % type(ev).__name__})
+            return False
         kind = ev.get("kind")
         src = ev.get("source")
         if kind == "none":
@@ -362,13 +451,16 @@ def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
             if pat and pat in str(claim.get("text", "")):
                 continue
             rejected.append({"kind": "bad_none", "where": where,
-                             "text": str(claim.get("text", claim.get("title", "")))[:300],
+                             "text": _claim_text(claim),
                              "why": "kind=none is only allowed with the %r phrasing" % pat})
             return False
-        if not src or src not in index:
+        # A non-string source cannot be looked up at all -- and an unhashable one
+        # would raise on the membership test rather than fail the claim.
+        if not src or not isinstance(src, str) or src not in index:
             rejected.append({"kind": "unresolvable_evidence", "where": where,
-                             "text": str(claim.get("text", claim.get("title", "")))[:300],
-                             "source": src, "evidence_kind": kind,
+                             "text": _claim_text(claim),
+                             "source": src if isinstance(src, str) else repr(src)[:120],
+                             "evidence_kind": kind if isinstance(kind, str) else repr(kind)[:60],
                              "why": "source does not resolve in snapshot.evidence_index"})
             return False
         # ★ Only commit / session get their kind checked. ★
@@ -385,13 +477,79 @@ def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
         # confidence ("178 commits" vs "some file was touched"). Citing a file
         # path to support a commit count really is misleading.
         entry = index.get(src) or {}
+        if not isinstance(entry, dict):
+            entry = {}
         kinds = entry.get("kinds") or ([entry["kind"]] if entry.get("kind") else [])
+        if not isinstance(kinds, list):
+            kinds = [kinds]
         if kind in ("commit", "session") and kinds and kind not in kinds:
             rejected.append({"kind": "evidence_kind_mismatch", "where": where,
                              "source": src, "declared": kind, "actual": kinds,
                              "why": "that source cannot supply %s-grade evidence" % kind})
             return False
     return True
+
+
+GATED_MAPS = ("delegated", "decision_notes")
+GATED_KEY = "_gated"
+
+
+def gate_maps(brief, index, cfg, rejected, cat=None) -> int:
+    """Put ``delegated`` and ``decision_notes`` through the evidence gate.
+
+    ★ These were the two pieces of model prose that reached the reader unchecked,
+    and ``decision_notes`` reached it only through BRIEF.html -- which is what
+    ``nextbrief open`` shows -- three lines above a footer stating that every
+    claim had passed the gate. Either the gate covers everything a model wrote or
+    the footer is false; there is no third option.
+
+    Both shapes are accepted: a bare string (the shape ``brief.schema.json``
+    documents, which carries no evidence and is therefore always dropped and
+    logged) and ``{"text": ..., "evidence": [...]}``, which is checked like any
+    other claim. What survives is written under ``_gated`` rather than back over
+    the input, so calling a renderer directly on an ungated ``brief.json`` cannot
+    put the model's sentence on the page.
+    """
+    if not isinstance(brief, dict):
+        return 0
+    dropped = 0
+    out: Dict[str, Dict[str, str]] = {}
+    for section in GATED_MAPS:
+        raw = brief.get(section)
+        kept: Dict[str, str] = {}
+        if raw:
+            if not isinstance(raw, dict):
+                rejected.append({"kind": "malformed_section", "where": section,
+                                 "why": "%s must be an object keyed by project id, got %s"
+                                        % (section, type(raw).__name__)})
+            else:
+                for pid, claim in sorted(raw.items(), key=lambda kv: str(kv[0])):
+                    norm = claim if isinstance(claim, dict) else {"text": claim}
+                    if not check_evidence(norm, index, cfg, rejected, section, cat):
+                        dropped += 1
+                        continue
+                    text = str(norm.get("text", "")).strip()
+                    if text:
+                        kept[pid] = text
+        out[section] = kept
+    brief[GATED_KEY] = out
+    return dropped
+
+
+def gated_text(brief, section: str, key) -> str:
+    """The gated text for one project, or ``""``.
+
+    Both renderers read these maps only through here, which is what stops one of
+    them from showing a sentence the other dropped.
+    """
+    sec = (brief or {}).get(GATED_KEY) if isinstance(brief, dict) else None
+    if not isinstance(sec, dict):
+        return ""
+    vals = sec.get(section)
+    if not isinstance(vals, dict):
+        return ""
+    v = vals.get(key)
+    return v.strip() if isinstance(v, str) else ""
 
 
 # ---------------------------------------------------------------------------
@@ -567,13 +725,48 @@ def evidence_phrase(p, cat: Catalog) -> str:
     return cat.t("sep.dot").join(bits)
 
 
-def _first_clause(text, cat: Catalog) -> str:
+# A sentence ender is a property of the *text*, not of the interface language: a
+# brief rendered in English still quotes Chinese documents and vice versa. Keying
+# this to the UI locale meant an English render split on every '.', so
+# "rotate config.json first" was cut down to "rotate config".
+_CLAUSE_RE = re.compile(r"[;；。！？]|[.!?](?=\s|$)")
+
+
+def _first_clause(text) -> str:
     """First clause only. The detail lives in the backlog file; the brief keeps
     just "what is left for the human", because that is the part you decide on."""
-    s = str(text or "")
-    for ch in cat.t("text.sentence_enders"):
-        s = s.split(ch)[0]
-    return s.strip()
+    return _CLAUSE_RE.split(str(text or ""), maxsplit=1)[0].strip()
+
+
+# ANSI escape sequences reach the terminal of anyone who cats BRIEF.md, so they
+# are removed as a sequence; whatever control characters remain are removed
+# individually. Tab and newline are left to the whitespace collapse below.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]")
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def md_cell(value) -> str:
+    """Make one value safe to interpolate into a Markdown table cell.
+
+    Project names come from a registry a human hand-edits and from directory
+    names on disk, so a ``|`` or a newline is an ordinary accident -- and it
+    corrupts the table for the *reader*, who has no way to tell a broken row from
+    a missing project.
+    """
+    s = _CTRL_RE.sub("", _ANSI_RE.sub("", str(value if value is not None else "")))
+    # Backslash first: escaping the pipe afterwards would otherwise double back
+    # over its own escape.
+    s = s.replace("\\", "\\\\").replace("|", "\\|")
+    return " ".join(s.split())
+
+
+def _days_until(deadline) -> int:
+    """``days_until`` as an int. The field comes from a snapshot, and a snapshot
+    that lost it must not decide whether a deadline reads as overdue."""
+    try:
+        return int(deadline.get("days_until") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None):
@@ -657,9 +850,17 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
             if p.get("id") in self_ids:
                 continue
             for d in p.get("deadlines") or []:
-                if d.get("in_lead_window") or d.get("overdue"):
+                days = _days_until(d)
+                # "-125 days out" under a heading that reads "Tightest on time"
+                # is a sentence nobody parses as "you missed this four months
+                # ago". Overdue is a different fact and gets a different string.
+                if d.get("overdue") or days < 0:
+                    urgent.append(cat.t("brief.urgent_line.overdue",
+                                        project=p.get("name", ""),
+                                        label=d.get("label", ""), days=abs(days)))
+                elif d.get("in_lead_window"):
                     urgent.append(cat.t("brief.urgent_line", project=p.get("name", ""),
-                                        label=d.get("label", ""), days=d.get("days_until", 0)))
+                                        label=d.get("label", ""), days=days))
         if urgent:
             L.append("## " + cat.t("brief.section.most_urgent"))
             for u in urgent[:caps["max_next_actions"]]:
@@ -692,7 +893,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
             # ★ A project with its own daily entry gets a count and a link, never
             #   a retelling. Two places describing the same work is how they
             #   start disagreeing.
-            n = ((brief or {}).get("delegated") or {}).get(pid)
+            n = gated_text(brief, "delegated", pid)
             nxt = n if n else cat.t("brief.next.delegated",
                                     file=Path(str(p["has_own_daily_entry"])).name)
         else:
@@ -703,8 +904,12 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                 nxt = prose[pid]["next"]
             elif pid in stall_ids:
                 nxt = cat.t("brief.next.stalled")
-        line = "| %s | %s | %s | %s |" % (p.get("name", ""), sig, evidence_phrase(p, cat), nxt)
-        L.append(line[:caps["per_project_line_chars"] + 60])
+        line = "| %s | %s | %s | %s |" % (md_cell(p.get("name", "")), md_cell(sig),
+                                          md_cell(evidence_phrase(p, cat)), md_cell(nxt))
+        # Cutting between a backslash and what it escapes leaves a dangling
+        # backslash, which Markdown reads as a hard line break -- the same
+        # corruption the escaping above exists to prevent.
+        L.append(line[:caps["per_project_line_chars"] + 60].rstrip("\\"))
     L.append("")
 
     # ---- awaiting a decision ----
@@ -723,6 +928,12 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
             if od.get("why_not_answered"):
                 L.append("  - " + cat.t("brief.decision.why_not_answered",
                                         text=od["why_not_answered"]))
+            # Rendered here as well as in BRIEF.html: the same gated text has to
+            # appear in both artifacts, or "the two cannot drift apart" is a
+            # claim about only the parts we happened to check.
+            note = gated_text(brief, "decision_notes", p.get("id"))
+            if note:
+                L.append("  - " + cat.t("brief.decision.note", text=note))
         L.append("")
 
     # ---- stalled ----
@@ -766,7 +977,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         L.append("## " + cat.t("brief.section.agent_queue"))
         for b in agentq[:caps["max_agent_queue"]]:
             a = b.get("automation") or {}
-            human = _first_clause(a.get("what_needs_human"), cat)
+            human = _first_clause(a.get("what_needs_human"))
             tail = cat.t("brief.agent.human_left", text=human[:60]) if human else ""
             L.append("- " + cat.t("brief.agent.item", id=b.get("id", ""),
                                   title=b.get("title", ""), human=tail))
@@ -813,7 +1024,10 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     elif gate == "no_commits":
         rem.append(cat.t("reminder.write_gate_no_commits"))
     if not meta["bootstrapped"]:
-        rem.append(cat.t("reminder.empty_backlog", command="nextbrief bootstrap"))
+        # `nextbrief bootstrap` has never existed; it exits 2. This is the only
+        # actionable instruction the very first brief gives, so naming a command
+        # that is not there is the worst possible place to be wrong.
+        rem.append(cat.t("reminder.empty_backlog", command="nextbrief run"))
     nogit = [p.get("name", "") for p in (snap.get("projects") or [])
              if p.get("git_declared") == "none"
              and ((p.get("fs") or {}).get("changed") or {}).get("7", 0) > 0]
@@ -1165,6 +1379,12 @@ def main(argv=None) -> int:
             if src:
                 index.setdefault(src, {"kinds": ["file_mtime", "human"], "value": b.get("title")})
     dropped = 0
+    if brief and not isinstance(brief, dict):
+        # A brief.json that parsed but is a list or a string is no more usable
+        # than one that did not parse, and is handled the same way.
+        print("%s is %s, not an object -- falling back to v0"
+              % (ws.brief_json, type(brief).__name__), file=sys.stderr)
+        brief = None
     if brief:
         projects = {p.get("id"): p for p in (snap.get("projects") or [])}
         caps = caps_of(cfg)
@@ -1173,7 +1393,13 @@ def main(argv=None) -> int:
                   "waiting_for": caps["max_waiting_for"]}
         for key in ("next_actions", "project_lines", "agent_queue", "waiting_for"):
             kept = []
-            for claim in brief.get(key) or []:
+            claims = brief.get(key) or []
+            if not isinstance(claims, list):
+                rejected.append({"kind": "malformed_section", "where": key,
+                                 "why": "%s must be an array, got %s"
+                                        % (key, type(claims).__name__)})
+                claims = []
+            for claim in claims:
                 if not check_evidence(claim, index, cfg, rejected, key, cat):
                     dropped += 1
                     continue
@@ -1192,6 +1418,9 @@ def main(argv=None) -> int:
                 notes["deferred"] = notes.get("deferred", 0) + len(kept) - capmap[key]
                 kept = kept[:capmap[key]]
             brief[key] = kept
+        # The maps keyed by project id go through the same gate. They used to be
+        # the only model text in the brief that did not.
+        dropped += gate_maps(brief, index, cfg, rejected, cat)
     notes["dropped_claims"] = dropped
 
     # Conflicts the registry has already adjudicated -- stated once here so the
@@ -1264,6 +1493,10 @@ def main(argv=None) -> int:
         "reverted_fields": notes.get("reverted_fields", 0),
         "write_gate": gate.state,
         "write_gate_detail": gate.detail,
+        # Reverted-zero only means "clean" next to "and everything had a
+        # baseline". An entry the gate could not compare is neither clean nor
+        # dirty, and saying nothing about it would report it as the former.
+        "write_gate_unchecked": gate.unchecked,
         "deferred": notes.get("deferred", 0),
         "truncated_lines": meta.get("truncated_lines", 0),
         "notified": notified,
