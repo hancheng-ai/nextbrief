@@ -143,6 +143,54 @@ jobs:
           name: dist-ci
           path: dist/
 
+  versions:
+    name: version literals agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Three files carry the version: pyproject.toml is what pip installs,
+      # __init__.py is what `--version` prints and the only one a zipapp can
+      # read, and CITATION.cff is what a citation resolves to. Drift between
+      # them ships a package that misreports itself, and the report arrives as
+      # a bug against a version that never existed. scripts/bump-version.sh
+      # sets all three; this makes forgetting to use it a build failure.
+      - name: Assert pyproject, __init__ and CITATION.cff carry one version
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys, tomllib
+
+          with open("pyproject.toml", "rb") as fh:
+              pyproject = tomllib.load(fh)["project"]["version"]
+
+          init = re.search(
+              r'(?m)^__version__ = "([^"]+)"',
+              pathlib.Path("src/nextbrief/__init__.py").read_text(encoding="utf-8"),
+          )
+          citation = re.search(
+              r"(?m)^version: (.+)$",
+              pathlib.Path("CITATION.cff").read_text(encoding="utf-8"),
+          )
+          if not init or not citation:
+              sys.exit("could not find a version literal -- update this check")
+
+          found = {
+              "pyproject.toml": pyproject,
+              "src/nextbrief/__init__.py": init.group(1),
+              "CITATION.cff": citation.group(1).strip().strip('"'),
+          }
+          if len(set(found.values())) != 1:
+              sys.exit(
+                  "version literals disagree:\n  "
+                  + "\n  ".join("%-28s %s" % (k, v) for k, v in found.items())
+                  + "\n\nRun: scripts/bump-version.sh <version>"
+              )
+          print("ok: every version literal says %s" % pyproject)
+          PY
+
   zero-deps:
     name: zero runtime dependencies
     runs-on: ubuntu-latest
