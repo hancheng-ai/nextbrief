@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: "nextbrief: an evidence-gated daily brief across a portfolio of projects"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - given-names: Hancheng
+    family-names: Wang
+    email: wanghancheng.ai@gmail.com
+    orcid: "https://orcid.org/0009-0008-3432-5440"
+repository-code: "https://github.com/hancheng-ai/nextbrief"
+url: "https://github.com/hancheng-ai/nextbrief"
+abstract: >-
+  nextbrief produces a daily status brief across many concurrent projects from
+  the files those projects already keep. It runs in three stages, and only the
+  middle one uses a language model: deterministic sensing writes a snapshot of
+  filesystem and git facts, a model interprets that snapshot into claims, and a
+  deterministic renderer resolves every claim's evidence reference against the
+  snapshot before printing it. Claims that cannot be resolved are dropped and
+  logged rather than rendered, which moves "do not report progress that did not
+  happen" from an instruction a model may drift from to a property of the
+  pipeline. Three further gates flag proposals that contradict a project's
+  declared non-goals, revert agent edits to human-only fields by diffing against
+  git HEAD, and cap output length so the brief cannot grow past what a person
+  will read.
+keywords:
+  - project management
+  - large language models
+  - hallucination mitigation
+  - evidence grounding
+  - agent containment
+  - developer tools
+license: Apache-2.0
+version: 0.1.0
+date-released: "2026-07-27"
