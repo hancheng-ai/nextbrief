@@ -36,9 +36,9 @@ jobs:
             python: "3.9"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
 
@@ -63,7 +63,7 @@ jobs:
     name: macOS system python (unattended path)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No setup-python on purpose. The scheduled run is started by a GUI
       # launcher with a minimal PATH, so it gets /usr/bin/python3 and nothing
@@ -81,8 +81,8 @@ jobs:
     name: ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Install ruff
@@ -94,8 +94,8 @@ jobs:
     name: build + twine check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -138,7 +138,7 @@ jobs:
           print("ok: no unconditional Requires-Dist in any wheel")
           PY
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-ci
           path: dist/
@@ -147,8 +147,8 @@ jobs:
     name: version literals agree
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -195,8 +195,8 @@ jobs:
     name: zero runtime dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           # 3.11+ for tomllib. This job never runs on the floor version.
           python-version: "3.13"
@@ -229,8 +229,8 @@ jobs:
     name: locale catalogs agree
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -369,7 +369,7 @@ jobs:
     name: no leaked identifiers
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # nextbrief was extracted from a private single-user workspace. Names,
       # hostnames and home paths from that workspace must never reappear -- not

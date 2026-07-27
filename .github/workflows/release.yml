@@ -20,9 +20,9 @@ jobs:
     name: tests must pass before anything is published
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # The floor, not the newest: a release must work on the oldest
           # interpreter the package claims to support.
@@ -34,7 +34,7 @@ jobs:
       - name: Run the full suite
         run: PYTHONPATH=src python -m unittest discover -s tests
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -81,9 +81,9 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -149,7 +149,7 @@ jobs:
       # All three artifacts, attested together while they are still in one
       # directory. Attestation is by digest, so it survives the move below.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
 
@@ -171,13 +171,13 @@ jobs:
           cat SHA256SUMS
 
       - name: Upload distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ steps.version.outputs.version }}
           path: dist/
 
       - name: Upload release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ steps.version.outputs.version }}
           path: release/
@@ -210,7 +210,7 @@ jobs:
     permissions:
       id-token: write       # the only credential; nothing is read from secrets
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist-${{ needs.build.outputs.version }}
           path: dist/
@@ -234,7 +234,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist-${{ needs.build.outputs.version }}
           path: dist/
@@ -254,11 +254,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0    # --generate-notes diffs against the previous tag
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-${{ needs.build.outputs.version }}
           path: release/
