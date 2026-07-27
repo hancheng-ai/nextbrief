@@ -233,6 +233,90 @@ jobs:
           print("ok: %d catalogs, %d keys each" % (len(keys), len(baseline)))
           PY
 
+      # The step above only proves the catalogs agree with each other. The whole
+      # CLI surface -- 57 keys -- was absent from both at once, and they agreed
+      # perfectly the entire time: every string silently fell back to English
+      # even under NEXTBRIEF_LOCALE=zh. So the catalogs are also checked against
+      # the code that asks for keys.
+      #
+      # No `set +e` needed here: this step is one Python program, and a non-zero
+      # exit from it is the failure signal, not an ordinary outcome.
+      - name: Assert every key the code asks for exists in every catalog
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+
+          sys.path.insert(0, "src")
+          from nextbrief.jsonc import load_jsonc
+
+          def flatten(node, prefix=""):
+              out = set()
+              for key, value in node.items():
+                  path = prefix + key
+                  if isinstance(value, dict):
+                      out |= flatten(value, path + ".")
+                  else:
+                      out.add(path)
+              return out
+
+          def referenced(src):
+              """Literal keys passed to tr(cat, "key", ...) or cat.t("key", ...).
+
+              Parsed, not grepped: a regex for `tr(` also matches the tail of
+              `getattr(`, and an AST cannot be fooled that way. Keys selected
+              through a variable are invisible here by construction, which is why
+              the reverse direction below is a warning rather than a failure.
+              """
+              out = {}
+              for path in sorted(src.rglob("*.py")):
+                  tree = ast.parse(path.read_text(encoding="utf-8"))
+                  for node in ast.walk(tree):
+                      if not isinstance(node, ast.Call):
+                          continue
+                      func, args = node.func, node.args
+                      if isinstance(func, ast.Name) and func.id == "tr" and len(args) >= 2:
+                          key = args[1]
+                      elif isinstance(func, ast.Attribute) and func.attr == "t" and args:
+                          key = args[0]
+                      else:
+                          continue
+                      if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                          out.setdefault(key.value, "%s:%d" % (path.name, node.lineno))
+              return out
+
+          root = pathlib.Path("src/nextbrief/locales")
+          catalogs = {
+              p.stem: flatten(load_jsonc(p))
+              for p in sorted(root.iterdir())
+              if p.suffix in (".json", ".jsonc")
+          }
+          used = referenced(pathlib.Path("src/nextbrief"))
+          if not used:
+              sys.exit("found no translated strings at all -- the scanner is broken")
+
+          problems = []
+          for name in sorted(catalogs):
+              missing = sorted(k for k in used if k not in catalogs[name])
+              if missing:
+                  problems.append(
+                      "%s.json is missing %d key(s) the code asks for:\n    %s"
+                      % (name, len(missing), "\n    ".join("%s  (%s)" % (k, used[k]) for k in missing))
+                  )
+          if problems:
+              sys.exit("catalogs do not cover the code\n  " + "\n  ".join(problems))
+
+          # Reverse direction: a catalog key nobody references is untidy, never
+          # broken, and a static scan cannot see keys chosen through a variable
+          # (reminder.write_gate_no_git and reminder.write_gate_no_repo among
+          # them). Reported, never fatal.
+          everywhere = set.intersection(*catalogs.values()) if catalogs else set()
+          orphans = sorted(everywhere - set(used))
+          if orphans:
+              print("::notice::%d catalog key(s) not referenced by any literal lookup: %s"
+                    % (len(orphans), ", ".join(orphans)))
+          print("ok: %d referenced key(s) present in all %d catalogs" % (len(used), len(catalogs)))
+          PY
+
   no-leaks:
     name: no leaked identifiers
     runs-on: ubuntu-latest
@@ -294,10 +378,15 @@ jobs:
             echo "::error::the identifier scan itself failed (git grep exit $rc)"
             status=1
           fi
+          # Each pattern is one place a package is *expected* to carry its
+          # author's identity. Anything else that mentions the maintainer --
+          # a home path, a private hostname, a pasted traceback -- still fails.
           grep -vE \
             -e 'github\.com/hancheng-ai/nextbrief' \
+            -e 'hancheng-ai/homebrew-tap' \
             -e 'name = "Hancheng Wang", email = "wanghancheng\.ai@gmail\.com"' \
             -e 'Copyright \(c\) [0-9]{4} Hancheng Wang' \
+            -e '^CITATION\.cff:[0-9]+: *(- )?(given-names: Hancheng|family-names: Wang|email: wanghancheng\.ai@gmail\.com)' \
             "$tmp/hits-raw.txt" > "$tmp/hits-owner.txt" || true
           if [ -s "$tmp/hits-owner.txt" ]; then
             echo "::error::maintainer identifier outside package metadata"
