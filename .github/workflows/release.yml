@@ -76,23 +76,75 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
+      # Runs before the zipapp lands in dist/: twine reads dist/* and a .pyz is
+      # not a distribution it knows how to check.
       - name: twine check
         run: twine check --strict dist/*
 
+      # Built from the same checkout with the stdlib, and smoke tested against
+      # itself -- the script renders a real brief out of the archive, which is
+      # the only way to catch a packaging change that leaves the bundled
+      # locales and templates unreachable from inside a zip.
+      - name: Build and smoke test nextbrief.pyz
+        run: bash scripts/build-zipapp.sh
+
+      # All three artifacts, attested together while they are still in one
+      # directory. Attestation is by digest, so it survives the move below.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/*
 
-      - uses: actions/upload-artifact@v4
+      # Two sets, because they have two audiences. dist/ must hold exactly what
+      # PyPI accepts -- a .pyz or a checksum file in there makes the publish
+      # action fail on a file nobody asked it to upload. release/ is what a
+      # human downloads from the Releases page.
+      - name: Assemble release assets
+        run: |
+          mkdir -p release
+          cp dist/nextbrief-*.tar.gz dist/nextbrief-*.whl release/
+          mv dist/nextbrief.pyz release/
+
+          # Named rather than globbed: if the build ever stops producing one of
+          # the three, this fails instead of quietly shipping a checksum file
+          # that covers two.
+          cd release
+          sha256sum nextbrief-*.tar.gz nextbrief-*.whl nextbrief.pyz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
         with:
           name: dist-${{ steps.version.outputs.version }}
           path: dist/
 
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.version.outputs.version }}
+          path: release/
+
+  # ---------------------------------------------------------------------------
+  # Publishing is opt-in and OFF until Trusted Publishing is configured on both
+  # indexes. Left ungated, these two jobs would fail on every tag and take the
+  # release down with them, so a repository variable holds them back.
+  #
+  # To turn publishing on:
+  #   1. PyPI and TestPyPI -> the project -> Publishing -> add a GitHub
+  #      publisher: this owner and repo, workflow `release.yml`, environment
+  #      `pypi` and `testpypi` respectively.
+  #   2. This repo -> Settings -> Environments -> create `pypi` and `testpypi`.
+  #   3. This repo -> Settings -> Secrets and variables -> Actions -> Variables
+  #      -> New repository variable: name PUBLISH_PYPI, value true
+  #
+  # Unset, or set to anything but 'true', both jobs skip and a tag still
+  # produces a complete GitHub Release with every artifact attached.
+  # ---------------------------------------------------------------------------
+
   testpypi:
     name: publish to TestPyPI
     needs: build
-    if: needs.build.outputs.prerelease == 'true'
+    if: vars.PUBLISH_PYPI == 'true' && needs.build.outputs.prerelease == 'true'
     runs-on: ubuntu-latest
     environment:
       name: testpypi
@@ -104,6 +156,8 @@ jobs:
         with:
           name: dist-${{ needs.build.outputs.version }}
           path: dist/
+      # Upstream ships its major version as a branch instead of a tag;
+      # `release/v1` is this action's equivalent of the `@v4` pins above.
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -114,7 +168,7 @@ jobs:
   pypi:
     name: publish to PyPI
     needs: build
-    if: needs.build.outputs.prerelease == 'false'
+    if: vars.PUBLISH_PYPI == 'true' && needs.build.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -131,8 +185,9 @@ jobs:
   github-release:
     name: GitHub Release
     needs: [build, testpypi, pypi]
-    # Exactly one of the two publish jobs runs; the other is skipped. Without
-    # always() this job would be skipped along with it.
+    # At most one publish job runs, and with PUBLISH_PYPI off neither does.
+    # Without always() this job would be skipped along with them -- which is the
+    # entire point of the gate: shipping a release must not depend on PyPI.
     if: >-
       always() && needs.build.result == 'success'
       && !contains(needs.*.result, 'failure')
@@ -147,26 +202,69 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: dist-${{ needs.build.outputs.version }}
-          path: dist/
+          name: release-${{ needs.build.outputs.version }}
+          path: release/
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          PYPI_ENABLED: ${{ vars.PUBLISH_PYPI }}
         run: |
           set -euo pipefail
 
-          flags=(--title "$TAG" --generate-notes)
+          # The last cheap place to catch a truncated artifact: everything here
+          # has been through an upload and a download since it was hashed.
+          (cd release && sha256sum -c SHA256SUMS)
+
+          # Quoted heredoc so nothing in the body is expanded -- it is full of
+          # backticks and shell one-liners that must reach the reader intact.
+          # The three placeholders are substituted afterwards.
+          cat > notes.md <<'MD'
+          ## Install
+
+          ```sh
+          uv tool install nextbrief==@VERSION@                  # from PyPI
+          pipx install nextbrief==@VERSION@                     # from PyPI
+          curl -fsSLO @REPO@/releases/download/@TAG@/nextbrief.pyz && chmod +x nextbrief.pyz
+          ```
+
+          `nextbrief.pyz` is the whole program in one file: Python 3.9 or newer and
+          nothing else, no install step and no virtualenv. Run it where it landed with
+          `./nextbrief.pyz init`, or drop it on your PATH as `nextbrief`.
+
+          Verify what you downloaded:
+
+          ```sh
+          curl -fsSLO @REPO@/releases/download/@TAG@/SHA256SUMS && sha256sum -c SHA256SUMS
+          ```
+          MD
+          sed -i -e "s|@VERSION@|$VERSION|g" -e "s|@TAG@|$TAG|g" -e "s|@REPO@|$REPO_URL|g" notes.md
+
+          # Which of the three lines actually work today, said here rather than
+          # discovered from a 404.
+          if [ "${PYPI_ENABLED:-}" != "true" ]; then
+            {
+              echo
+              echo "> Not on PyPI yet, so the first two lines will not resolve."
+              echo "> Use the \`.pyz\`, or install from source."
+            } >> notes.md
+          fi
+
+          flags=(--title "$TAG" --notes-file notes.md --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then
             flags+=(--prerelease)
           fi
 
           # Re-running the workflow on an existing tag should update the release
-          # rather than fail on it.
+          # rather than fail on it. `gh release view` exits nonzero when there is
+          # none, which is the normal path -- hence the `if`, since GitHub runs
+          # `run:` steps under `bash -e` and a bare call would end the step.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
+            gh release upload "$TAG" release/* --clobber
           else
-            gh release create "$TAG" dist/* "${flags[@]}"
+            gh release create "$TAG" release/* "${flags[@]}"
           fi
