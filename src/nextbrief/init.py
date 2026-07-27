@@ -34,6 +34,7 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -599,6 +600,27 @@ def _write_if_absent(dst: Path, text: Optional[str]) -> bool:
     return True
 
 
+def _scheduling_note(root: Path, cat: Optional[Catalog]) -> None:
+    """The one thing that silently breaks an unattended run.
+
+    Agent permission rules in a workspace apply only when the agent session is
+    *rooted at* that workspace. A scheduler that starts anywhere else -- the
+    parent directory is the usual case -- never reads them, so every run stops
+    at a prompt that nobody is there to answer. The rules look correct, are
+    correct, and do nothing, which is a bad hour to spend.
+    """
+    print()
+    print(tr(
+        cat,
+        "init.next.scheduling",
+        "Running this on a schedule? .claude/settings.json pre-approves the run, but\n"
+        "  an agent only reads it when its session is rooted at {root}.\n"
+        "  If your scheduler starts somewhere else, copy those rules into your\n"
+        "  user-level agent settings instead, or the run will wait on a prompt.",
+        root=str(root),
+    ))
+
+
 def _next_steps(root: Path, cat: Optional[Catalog], pointed: bool) -> None:
     print()
     print(tr(cat, "init.next.header", "Next:"))
@@ -680,6 +702,18 @@ def init_workspace(
     if not (root / ".gitignore").exists():
         (root / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
         created.append(".gitignore")
+
+    agent_settings = root / ".claude" / "settings.json"
+    if not agent_settings.exists():
+        try:
+            agent_settings.parent.mkdir(parents=True, exist_ok=True)
+            agent_settings.write_text(
+                json.dumps(agent_permissions(root), indent=2) + "\n", encoding="utf-8"
+            )
+            created.append(".claude/settings.json")
+        except OSError as exc:
+            notes.append("Could not write %s (%s); the scheduled run will stop at a "
+                         "permission prompt until it exists." % (agent_settings, exc))
     if _write_if_absent(root / "config.jsonc", config_template):
         created.append("config.jsonc")
     for name in resources.list_names(PROMPT_DIR, ".md"):
@@ -700,6 +734,7 @@ def init_workspace(
         for note in notes:
             print(note)
         _next_steps(root, cat, pointed)
+        _scheduling_note(root, cat)
         return 0
 
     adopted: List[Candidate] = []
@@ -749,7 +784,47 @@ def init_workspace(
     for note in notes:
         print("  " + note)
     _next_steps(root, cat, pointed)
+    _scheduling_note(root, cat)
     return 0
+
+
+
+
+def agent_permissions(root: Path) -> Dict[str, Any]:
+    """Pre-approval rules for an agent working in this workspace.
+
+    Stage 2 runs unattended on a schedule. Without these, every run stops at a
+    permission prompt with nobody at the keyboard, and the brief silently does
+    not happen -- which is the one failure this tool cannot afford, because a
+    missing brief looks exactly like a quiet day.
+
+    Deliberately narrow. Writes are confined to the workspace, and the only
+    pre-approved command is this program, which is itself unable to write
+    outside the workspace. Everything else still asks.
+    """
+    exe = shutil.which("nextbrief")
+    if not exe:
+        # Installed but not yet on PATH (pipx before a shell restart), or run
+        # via `python -m`. argv[0] is the next best thing; the literal name is
+        # the last resort and is still correct once PATH catches up.
+        candidate = Path(sys.argv[0]).resolve()
+        exe = str(candidate) if candidate.name in ("nextbrief", "nb") else "nextbrief"
+    return {
+        "permissions": {
+            "allow": [
+                "Bash(%s:*)" % exe,
+                "Read",
+                "Glob",
+                "Grep",
+                # A leading "//" marks an absolute path in a permission rule,
+                # so the path's own leading slash is the second one -- "//%s"
+                # against an absolute path yields three and matches nothing.
+                "Write(/%s/**)" % root,
+                "Edit(/%s/**)" % root,
+            ]
+        }
+    }
+
 
 
 def _write_pointer(root: Path, notes: List[str], set_default: bool = False) -> bool:

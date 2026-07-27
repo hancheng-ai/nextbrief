@@ -172,6 +172,7 @@
   "init.next.no_pointer": "No pointer file was written, so say where the workspace is:\n    nextbrief --workspace {root} v0\n  or, once per shell:\n    export NEXTBRIEF_WORKSPACE={root}",
   "init.next.open": "read it in your browser",
   "init.next.run": "the full three stages, once you have a provider configured",
+  "init.next.scheduling": "Running this on a schedule? .claude/settings.json pre-approves the run, but\n  an agent only reads it when its session is rooted at {root}.\n  If your scheduler starts somewhere else, copy those rules into your\n  user-level agent settings instead, or the run will wait on a prompt.",
   "init.next.v0": "build a brief with no model at all -- zero tokens",
   "init.no_projects": "No projects yet. Add one to registry.jsonc: an id, a name, and the path it lives at, relative to defaults.root.",
   "init.scan.found": "Found {n} possible project(s) next door, in {dir}:",

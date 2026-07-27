@@ -279,3 +279,49 @@ class PointerIsNotStolen(TempCase):
         self.assertEqual(code, 0)
         self.assertEqual(self._pointer(), str(self.tmp / "a"))
         self.assertNotIn("default workspace is still", out.lower())
+
+class AgentPermissions(TempCase):
+    """A scheduled run has nobody at the keyboard. If it stops at a permission
+    prompt the brief silently does not happen -- and a missing brief looks
+    exactly like a quiet day, which is the one thing this tool must not be
+    ambiguous about."""
+
+    def setUp(self):
+        super().setUp()
+        self.target = self.tmp / "ws"
+        self.target.mkdir()
+        capture(init_mod.init_workspace, str(self.target), yes=True, scan=False)
+        self.settings = self.target / ".claude" / "settings.json"
+
+    def test_init_writes_agent_permissions(self):
+        self.assertTrue(self.settings.is_file())
+        json.loads(self.settings.read_text(encoding="utf-8"))
+
+    def test_the_rules_cover_what_the_daily_run_does(self):
+        allow = json.loads(self.settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+        self.assertTrue(any(r.startswith("Bash(") and "nextbrief" in r for r in allow))
+        self.assertIn("Read", allow)
+        self.assertTrue(any(r.startswith("Write(") for r in allow))
+
+    def test_absolute_paths_use_exactly_two_leading_slashes(self):
+        # "//" marks an absolute path; the path's own leading slash IS the
+        # second one. Writing "//%s" against an absolute path yields three and
+        # silently matches nothing -- a rule that looks right and does nothing.
+        allow = json.loads(self.settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+        for rule in allow:
+            if rule.startswith(("Write(", "Edit(")):
+                inner = rule[rule.index("(") + 1:-1]
+                self.assertTrue(inner.startswith("//"), rule)
+                self.assertFalse(inner.startswith("///"), rule)
+
+    def test_writes_are_confined_to_the_workspace(self):
+        allow = json.loads(self.settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+        for rule in allow:
+            if rule.startswith(("Write(", "Edit(")):
+                self.assertIn(str(self.target), rule)
+
+    def test_an_existing_settings_file_is_never_overwritten(self):
+        mine = {"permissions": {"allow": ["Read"]}}
+        self.settings.write_text(json.dumps(mine), encoding="utf-8")
+        capture(init_mod.init_workspace, str(self.target), yes=True, scan=False)
+        self.assertEqual(json.loads(self.settings.read_text(encoding="utf-8")), mine)

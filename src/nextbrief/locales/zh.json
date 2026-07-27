@@ -172,6 +172,7 @@
   "init.next.no_pointer": "没能写下指针文件，所以要显式告诉它 workspace 在哪：\n    nextbrief --workspace {root} v0\n  或者每个 shell 里设一次：\n    export NEXTBRIEF_WORKSPACE={root}",
   "init.next.open": "在浏览器里读",
   "init.next.run": "配好 provider 之后，跑完整三段",
+  "init.next.scheduling": "打算让它定时跑？.claude/settings.json 已经把这次运行需要的权限预先批好了，但\n  agent 只有在会话根目录就是 {root} 时才会读到它。\n  如果你的调度器是从别的目录启动的，就把那几条规则搬到用户级 agent 设置里，\n  否则每次运行都会卡在批准框上等人。",
   "init.next.v0": "不接模型直接出简报——零 token",
   "init.no_projects": "还没有项目。往 registry.jsonc 里加一个：一个 id、一个名字，以及相对 defaults.root 的路径。",
   "init.scan.found": "在隔壁 {dir} 里找到 {n} 个可能的项目：",
