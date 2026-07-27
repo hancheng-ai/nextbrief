@@ -114,7 +114,12 @@ def load_jsonc(path) -> Any:
     """Parse a JSONC file. Raises JSONCError with the path on failure."""
     p = Path(path)
     try:
-        raw = p.read_text(encoding="utf-8")
+        # utf-8-sig, not utf-8: registry.jsonc and config.jsonc are documented as
+        # hand-edited, and several Windows editors write a UTF-8 BOM. Under plain
+        # utf-8 that byte reaches json.loads and the run dies on "Expecting value:
+        # line 1 column 1", which tells the person holding the editor nothing.
+        # The codec strips a BOM when there is one and is a no-op when there is not.
+        raw = p.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise JSONCError("cannot read %s: %s" % (p, exc)) from exc
     try:
