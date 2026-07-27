@@ -57,6 +57,39 @@ for name, pattern, replacement in edits:
         sys.exit("error: no version line matched in %s -- update this script" % name)
     path.write_text(text, encoding="utf-8")
     print("  %-28s -> %s" % (name, new))
+
+# The version also appears in prose and URLs: badges, install commands, download
+# links, the changelog heading and its link definitions, the formula's url and
+# version. Updating only the three machine-readable literals left those pointing
+# at the previous release -- which is what the docs-consistency tests caught, one
+# tag too late. A bump has to be complete or the tests it must pass will fail.
+SWEEP = ["README.md", "README.zh.md", "CHANGELOG.md", "packaging/homebrew/nextbrief.rb"]
+VERSION_RE = re.compile(r"\b\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?(?:\.dev\d+)?\b")
+
+previous = None
+for name in SWEEP:
+    path = root / name
+    if not path.is_file():
+        continue
+    text = path.read_text(encoding="utf-8")
+    if previous is None:
+        # Whatever the changelog's newest heading says is the version we are
+        # moving away from; deriving it beats hardcoding a pattern per file.
+        head = re.search(r"(?m)^## \[(\d[^\]]*)\]", (root / "CHANGELOG.md").read_text(encoding="utf-8"))
+        previous = head.group(1) if head else None
+    if not previous or previous == new:
+        continue
+    updated = text.replace(previous, new)
+    if updated != text:
+        path.write_text(updated, encoding="utf-8")
+        print("  %-28s -> %s (%d reference(s))" % (name, new, text.count(previous)))
+
+if previous and previous != new:
+    changelog = root / "CHANGELOG.md"
+    text = changelog.read_text(encoding="utf-8")
+    # The heading was rewritten in place by the sweep above, so re-date it.
+    text = re.sub(r"(?m)^## \[%s\] - .+$" % re.escape(new), "## [%s] - %s" % (new, today), text, count=1)
+    changelog.write_text(text, encoding="utf-8")
 PY
 
 echo

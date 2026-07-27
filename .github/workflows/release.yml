@@ -11,8 +11,66 @@ permissions:
   contents: read
 
 jobs:
+  # A publish is permanent: an index accepts a version number once and never
+  # again. CI runs the suite on every push to main, but a tag is not a push to
+  # main -- it can point at any commit, and nothing here re-checked it. A tag
+  # whose tests fail therefore published, which is exactly what happened to
+  # v0.1.0rc2. This job is the gate that was missing; `build` waits on it.
+  gate:
+    name: tests must pass before anything is published
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The floor, not the newest: a release must work on the oldest
+          # interpreter the package claims to support.
+          python-version: "3.9"
+
+      - name: Build example workspace
+        run: examples/workspace/scripts/build-example.sh
+
+      - name: Run the full suite
+        run: PYTHONPATH=src python -m unittest discover -s tests
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: python -m pip install --disable-pip-version-check "ruff>=0.6"
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: Assert the version literals agree
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys, tomllib
+
+          with open("pyproject.toml", "rb") as fh:
+              pyproject = tomllib.load(fh)["project"]["version"]
+          init = re.search(r'(?m)^__version__ = "([^"]+)"',
+                           pathlib.Path("src/nextbrief/__init__.py").read_text(encoding="utf-8"))
+          citation = re.search(r"(?m)^version: (.+)$",
+                               pathlib.Path("CITATION.cff").read_text(encoding="utf-8"))
+          if not init or not citation:
+              sys.exit("could not find a version literal -- update this check")
+          found = {
+              "pyproject.toml": pyproject,
+              "src/nextbrief/__init__.py": init.group(1),
+              "CITATION.cff": citation.group(1).strip().strip('"'),
+          }
+          if len(set(found.values())) != 1:
+              sys.exit("version literals disagree:\n  "
+                       + "\n  ".join("%-28s %s" % kv for kv in found.items()))
+          print("ok: every version literal says %s" % pyproject)
+          PY
+
   build:
     name: build ${{ github.ref_name }}
+    needs: gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
