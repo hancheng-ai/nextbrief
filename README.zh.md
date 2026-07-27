@@ -83,6 +83,10 @@ nextbrief open                  # 在浏览器里读
 
 零依赖的意思是：下面每一种方式都只装一样东西，不带别的。顺序按「你要先付出多少」从少到多排——因为整件事的卖点就是，你可以先评估、再决定花不花钱。
 
+所有命令都可以用 **`nb`** 代替，它和 `nextbrief` 一起装上——`nb v0`、`nb do NA-0004`、`nb open`。
+如果你同时在用 [xwmx/nb](https://github.com/xwmx/nb)（那个记笔记的 CLI），两者会撞名：
+改用 `pipx install --suffix @nx nextbrief`，命令就是 `nextbrief@nx`。
+
 > **PyPI 尚未发布。** 凡是走 PyPI 解析的——`uvx`、`pipx install nextbrief`、`uv tool install nextbrief`——现在都还不通。zipapp 和从源码装是**现在就能用**的。下面每一条都标了状态：一条一上来就失败的命令，是丢掉读者最快的方式。
 
 **1 · 什么都不装，直接跑** —— *依赖 PyPI，尚未生效*

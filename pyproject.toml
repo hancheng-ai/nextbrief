@@ -49,6 +49,14 @@ Changelog = "https://github.com/hancheng-ai/nextbrief/blob/main/CHANGELOG.md"
 
 [project.scripts]
 nextbrief = "nextbrief.cli:main"
+# A short alias, because this is a tool you type every day and `nextbrief do
+# NA-0004` is a lot of keystrokes for a habit.
+#
+# Note for anyone who also uses xwmx/nb, the note-taking CLI: both install a
+# command called `nb`, and whichever is installed second wins. If you have it,
+# install nextbrief with `pipx install --suffix @nx nextbrief` or drop this
+# entry point locally; `nextbrief` itself is always available either way.
+nb = "nextbrief.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nextbrief"]

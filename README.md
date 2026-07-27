@@ -116,6 +116,11 @@ Zero dependencies means every option below installs one thing and nothing else.
 They are ordered by how little you have to commit up front, because the whole
 point of `v0` is that you can evaluate this before spending anything.
 
+Every command also answers to **`nb`**, installed alongside `nextbrief` — `nb v0`,
+`nb do NA-0004`, `nb open`. If you also use [xwmx/nb](https://github.com/xwmx/nb),
+the note-taking CLI, the two collide: install with
+`pipx install --suffix @nx nextbrief` and use `nextbrief@nx` instead.
+
 > **PyPI publication is pending.** Anything that resolves through PyPI — `uvx`,
 > `pipx install nextbrief`, `uv tool install nextbrief` — does not work yet. The
 > zipapp and a from-source install do. Every option below says which it is,
