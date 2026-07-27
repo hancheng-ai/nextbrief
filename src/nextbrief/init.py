@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from . import resources
 from .i18n import Catalog, load_catalog
 from .jsonc import JSONCError, loads_jsonc
 from .launch import tr
@@ -42,9 +43,10 @@ from .paths import expand, pointer_file
 
 __all__ = ["init_workspace", "main"]
 
-_HERE = Path(__file__).resolve().parent
-TEMPLATE_DIR = _HERE / "templates"
-PROMPT_DIR = _HERE / "prompts"
+# Bundled data is read through `resources`, not through a filesystem path: the
+# package may be running from inside a zipapp, where __file__ names nothing real.
+TEMPLATE_DIR = "templates"
+PROMPT_DIR = "prompts"
 
 REGISTRY_TEMPLATE = "registry.example.jsonc"
 CONFIG_TEMPLATE = "config.example.jsonc"
@@ -507,10 +509,15 @@ def _git_baseline(root: Path, notes: List[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _copy_if_absent(src: Path, dst: Path) -> bool:
-    if dst.exists() or not src.is_file():
+def _write_if_absent(dst: Path, text: Optional[str]) -> bool:
+    """Write a bundled file into the workspace unless something is already there.
+
+    Never overwrites: on a re-run the file on disk is the one the user may have
+    edited, and init is idempotent by contract.
+    """
+    if text is None or dst.exists():
         return False
-    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    dst.write_text(text, encoding="utf-8")
     return True
 
 
@@ -551,10 +558,10 @@ def init_workspace(
     except OSError:
         pass
 
-    registry_template = TEMPLATE_DIR / REGISTRY_TEMPLATE
-    config_template = TEMPLATE_DIR / CONFIG_TEMPLATE
-    if not registry_template.is_file() or not config_template.is_file():
-        _err("error: packaged templates are missing from %s -- reinstall nextbrief." % TEMPLATE_DIR)
+    registry_template = resources.read_text(TEMPLATE_DIR, REGISTRY_TEMPLATE)
+    config_template = resources.read_text(TEMPLATE_DIR, CONFIG_TEMPLATE)
+    if registry_template is None or config_template is None:
+        _err("error: packaged templates are missing -- reinstall nextbrief.")
         return 1
 
     registry_path = root / "registry.jsonc"
@@ -573,11 +580,11 @@ def init_workspace(
     if not (root / ".gitignore").exists():
         (root / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
         created.append(".gitignore")
-    if _copy_if_absent(config_template, root / "config.jsonc"):
+    if _write_if_absent(root / "config.jsonc", config_template):
         created.append("config.jsonc")
-    for prompt in sorted(PROMPT_DIR.glob("*.md")) if PROMPT_DIR.is_dir() else []:
-        if _copy_if_absent(prompt, root / "prompts" / prompt.name):
-            created.append("prompts/%s" % prompt.name)
+    for name in resources.list_names(PROMPT_DIR, ".md"):
+        if _write_if_absent(root / "prompts" / name, resources.read_text(PROMPT_DIR, name)):
+            created.append("prompts/%s" % name)
 
     if already:
         # Idempotent by contract: a registry someone has edited is the most
@@ -601,7 +608,7 @@ def init_workspace(
         entries.append(draft_entry(cand, used))
 
     try:
-        text = render_registry(registry_template.read_text(encoding="utf-8"), str(root.parent), entries)
+        text = render_registry(registry_template, str(root.parent), entries)
     except (JSONCError, ValueError) as exc:
         _err("error: packaged %s is not valid JSONC (%s)" % (REGISTRY_TEMPLATE, exc))
         return 1

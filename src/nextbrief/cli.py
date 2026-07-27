@@ -31,7 +31,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import __version__
+from . import __version__, resources
 from .frontmatter import parse_frontmatter, rewrite_fields
 from .i18n import Catalog, load_catalog
 from .jsonc import JSONCError, load_jsonc
@@ -379,18 +379,26 @@ def _daily_prompt(ws: Workspace, cat: Optional[Catalog]) -> Optional[str]:
     """
     locale = getattr(cat, "locale", None) or "en"
     names = ("daily.%s.md" % locale, "daily.en.md", "daily.md")
-    for base in (ws.prompts, Path(__file__).resolve().parent / "prompts"):
-        for name in names:
-            candidate = base / name
-            if not candidate.is_file():
-                continue
-            try:
-                text = candidate.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            return text.replace("{workspace_root}", str(ws.root)).replace(
-                "{projects_root}", _projects_root(ws)
-            )
+
+    def _found(text):
+        return text.replace("{workspace_root}", str(ws.root)).replace(
+            "{projects_root}", _projects_root(ws)
+        )
+
+    # The workspace copy is a real directory; the packaged fallback may live
+    # inside a zipapp, where paths do not exist. Hence two readers rather than
+    # one loop over two bases.
+    for name in names:
+        candidate = ws.prompts / name
+        try:
+            if candidate.is_file():
+                return _found(candidate.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    for name in names:
+        text = resources.read_text("prompts", name)
+        if text is not None:
+            return _found(text)
     return None
 
 
@@ -921,6 +929,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except WorkspaceError as exc:
         _err("error: %s" % exc)
         return EXIT_USAGE
+
+    # The catalog above could only see the flag and the environment, because a
+    # workspace had not been resolved yet and config.jsonc lives inside one.
+    # Reload once it can: otherwise a workspace that sets "locale": "zh" still
+    # gets English from every command that does not go through a stage.
+    if not locale and not os.environ.get(ENV_LOCALE):
+        configured = _load_config(ws).get("locale")
+        if configured:
+            try:
+                cat = load_catalog(configured)
+                locale = str(configured)
+            except (OSError, ValueError) as exc:
+                _err("warning: locale %r from config is unusable (%s)" % (configured, exc))
 
     _export_env(ws, locale)
     try:

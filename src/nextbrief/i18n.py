@@ -12,17 +12,18 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Dict
+
+from . import resources
 
 __all__ = ["Catalog", "load_catalog", "available_locales", "DEFAULT_LOCALE"]
 
 DEFAULT_LOCALE = "en"
-_LOCALE_DIR = Path(__file__).resolve().parent / "locales"
+_LOCALE_DIR = "locales"
 
 
 def available_locales() -> list:
-    return sorted(p.stem for p in _LOCALE_DIR.glob("*.json"))
+    return [n[: -len(".json")] for n in resources.list_names(_LOCALE_DIR, ".json")]
 
 
 class Catalog:
@@ -60,12 +61,12 @@ class Catalog:
 
 
 def _read(locale: str) -> Dict[str, str]:
-    path = _LOCALE_DIR / ("%s.json" % locale)
-    if not path.is_file():
+    raw = resources.read_text(_LOCALE_DIR, "%s.json" % locale)
+    if raw is None:
         raise FileNotFoundError(
             "unknown locale %r (available: %s)" % (locale, ", ".join(available_locales()))
         )
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(raw)
 
 
 def load_catalog(locale=None) -> Catalog:
