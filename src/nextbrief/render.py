@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -1038,13 +1039,22 @@ def notify_body(meta, brief_obj, cat: Catalog) -> str:
     return body
 
 
-def _send_notification(cfg, meta, brief_obj, cat: Catalog) -> bool:
+def _send_notification(cfg, meta, brief_obj, cat: Catalog, ws=None) -> bool:
     """Delegate to the sink layer. Wrapped because a desktop notification failing
     is never a reason for the run to fail."""
     title = ((cfg or {}).get("notify") or {}).get("title") or cat.t("notify.title")
+    # Clicking the notification should land on the brief it is announcing. Sinks
+    # that cannot attach an action ignore this and still deliver the text.
+    open_url = None
+    if ws is not None:
+        try:
+            if ws.brief_html.is_file():
+                open_url = ws.brief_html.resolve().as_uri()
+        except (OSError, ValueError):
+            open_url = None
     try:
         from .sinks import notify as sink_notify
-        return bool(sink_notify(title, notify_body(meta, brief_obj, cat), cfg))
+        return bool(sink_notify(title, notify_body(meta, brief_obj, cat), cfg, open_url=open_url))
     except Exception as exc:                                   # noqa: BLE001 - fail-open
         print("notification skipped: %s" % exc, file=sys.stderr)
         return False
@@ -1082,7 +1092,13 @@ def main(argv=None) -> int:
     except JSONCError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    cat = load_catalog(args.locale or cfg.get("locale"))
+    # Precedence: flag, then environment, then config, then the default. The
+    # environment has to outrank config because that is how the CLI forwards a
+    # global --locale to this stage; with config first, `nextbrief --locale zh`
+    # was silently ignored and only editing config.jsonc had any effect.
+    cat = load_catalog(
+        args.locale or os.environ.get("NEXTBRIEF_LOCALE") or cfg.get("locale")
+    )
 
     if not ws.snapshot.exists():
         print("no snapshot at %s -- run `nextbrief sense` first" % ws.snapshot, file=sys.stderr)
@@ -1231,7 +1247,7 @@ def main(argv=None) -> int:
     do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes)
     notified = False
     if do_notify and not args.no_notify:
-        notified = _send_notification(cfg, meta, brief, cat)
+        notified = _send_notification(cfg, meta, brief, cat, ws)
 
     # ★ Success sentinel. Never trust a green check: a scheduler reports green
     #   when the session exited without an infrastructure error, which says
