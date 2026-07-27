@@ -17,12 +17,17 @@
 #   mkdir -p homebrew-tap/Formula
 #   cp packaging/homebrew/nextbrief.rb homebrew-tap/Formula/nextbrief.rb
 #
-# Fill in the checksum from the published release asset, then push:
+# On every later release, bump `version` and re-derive the checksum from the
+# published asset -- the url is built from `version`, so one edit moves both:
 #
-#   curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0/nextbrief-0.1.0.tar.gz
-#   shasum -a 256 nextbrief-0.1.0.tar.gz     # paste over REPLACE_WITH_RELEASE_SHA256
+#   V=0.1.0rc1
+#   curl -fsSLO "https://github.com/hancheng-ai/nextbrief/releases/download/v$V/nextbrief-$V.tar.gz"
+#   shasum -a 256 "nextbrief-$V.tar.gz"      # paste over the sha256 below
 #   cd homebrew-tap
-#   git add Formula/nextbrief.rb && git commit -m "nextbrief 0.1.0" && git push
+#   git add Formula/nextbrief.rb && git commit -m "nextbrief $V" && git push
+#
+# The same digest is in the release's own SHA256SUMS asset, and GitHub reports it
+# without a download: `gh release view v$V --json assets`.
 #
 # Install and verify from the tap:
 #
@@ -31,9 +36,10 @@
 #   brew test nextbrief
 #   brew audit --strict --online <owner>/tap/nextbrief
 #
-# Before the tap exists, or before a release is tagged, the head stanza already
-# works from this file alone:
+# The tap does not exist yet. Until it does, this file installs on its own --
+# either from the pinned release below, or from `main` via the head stanza:
 #
+#   brew install --build-from-source ./packaging/homebrew/nextbrief.rb
 #   brew install --HEAD --build-from-source ./packaging/homebrew/nextbrief.rb
 
 class Nextbrief < Formula
@@ -45,11 +51,24 @@ class Nextbrief < Formula
   # file the release workflow built, checked with `twine check` and covered by a
   # build-provenance attestation; the auto-generated archive is regenerated on
   # demand and is attested by nothing.
-  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0/nextbrief-0.1.0.tar.gz"
-  sha256 "REPLACE_WITH_RELEASE_SHA256" # REPLACE_WITH_RELEASE_SHA256 -- shasum -a 256 of the tarball above
+  #
+  # Three literals to bump together on a release: the tag in the path, the
+  # filename, and `version`. They are spelled out rather than interpolated
+  # because Homebrew audits the stanza order (url, version, sha256), which leaves
+  # nothing to interpolate from at the point the url is written.
+  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc1/nextbrief-0.1.0rc1.tar.gz"
+  # Declared rather than inferred from the filename: `0.1.0rc1` is exactly the
+  # kind of string Homebrew's parser is entitled to read as `0.1.0-rc1`, and the
+  # test block compares `version` against what the binary prints.
+  version "0.1.0rc1"
+  sha256 "4365dc8c6ccfa22708441072ff8ddc8149c8ea29cd1bda3249e34b27c670f349"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"
 
+  # Deliberately silent while the newest release is a prerelease: `github_latest`
+  # reads the `/releases/latest` endpoint, which skips prereleases. That is the
+  # behaviour we want -- an rc should not arrive on someone's machine because
+  # `brew upgrade` found it.
   livecheck do
     url :stable
     strategy :github_latest
@@ -70,8 +89,21 @@ class Nextbrief < Formula
     # __file__, precisely so that they resolve from inside an archive. See the
     # module docstring in src/nextbrief/resources.py.
     python = Formula["python@3.12"].opt_bin/"python3.12"
+
+    # An explicit __main__.py rather than `--main`. The shim zipapp generates for
+    # `--main pkg:func` calls the function and throws the return value away, so
+    # every exit code becomes 0: `check` could never report 3, and a scheduler
+    # running `nextbrief check || nextbrief run` would never re-run. Staging the
+    # entry point by hand is the only way to get `sys.exit(main())` into it.
+    # scripts/build-zipapp.sh does the same thing for the released artifact.
+    (buildpath/"src/__main__.py").write <<~PY
+      import sys
+
+      from nextbrief.cli import main
+
+      sys.exit(main())
+    PY
     system python, "-m", "zipapp", "src",
-           "--main", "nextbrief.cli:main",
            "--compress",
            "--output", "nextbrief.pyz"
     libexec.install "nextbrief.pyz"
@@ -91,6 +123,16 @@ class Nextbrief < Formula
   end
 
   test do
+    # 0. Fence the test off from the machine it runs on, before anything runs.
+    #    `nextbrief init` writes a pointer file at $XDG_CONFIG_HOME/nextbrief/
+    #    workspace (falling back to ~/.config), and that pointer is how every
+    #    later invocation finds the workspace. Unredirected, `brew test` would
+    #    repoint a real user's daily brief at Homebrew's scratch directory --
+    #    silently, and only discovered the next morning when the nightly run
+    #    reports on nothing.
+    ENV["HOME"] = testpath
+    ENV["XDG_CONFIG_HOME"] = testpath/"config"
+
     # 1. The binary reports the version this formula claims to have installed.
     #    A stale bottle, or a url pinned to the wrong tag, shows up here and
     #    essentially nowhere else.
@@ -111,9 +153,24 @@ class Nextbrief < Formula
     system bin/"nextbrief", "init", testpath, "-y", "--no-scan"
     assert_path_exists testpath/"registry.jsonc"
 
-    system bin/"nextbrief", "--workspace", testpath, "v0"
+    # --no-notify because a passing test must not put a banner on someone's
+    # screen. `v0` forwards unrecognised arguments to the render stage, which is
+    # where the flag lives.
+    system bin/"nextbrief", "--workspace", testpath, "v0", "--no-notify"
     assert_path_exists testpath/"BRIEF.md"
     assert_path_exists testpath/"BRIEF.html"
     assert_match "nextbrief render", (testpath/"BRIEF.md").read
+
+    # Failure has to be asserted too, not just success. The released zipapp once
+    # shipped with an entry point that discarded main()'s return value, so every
+    # error exited 0 while every happy path still worked -- a test that only
+    # checks success paths passes a build that can never report a failure.
+    #
+    # `shell_output` with an expected status fails the test if the status differs,
+    # so these two lines are what would have caught it.
+    shell_output("#{bin}/nextbrief --workspace /nonexistent/nope ls 2>&1", 2)
+
+    rm testpath/"state/snapshot.json"
+    shell_output("#{bin}/nextbrief --workspace #{testpath} check 2>&1", 3)
   end
 end
