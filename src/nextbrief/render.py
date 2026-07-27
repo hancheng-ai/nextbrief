@@ -1,0 +1,1263 @@
+#!/usr/bin/env python3
+"""Stage 3 -- four gates, hard caps, two renderings. No model involved.
+
+★ This module is where the design lives. ★
+
+Checking evidence at *render* time is what turns "do not invent progress" from a
+line in a prompt (which a model can drift away from) into a property of the
+pipeline (which drift cannot defeat). The same argument applies to length: an
+instruction to "be brief" degrades over time, a renderer that truncates does not.
+
+Design contract (see README, "design contract"):
+  * reads snapshot / brief / backlog; writes only derived files, only inside the
+    workspace -- every write is asserted against ``Workspace.contains``
+  * decides nothing: no item is ever moved to a terminal status, and field edits
+    an agent was not allowed to make are reverted
+  * idempotent: identical inputs produce byte-identical output. Timestamps are
+    read from the snapshot, never from the clock, and unchanged files are not
+    rewritten -- the workspace is itself a watched project, so a pointless write
+    would register as "activity" and make the whole pipeline non-idempotent
+  * fail-open: every step leaves a trace and carries on; nothing aborts the run
+
+The four gates:
+
+1. **evidence** -- a claim whose ``evidence.source`` does not resolve in
+   ``snapshot.evidence_index`` is *not rendered*; the original goes to
+   ``log/rejected.jsonl``.
+2. **non-goals** -- flag, never block. Silently deleting a good suggestion is
+   worse than one visible false positive.
+3. **write permission** -- field-level diff against ``git HEAD``; fields only a
+   human may write are reverted. This is the mechanical enforcement of "no agent
+   may set a terminal status", so it reports loudly when it cannot run.
+4. **caps** -- the overflow goes to ``log/deferred.jsonl``, which is how the
+   brief is made physically unable to grow.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, NamedTuple, Optional
+
+from .frontmatter import parse_frontmatter, rewrite_fields
+from .i18n import Catalog, load_catalog
+from .jsonc import JSONCError, load_jsonc
+from .paths import Workspace, WorkspaceError, expand, resolve_workspace
+
+__all__ = [
+    "main", "classify", "render_brief", "score_project", "evidence_phrase",
+    "check_evidence", "non_goal_flag", "enforce_write_permissions",
+    "should_notify", "write_day_log", "append_jsonl", "read_prev_run",
+]
+
+GENERATOR = "nextbrief render"
+
+# Fields an agent must never write. See docs, "what the daily pass may write".
+HUMAN_ONLY_FIELDS = ["priority", "is_next_action", "human_confirmed", "project", "id", "created_by"]
+TERMINAL_STATUSES = ("done", "dropped")
+OPEN_STATUSES = ("open", "in_progress", "waiting")
+
+WEEKDAY_KEYS = [
+    "brief.weekday.mon", "brief.weekday.tue", "brief.weekday.wed", "brief.weekday.thu",
+    "brief.weekday.fri", "brief.weekday.sat", "brief.weekday.sun",
+]
+
+GIT_TIMEOUT = 10
+
+# A missing config key must not take down the nightly run, so the numbers that
+# actually bound the output have defaults here as well as in the shipped config.
+CAP_DEFAULTS = {
+    "max_next_actions": 3, "max_waiting_for": 5, "max_agent_queue": 3,
+    "max_decision_pending": 3, "per_project_line_chars": 140, "brief_max_lines": 60,
+}
+LIMIT_DEFAULTS = {"max_open_items_total": 40, "max_open_per_project": 5}
+SCORING_DEFAULTS = {
+    "half_life_days": 21, "decay_floor": 0.3, "deadline_boost_max": 3.0,
+    "tier_weight": {"flagship": 1.3, "active": 1.0, "maintenance": 0.6, "dormant": 0.4},
+}
+
+
+def caps_of(cfg) -> Dict[str, Any]:
+    merged = dict(CAP_DEFAULTS)
+    merged.update((cfg or {}).get("caps") or {})
+    return merged
+
+
+def limits_of(cfg) -> Dict[str, Any]:
+    merged = dict(LIMIT_DEFAULTS)
+    merged.update((cfg or {}).get("limits") or {})
+    return merged
+
+
+def scoring_of(cfg) -> Dict[str, Any]:
+    merged = dict(SCORING_DEFAULTS)
+    merged.update((cfg or {}).get("scoring") or {})
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# workspace-scoped IO. Every write goes through here.
+# ---------------------------------------------------------------------------
+
+def _inside(ws: Workspace, path) -> bool:
+    return ws.contains(path)
+
+
+def write_text(ws: Workspace, path, text: str) -> bool:
+    """Write `text` to `path` if it differs. Returns True if the file changed.
+
+    Two invariants live in these six lines. The containment check makes the
+    engine *structurally* unable to write outside the workspace -- not a rule
+    someone has to remember, a precondition. Skipping identical content keeps
+    mtimes stable, without which a re-run of an unchanged tree would look like
+    fresh activity to the sensing stage.
+    """
+    p = Path(path)
+    if not _inside(ws, p):
+        raise WorkspaceError("refusing to write outside the workspace: %s" % p)
+    try:
+        if p.read_text(encoding="utf-8") == text:
+            return False
+    except (OSError, UnicodeDecodeError):
+        pass
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return True
+
+
+def append_jsonl(ws: Workspace, path, obj) -> bool:
+    """Append one JSON object. Log writes fail silently -- losing a log line is
+    never a reason to abandon a run that has real output to produce."""
+    p = Path(path)
+    if not _inside(ws, p):
+        return False
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(p), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(obj, ensure_ascii=False, sort_keys=True) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def _run(args, cwd=None, timeout=GIT_TIMEOUT):
+    """(ok, stdout). Never raises -- fail-open.
+
+    Deliberately local rather than imported from the sensing stage: rendering
+    must not depend on the module that walks the filesystem.
+    """
+    try:
+        proc = subprocess.run(
+            args, cwd=cwd, timeout=timeout,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return False, ""
+    if proc.returncode != 0:
+        return False, ""
+    return True, proc.stdout.decode("utf-8", "replace")
+
+
+# ---------------------------------------------------------------------------
+# inputs
+# ---------------------------------------------------------------------------
+
+def load_backlog(ws: Workspace, rejected: List[dict]) -> List[dict]:
+    items: List[dict] = []
+    if not ws.backlog.is_dir():
+        return items
+    for f in sorted(ws.backlog.glob("*.md")):
+        if f.name.startswith("_"):
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm, body = parse_frontmatter(text)
+        if fm is None:
+            rejected.append({"kind": "backlog_parse", "file": f.name,
+                             "why": "frontmatter did not parse"})
+            continue
+        fm["_file"] = f.name
+        fm["_path"] = str(f)
+        fm["_body"] = body
+        items.append(fm)
+    return items
+
+
+def self_project_ids(snap, reg=None, ws=None):
+    """Ids of the entry (if any) that represents the workspace itself.
+
+    A workspace registered in its own registry is a good idea -- it gets judged
+    by its own decay rules, which is a built-in way for the tool to tell you it
+    has stopped being worth keeping. But it must never appear in its own
+    portfolio counts, or "nextbrief ran" reads as "you made progress".
+
+    Detected three ways so that no single convention has to hold: an explicit
+    ``self`` flag on the entry, ``self_project`` in the registry, or a declared
+    path that resolves to the workspace root.
+    """
+    ids = set()
+    reg = reg or {}
+    declared = reg.get("self_project")
+    if declared:
+        ids.add(declared)
+    root = None
+    if ws is not None:
+        base = (reg.get("defaults") or {}).get("root")
+        root = expand(base) if base else ws.root
+    for p in (snap.get("projects") or []):
+        if p.get("self") or p.get("is_self"):
+            ids.add(p.get("id"))
+            continue
+        if root is None or ws is None:
+            continue
+        for rel in (p.get("paths") or []):
+            try:
+                if (root / rel).resolve() == ws.root.resolve():
+                    ids.add(p.get("id"))
+                    break
+            except OSError:
+                continue
+    return ids
+
+
+# ---------------------------------------------------------------------------
+# Gate 3: write permissions. An agent may retract its own guesses; it may never
+# touch your commitments.
+# ---------------------------------------------------------------------------
+
+class WriteGate(NamedTuple):
+    """Tri-state outcome, recorded in log/runs.jsonl.
+
+    An ``int`` return could not distinguish "checked everything, found nothing"
+    from "never ran". Since this gate is the enforcement mechanism for the one
+    rule the whole system rests on, that ambiguity was the bug: a machine with
+    no git binary reported a clean run forever.
+    """
+
+    state: str          # "ran" | "no_repo" | "no_commits"
+    reverted: int
+    detail: str         # developer-facing; why it could not run
+
+
+def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> WriteGate:
+    """Diff each backlog entry against git HEAD field by field and revert what an
+    agent was not allowed to change.
+
+    The baseline is ``HEAD:<prefix>backlog/<file>`` where ``prefix`` is the
+    workspace's own position inside the repository -- assuming the workspace sits
+    at the repository root silently disables the gate for anyone who keeps their
+    vault in a subdirectory.
+    """
+    git = shutil.which("git")
+    if git is None:
+        rejected.append({"kind": "gate_disabled", "gate": "write_permissions",
+                         "why": "git executable not found on PATH"})
+        return WriteGate("no_repo", 0, "git-missing")
+
+    ok, top = _run([git, "-C", str(ws.root), "rev-parse", "--show-toplevel"])
+    if not ok or not top.strip():
+        rejected.append({"kind": "gate_disabled", "gate": "write_permissions",
+                         "why": "workspace is not inside a git repository"})
+        return WriteGate("no_repo", 0, "no-repo")
+    ok, prefix = _run([git, "-C", str(ws.root), "rev-parse", "--show-prefix"])
+    prefix = prefix.strip() if ok else ""
+
+    # If toplevel+prefix is not the workspace we asked about, we are reading
+    # somebody else's history -- reverting fields from it would be worse than
+    # not checking at all.
+    try:
+        located = (Path(top.strip()) / prefix).resolve() == ws.root.resolve()
+    except OSError:
+        located = False
+    if not located:
+        rejected.append({"kind": "gate_disabled", "gate": "write_permissions",
+                         "why": "git toplevel + prefix does not resolve to the workspace root",
+                         "toplevel": top.strip(), "prefix": prefix})
+        return WriteGate("no_repo", 0, "prefix-mismatch")
+
+    ok, _ = _run([git, "-C", str(ws.root), "rev-parse", "HEAD"])
+    if not ok:
+        return WriteGate("no_commits", 0, "repository has no commits yet")
+
+    reverted = 0
+    for it in items:
+        rel = "%s%s/%s" % (prefix, ws.backlog.name, it["_file"])
+        got, old_text = _run([git, "-C", str(ws.root), "show", "HEAD:" + rel])
+        if not got or not old_text.strip():
+            continue  # new entry, no baseline
+        old_fm, _body = parse_frontmatter(old_text)
+        if not old_fm:
+            continue
+
+        bad = []
+        for field in HUMAN_ONLY_FIELDS:
+            if field in old_fm and it.get(field) != old_fm.get(field):
+                bad.append((field, old_fm.get(field), it.get(field)))
+        # Terminal statuses are written by humans only.
+        if str(it.get("status", "")).lower() in TERMINAL_STATUSES and \
+           str(old_fm.get("status", "")).lower() not in TERMINAL_STATUSES:
+            bad.append(("status", old_fm.get("status"), it.get("status")))
+        # Once you have confirmed an entry, its automation block freezes too.
+        if old_fm.get("human_confirmed") is True and it.get("automation") != old_fm.get("automation"):
+            bad.append(("automation", old_fm.get("automation"), it.get("automation")))
+
+        if not bad:
+            continue
+
+        # Nested blocks are restored in memory only: the frontmatter writer works
+        # a line at a time, and flattening a mapping into one line would destroy
+        # more than the illegal edit did.
+        on_disk = {}
+        for field, oldv, newv in bad:
+            it[field] = oldv
+            scalar = not isinstance(oldv, (dict, list))
+            if scalar:
+                on_disk[field] = oldv
+            rejected.append({
+                "kind": "illegal_field_write", "file": it["_file"], "field": field,
+                "reverted_to": oldv, "attempted": newv,
+                "restored": "file" if scalar else "memory-only",
+                "why": "field is human-writable only",
+            })
+            reverted += 1
+        if not dry_run and on_disk and _inside(ws, it["_path"]):
+            try:
+                rewrite_fields(Path(it["_path"]), on_disk)
+            except OSError:
+                pass
+    return WriteGate("ran", reverted, "")
+
+
+# ---------------------------------------------------------------------------
+# Gate 1: evidence
+# ---------------------------------------------------------------------------
+
+def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
+    """True if the claim may be rendered. A claim whose source does not resolve
+    is *not rendered* -- there is no "render it with a warning" option, because a
+    warning next to a fabricated sentence still reads as a fact."""
+    evs = claim.get("evidence") or []
+    if not evs:
+        rejected.append({"kind": "no_evidence", "where": where,
+                         "text": str(claim.get("text", claim.get("title", "")))[:300],
+                         "why": "claim carries no evidence array"})
+        return False
+    pat = (cfg.get("evidence") or {}).get("none_allowed_pattern")
+    if not pat and cat is not None:
+        pat = cat.t("evidence.none_allowed_pattern")
+    for ev in evs:
+        kind = ev.get("kind")
+        src = ev.get("source")
+        if kind == "none":
+            # The only legitimate use: "no signal since X".
+            if pat and pat in str(claim.get("text", "")):
+                continue
+            rejected.append({"kind": "bad_none", "where": where,
+                             "text": str(claim.get("text", claim.get("title", "")))[:300],
+                             "why": "kind=none is only allowed with the %r phrasing" % pat})
+            return False
+        if not src or src not in index:
+            rejected.append({"kind": "unresolvable_evidence", "where": where,
+                             "text": str(claim.get("text", claim.get("title", "")))[:300],
+                             "source": src, "evidence_kind": kind,
+                             "why": "source does not resolve in snapshot.evidence_index"})
+            return False
+        # ★ Only commit / session get their kind checked. ★
+        #
+        # This gate exists to stop *fabrication*, not *imprecision*. An
+        # unresolvable source is fabrication and must go. But one source often
+        # legitimately supports several kinds -- a status document has both a
+        # self-declared date and an mtime; a backlog file is a file, a
+        # human statement, and a structured document at once. Being strict here
+        # would silently delete correct claims, which is far worse than an
+        # occasionally loose label.
+        #
+        # commit and session are the exception: they assert visibly more
+        # confidence ("178 commits" vs "some file was touched"). Citing a file
+        # path to support a commit count really is misleading.
+        entry = index.get(src) or {}
+        kinds = entry.get("kinds") or ([entry["kind"]] if entry.get("kind") else [])
+        if kind in ("commit", "session") and kinds and kind not in kinds:
+            rejected.append({"kind": "evidence_kind_mismatch", "where": where,
+                             "source": src, "declared": kind, "actual": kinds,
+                             "why": "that source cannot supply %s-grade evidence" % kind})
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Gate 2: non-goals (flag, do not block)
+# ---------------------------------------------------------------------------
+
+SEP_RE = r"[\s/·、，,()（）:：\-—_*`]"
+
+
+def non_goal_flag(text, non_goals):
+    """Flag rather than block: silently dropping a good suggestion is worse than
+    one false positive.
+
+    Both sides must be normalised the same way, or a declared non-goal written
+    with spaces around its separator will never match the same words written
+    without them. Case folds too: in a language that has case, "Build a mobile
+    app" and "build a mobile app" are the same non-goal, and a gate that misses
+    that is a gate that quietly does nothing.
+    """
+    if not non_goals or not text:
+        return None
+    t = re.sub(SEP_RE, "", text).lower()
+    for ng in non_goals:
+        core = re.sub(SEP_RE, "", ng).lower()
+        if len(core) >= 3 and core in t:
+            return ng
+    return None
+
+
+# ---------------------------------------------------------------------------
+# ranking
+# ---------------------------------------------------------------------------
+
+def score_project(p, cfg):
+    ice = p.get("ice") or {"impact": 3, "confidence": 3, "effort": 3}
+    imp = ice.get("impact", 3) or 3
+    conf = ice.get("confidence", 3) or 3
+    eff = max(1, ice.get("effort", 3) or 3)
+    base = (imp * conf) / float(eff)
+
+    days = (p.get("evidence") or {}).get("days_since")
+    sc = scoring_of(cfg)
+    floor = sc["decay_floor"]
+    if days is None:
+        decay = 1.0
+    else:
+        decay = 0.5 ** (days / float(sc["half_life_days"]))
+    # ★ Why the floor: pure decay buries exactly the thing you are avoiding.
+    decay_term = floor + (1.0 - floor) * decay
+
+    boost = 1.0
+    for d in p.get("deadlines") or []:
+        if d.get("days_until", 0) < 0:
+            boost = max(boost, 1.0 + sc["deadline_boost_max"])
+        elif d.get("in_lead_window") and d.get("lead_days"):
+            frac = (d["lead_days"] - d["days_until"]) / float(d["lead_days"])
+            boost = max(boost, 1.0 + sc["deadline_boost_max"] * max(0.0, frac))
+
+    tw = (sc.get("tier_weight") or {}).get(p.get("tier") or "active", 1.0)
+    return base * decay_term * boost * tw
+
+
+# ---------------------------------------------------------------------------
+# classification -- computed once, consumed by both renderings
+# ---------------------------------------------------------------------------
+
+def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
+    """Decide, once, which projects are stalled / neglected / awaiting a decision.
+
+    Both BRIEF.md and BRIEF.html consume this result and neither is allowed to
+    reach its own verdict; that is the only reason the two artifacts cannot drift
+    apart.
+    """
+    projects = snap.get("projects") or []
+    self_ids = self_project_ids(snap, reg, ws)
+    ranked = sorted(projects, key=lambda p: (-score_project(p, cfg), str(p.get("id"))))
+
+    open_items = [b for b in backlog
+                  if str(b.get("status", "open")).lower() in OPEN_STATUSES]
+    by_proj: Dict[Any, List[dict]] = {}
+    for b in open_items:
+        by_proj.setdefault(b.get("project"), []).append(b)
+
+    # An empty backlog means "not bootstrapped yet", not "everything is stalled".
+    # Conflating the two turns the very first brief into eight lines of noise,
+    # and noise is how systems like this die.
+    bootstrapped = len(backlog) > 0
+
+    decision_pending, stalled, neglected = [], [], []
+    for p in projects:
+        pid = p.get("id")
+        if pid in self_ids:
+            continue
+        has_next = any(b.get("is_next_action") for b in by_proj.get(pid, []))
+        if p.get("blocked_by") == "decision" and p.get("open_decision"):
+            decision_pending.append(p)
+            continue
+        # A project with its own daily entry point is never "stalled": its next
+        # step lives elsewhere, and we rank it without restating its contents.
+        if p.get("has_own_daily_entry"):
+            continue
+        ev = p.get("evidence") or {}
+        if p.get("tier") in ("flagship", "active"):
+            if bootstrapped and not has_next and not by_proj.get(pid):
+                stalled.append(p)
+            d = ev.get("days_since")
+            if d is not None and d > (p.get("neglect_days") or 30):
+                neglected.append(p)
+        elif p.get("tier") == "dormant" and bootstrapped:
+            g = (p.get("git") or [{}])[0]
+            if g.get("uncommitted"):
+                stalled.append(p)
+
+    return {
+        "ranked": ranked,
+        "decision_pending": decision_pending,
+        "stalled": stalled,
+        "neglected": neglected,
+        "open": open_items,
+        "open_items": len(open_items),
+        "by_project": by_proj,
+        "self_ids": self_ids,
+        "bootstrapped": bootstrapped,
+        "truncated_lines": 0,
+        "decision_ids": {p.get("id") for p in decision_pending},
+        "stalled_ids": {p.get("id") for p in stalled},
+        "neglected_ids": {p.get("id") for p in neglected},
+    }
+
+
+# ---------------------------------------------------------------------------
+# rendering
+# ---------------------------------------------------------------------------
+
+SIGNAL_KEYS = {"hot": "signal.hot", "warm": "signal.warm", "cold": "signal.cold",
+               "dormant": "signal.dormant", "unknown": "signal.unknown"}
+TIER_KEYS = {"hook": "action.tier.hook", "skill": "action.tier.skill",
+             "explore": "action.tier.explore"}
+
+
+def evidence_phrase(p, cat: Catalog) -> str:
+    """★ The brief must name the kind of signal it is quoting.
+    "76 files changed (file mtimes; no git here)" and "178 commits" should not
+    read the same, because they are not the same claim."""
+    ev = p.get("evidence") or {}
+    fs = p.get("fs") or {}
+    changed = fs.get("changed") or {}
+    bits = []
+    if p.get("has_git") and p.get("git"):
+        r = p["git"][0]
+        c30 = (r.get("commits_since") or {}).get("30")
+        if c30:
+            bits.append(cat.t("evidence.commits_30d", count=c30))
+        lc = r.get("last_commit")
+        if lc:
+            bits.append(cat.t("evidence.last_commit", date=lc.get("date", "")))
+        if r.get("uncommitted"):
+            bits.append(cat.t("evidence.uncommitted", count=r["uncommitted"]))
+    ch7 = changed.get("7") or 0
+    if ch7:
+        bits.append(cat.t("evidence.files_7d", count=ch7))
+    ad = fs.get("distinct_active_days_30d") or 0
+    if ad:
+        bits.append(cat.t("evidence.active_days_30d", count=ad))
+    s = p.get("sessions") or {}
+    if s.get("distinct_session_days"):
+        bits.append(cat.t("evidence.session_days", count=s["distinct_session_days"]))
+    if not bits:
+        bits.append(cat.t("evidence.no_signal_since",
+                          date=ev.get("best_date") or cat.t("evidence.unknown_date")))
+    if ev.get("caveat"):
+        bits.append(cat.t("evidence.caveat_mtime"))
+    return cat.t("sep.dot").join(bits)
+
+
+def _first_clause(text, cat: Catalog) -> str:
+    """First clause only. The detail lives in the backlog file; the brief keeps
+    just "what is left for the human", because that is the part you decide on."""
+    s = str(text or "")
+    for ch in cat.t("text.sentence_enders"):
+        s = s.split(ch)[0]
+    return s.strip()
+
+
+def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None):
+    run = snap.get("run") or {}
+    gen = dt.datetime.fromisoformat(run["generated_at"])
+    as_of = dt.date.fromisoformat(run["as_of_date"])
+    caps = caps_of(cfg)
+    limits = limits_of(cfg)
+    if meta is None:
+        meta = classify(snap, backlog, cfg, reg)
+    L: List[str] = []
+
+    ranked = meta["ranked"]
+    self_ids = meta["self_ids"]
+    by_proj = meta["by_project"]
+    open_items = meta["open"]
+    dec_ids, stall_ids, neg_ids = meta["decision_ids"], meta["stalled_ids"], meta["neglected_ids"]
+    decision_pending, stalled, neglected = meta["decision_pending"], meta["stalled"], meta["neglected"]
+    tracked = [p for p in (snap.get("projects") or []) if p.get("id") not in self_ids]
+
+    # ---- header ----
+    L.append("# " + cat.t("brief.header.title", date=as_of.isoformat(),
+                          weekday=cat.t(WEEKDAY_KEYS[as_of.weekday()]),
+                          time=gen.strftime("%H:%M")))
+    head = []
+    prev = notes.get("prev_run")
+    if prev is None:
+        head.append(cat.t("brief.header.first_run"))
+    elif prev.get("ok"):
+        head.append(cat.t("brief.header.prev_ok", at=str(prev.get("at", ""))[:16].replace("T", " ")))
+    else:
+        head.append(cat.t("brief.header.prev_incomplete"))
+    head.append(cat.t("brief.header.projects", count=len(tracked)))
+    if decision_pending:
+        head.append(cat.t("brief.header.decision_pending", count=len(decision_pending)))
+    if stalled:
+        head.append(cat.t("brief.header.stalled", count=len(stalled)))
+    if neglected:
+        head.append(cat.t("brief.header.neglected", count=len(neglected)))
+    head.append(cat.t("brief.header.backlog", count=len(open_items)))
+    L.append("> " + " | ".join(head))
+    L.append("")
+
+    if run.get("late"):
+        hrs = (run.get("lateness_minutes") or 0) // 60
+        L.append("> " + cat.t("brief.banner.late", slot=run.get("planned_slot", ""), hours=hrs))
+        L.append("")
+    if notes.get("stale_brief_days"):
+        L.append("> " + cat.t("brief.banner.stale", days=notes["stale_brief_days"]))
+        L.append("")
+    if len(open_items) >= limits["max_open_items_total"]:
+        L.append("> " + cat.t("brief.banner.backlog_full",
+                              max=limits["max_open_items_total"],
+                              command="nextbrief prune"))
+        L.append("")
+
+    # ---- do these first (whole portfolio) ----
+    nexts = (brief or {}).get("next_actions") or []
+    if nexts:
+        L.append("## " + cat.t("brief.section.next_actions"))
+        for i, a in enumerate(nexts[:caps["max_next_actions"]], 1):
+            who = a.get("who") or cat.t("brief.action.who_default")
+            est = (cat.t("sep.dot") + a["estimate"]) if a.get("estimate") else ""
+            tier = ""
+            if a.get("automation_tier") in TIER_KEYS:
+                tier = cat.t("sep.dot") + cat.t(TIER_KEYS[a["automation_tier"]])
+            L.append("%d. **%s**%s%s%s%s"
+                     % (i, a.get("title", "?"), est, cat.t("sep.dot"), who, tier))
+            if a.get("evidence_line"):
+                L.append("   " + cat.t("brief.action.evidence_line", text=a["evidence_line"]))
+            if a.get("why"):
+                L.append("   %s" % a["why"])
+            if a.get("non_goal_flag"):
+                L.append("   " + cat.t("brief.action.non_goal_flag", non_goal=a["non_goal_flag"]))
+        L.append("")
+    else:
+        # v0: with no model in the loop, deterministic rules still answer
+        # "what is most time-critical", which is the part that does not need one.
+        urgent = []
+        for p in ranked:
+            if p.get("id") in self_ids:
+                continue
+            for d in p.get("deadlines") or []:
+                if d.get("in_lead_window") or d.get("overdue"):
+                    urgent.append(cat.t("brief.urgent_line", project=p.get("name", ""),
+                                        label=d.get("label", ""), days=d.get("days_until", 0)))
+        if urgent:
+            L.append("## " + cat.t("brief.section.most_urgent"))
+            for u in urgent[:caps["max_next_actions"]]:
+                L.append("- " + u)
+            L.append("")
+        L.append("> " + cat.t("brief.v0_note", command="nextbrief run"))
+        L.append("")
+
+    # ---- one line per project ----
+    L.append("## " + cat.t("brief.section.projects"))
+    L.append("")
+    L.append("| %s | %s | %s | %s |" % (cat.t("brief.table.project"), cat.t("brief.table.signal"),
+                                        cat.t("brief.table.evidence"), cat.t("brief.table.next")))
+    L.append("|---|---|---|---|")
+    prose = {c.get("project"): c for c in ((brief or {}).get("project_lines") or [])}
+    for p in ranked:
+        pid = p.get("id")
+        if pid in self_ids:
+            continue
+        ev = p.get("evidence") or {}
+        sig = cat.t(SIGNAL_KEYS.get(ev.get("signal"), "signal.unknown"))
+        if pid in dec_ids:
+            sig = cat.t("brief.signal.decision_pending")
+        elif pid in neg_ids:
+            sig = cat.t("brief.signal.neglected", days=ev.get("days_since"))
+        nxt = ""
+        if pid in dec_ids:
+            nxt = cat.t("brief.next.decision")
+        elif p.get("has_own_daily_entry"):
+            # ★ A project with its own daily entry gets a count and a link, never
+            #   a retelling. Two places describing the same work is how they
+            #   start disagreeing.
+            n = ((brief or {}).get("delegated") or {}).get(pid)
+            nxt = n if n else cat.t("brief.next.delegated",
+                                    file=Path(str(p["has_own_daily_entry"])).name)
+        else:
+            na = [b for b in by_proj.get(pid, []) if b.get("is_next_action")]
+            if na:
+                nxt = "`%s` %s" % (na[0].get("id", ""), str(na[0].get("title", ""))[:40])
+            elif prose.get(pid, {}).get("next"):
+                nxt = prose[pid]["next"]
+            elif pid in stall_ids:
+                nxt = cat.t("brief.next.stalled")
+        line = "| %s | %s | %s | %s |" % (p.get("name", ""), sig, evidence_phrase(p, cat), nxt)
+        L.append(line[:caps["per_project_line_chars"] + 60])
+    L.append("")
+
+    # ---- awaiting a decision ----
+    if decision_pending:
+        L.append("## " + cat.t("brief.section.decision_pending"))
+        for p in decision_pending[:caps["max_decision_pending"]]:
+            od = p.get("open_decision") or {}
+            L.append("- " + cat.t("brief.decision.line", name=p.get("name", ""),
+                                  question=od.get("question", "")))
+            if od.get("evidence_needed"):
+                L.append("  - " + cat.t("brief.decision.evidence_needed",
+                                        text=od["evidence_needed"]))
+            if od.get("evidence_available") and od.get("evidence_where"):
+                L.append("  - " + cat.t("brief.decision.evidence_available",
+                                        text=od["evidence_where"]))
+            if od.get("why_not_answered"):
+                L.append("  - " + cat.t("brief.decision.why_not_answered",
+                                        text=od["why_not_answered"]))
+        L.append("")
+
+    # ---- stalled ----
+    if stalled:
+        L.append("## " + cat.t("brief.section.stalled"))
+        for p in stalled:
+            g = (p.get("git") or [{}])[0]
+            if g.get("uncommitted"):
+                L.append("- " + cat.t("brief.stalled.uncommitted", name=p.get("name", ""),
+                                      count=g["uncommitted"]))
+            else:
+                dep = p.get("external_dependency")
+                extra = cat.t("brief.stalled.waiting_on", dep=dep) if dep else ""
+                L.append("- " + cat.t("brief.stalled.generic", name=p.get("name", ""), extra=extra))
+        L.append("")
+
+    # ---- waiting on other people ----
+    waits = [b for b in open_items if b.get("blocked_by") in ("external-party", "approval")]
+    ext = [p for p in (snap.get("projects") or [])
+           if p.get("external_dependency") and p.get("id") not in stall_ids
+           and p.get("id") not in self_ids]
+    if waits or ext:
+        L.append("## " + cat.t("brief.section.waiting"))
+        n = 0
+        for b in waits[:caps["max_waiting_for"]]:
+            L.append("- " + cat.t("brief.waiting.item", id=b.get("id", ""), title=b.get("title", ""),
+                                  who=b.get("waiting_on", b.get("blocked_by"))))
+            n += 1
+        for p in ext:
+            if n >= caps["max_waiting_for"]:
+                break
+            L.append("- " + cat.t("brief.waiting.project", name=p.get("name", ""),
+                                  dep=p["external_dependency"]))
+            n += 1
+        L.append("")
+
+    # ---- agent queue ----
+    agentq = [b for b in open_items if b.get("blocked_by") == "agent"
+              or (b.get("automation") or {}).get("tier") == "hook"]
+    if agentq:
+        L.append("## " + cat.t("brief.section.agent_queue"))
+        for b in agentq[:caps["max_agent_queue"]]:
+            a = b.get("automation") or {}
+            human = _first_clause(a.get("what_needs_human"), cat)
+            tail = cat.t("brief.agent.human_left", text=human[:60]) if human else ""
+            L.append("- " + cat.t("brief.agent.item", id=b.get("id", ""),
+                                  title=b.get("title", ""), human=tail))
+        L.append("")
+
+    # ---- Friday: automation review ----
+    if as_of.weekday() == 4 and open_items:
+        tiers = {"hook": 0, "skill": 0, "explore": 0, "unknown": 0}
+        human_perm = 0
+        markers = [m for m in cat.t("automation.human_permanent_markers").split(",") if m]
+        for b in open_items:
+            auto = b.get("automation") or {}
+            t = auto.get("tier") or "unknown"
+            tiers[t] = tiers.get(t, 0) + 1
+            wn = str(auto.get("what_needs_human") or "").lower()
+            if any(m.strip().lower() in wn for m in markers):
+                human_perm += 1
+        L.append("## " + cat.t("brief.section.automation_review"))
+        L.append("> " + cat.t("brief.automation.summary", total=len(open_items),
+                              hook=tiers.get("hook", 0), skill=tiers.get("skill", 0),
+                              explore=tiers.get("explore", 0), unknown=tiers.get("unknown", 0),
+                              human_perm=human_perm))
+        L.append("")
+
+    # ---- reminders ----
+    # The order is the priority: illegal writes / dropped claims > structural
+    # risk (a disabled gate, no version control) > contradictions > stale docs >
+    # tools. Stale documents are there every single day and would otherwise
+    # crowd everything else out, so they are deduplicated down to three plus a
+    # count.
+    sep = cat.t("sep.list")
+    rem: List[str] = []
+    if notes.get("dropped_claims"):
+        rem.append(cat.t("reminder.dropped_claims", count=notes["dropped_claims"],
+                         path="log/rejected.jsonl"))
+    if notes.get("reverted_fields"):
+        rem.append(cat.t("reminder.reverted_fields", count=notes["reverted_fields"],
+                         path="log/rejected.jsonl"))
+    gate = notes.get("write_gate")
+    if gate == "no_repo":
+        key = ("reminder.write_gate_no_git" if notes.get("write_gate_detail") == "git-missing"
+               else "reminder.write_gate_no_repo")
+        rem.append(cat.t(key, path="log/rejected.jsonl"))
+    elif gate == "no_commits":
+        rem.append(cat.t("reminder.write_gate_no_commits"))
+    if not meta["bootstrapped"]:
+        rem.append(cat.t("reminder.empty_backlog", command="nextbrief bootstrap"))
+    nogit = [p.get("name", "") for p in (snap.get("projects") or [])
+             if p.get("git_declared") == "none"
+             and ((p.get("fs") or {}).get("changed") or {}).get("7", 0) > 0]
+    if nogit:
+        rem.append(cat.t("reminder.no_git", projects=sep.join(nogit)))
+    for c in notes.get("conflicts", []):
+        rem.append(c)
+    stale_docs: Dict[str, int] = {}
+    for p in (snap.get("projects") or []):
+        for d in p.get("status_docs") or []:
+            if d.get("stale") and d.get("declared_age_days"):
+                # Deduplicated: one document may be referenced by several projects.
+                stale_docs[d["path"]] = d["declared_age_days"]
+    if stale_docs:
+        # Sorted by age *and* path: ties must not depend on dict ordering, or the
+        # brief would differ between two runs over identical inputs.
+        top = sorted(stale_docs.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        rem.append(cat.t("reminder.stale_docs", count=len(stale_docs),
+                         items=sep.join(cat.t("reminder.stale_doc_item", path=k, days=v)
+                                        for k, v in top)))
+    if snap.get("tool_missing"):
+        rem.append(cat.t("reminder.tool_missing",
+                         items=cat.t("sep.semicolon").join(sorted(snap["tool_missing"]))))
+    if snap.get("parse_failed"):
+        rem.append(cat.t("reminder.parse_failed", count=len(snap["parse_failed"])))
+    if notes.get("deferred"):
+        rem.append(cat.t("reminder.deferred", count=notes["deferred"],
+                         path="log/deferred.jsonl"))
+    notes["reminders"] = rem   # the HTML reuses this list, so the two cannot drift
+    if rem:
+        L.append("## " + cat.t("brief.section.reminders"))
+        for r in rem[:8]:
+            L.append("- " + r)
+        L.append("")
+
+    L.append("---")
+    L.append(cat.t("brief.footer", generator=GENERATOR, time=gen.strftime("%Y-%m-%d %H:%M")))
+
+    # ---- Gate 4: physical truncation ----
+    maxl = caps["brief_max_lines"]
+    truncated = 0
+    if len(L) > maxl:
+        keep = L[:maxl - 3]
+        truncated = len(L) - len(keep)
+        keep.append("")
+        keep.append("> " + cat.t("brief.truncated", max=maxl, lines=truncated,
+                                 path="state/snapshot.json"))
+        L = keep
+    meta["truncated_lines"] = truncated
+    return "\n".join(L) + "\n", meta
+
+
+# ---------------------------------------------------------------------------
+# logs / notification
+# ---------------------------------------------------------------------------
+
+def read_prev_run(ws: Workspace, current_at=None) -> Optional[dict]:
+    """The last recorded run that is not a re-render of the snapshot in hand.
+
+    Records are stamped with the snapshot's ``generated_at``, so re-rendering the
+    same snapshot produces a record with the same stamp -- and skipping those is
+    what makes the "last run" line in the header identical across re-renders. A
+    second render of unchanged inputs is the same run, not a new one.
+    """
+    p = ws.log / "runs.jsonl"
+    if not p.exists():
+        return None
+    try:
+        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except OSError:
+        return None
+    for ln in reversed(lines):
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue
+        if current_at is not None and rec.get("at") == current_at:
+            continue
+        return rec
+    return None
+
+
+def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catalog, dry_run=False):
+    """★ Append, never rewrite. A second run on the same day adds `## run N`."""
+    path = ws.log / ("%s.md" % as_of.isoformat())
+    run_n = 1
+    if path.exists():
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+        run_n = len(re.findall(r"^## run \d+", existing, re.M)) + 1
+
+    run = snap.get("run") or {}
+    gen = dt.datetime.fromisoformat(run["generated_at"])
+    out: List[str] = []
+    if run_n == 1:
+        out.append("# %s" % as_of.isoformat())
+        out.append("")
+    out.append("## " + cat.t("log.run_heading", n=run_n, planned=run.get("planned_slot", ""),
+                             actual=gen.strftime("%H:%M")))
+    out.append("")
+
+    if prev_snap:
+        prevp = {p.get("id"): p for p in prev_snap.get("projects", [])}
+        deltas = []
+        for p in snap.get("projects") or []:
+            q = prevp.get(p.get("id"))
+            if not q:
+                deltas.append(cat.t("log.new_project", name=p.get("name", "")))
+                continue
+            bits = []
+            d7 = ((p.get("fs") or {}).get("changed") or {}).get("7", 0) - \
+                 ((q.get("fs") or {}).get("changed") or {}).get("7", 0)
+            if d7:
+                bits.append(cat.t("log.delta.files_7d", delta="%+d" % d7))
+            if p.get("git") and q.get("git"):
+                a = (p["git"][0].get("commits_since") or {}).get("30") or 0
+                b = (q["git"][0].get("commits_since") or {}).get("30") or 0
+                if a != b:
+                    bits.append(cat.t("log.delta.commits_30d", delta="%+d" % (a - b)))
+                if (p["git"][0].get("uncommitted") or 0) != (q["git"][0].get("uncommitted") or 0):
+                    bits.append(cat.t("log.delta.uncommitted",
+                                      old=q["git"][0].get("uncommitted") or 0,
+                                      new=p["git"][0].get("uncommitted") or 0))
+            ps, qs = (p.get("evidence") or {}).get("signal"), (q.get("evidence") or {}).get("signal")
+            if ps != qs:
+                bits.append(cat.t("log.delta.signal", old=qs, new=ps))
+            if bits:
+                deltas.append(cat.t("log.delta.line", name=p.get("name", ""),
+                                    bits=cat.t("sep.list").join(bits)))
+        out.append("### " + cat.t("log.section.changes"))
+        if deltas:
+            for d in deltas:
+                out.append("- " + d)
+        else:
+            out.append("- " + cat.t("log.no_changes"))
+        out.append("")
+
+    out.append("### " + cat.t("log.section.actions"))
+    out.append("- " + cat.t("log.counts", open=meta["open_items"],
+                            decisions=len(meta["decision_pending"]),
+                            stalled=len(meta["stalled"]), neglected=len(meta["neglected"])))
+    if notes.get("dropped_claims"):
+        out.append("- " + cat.t("log.dropped", count=notes["dropped_claims"]))
+    if notes.get("reverted_fields"):
+        out.append("- " + cat.t("log.reverted", count=notes["reverted_fields"]))
+    if notes.get("deferred"):
+        out.append("- " + cat.t("log.deferred", count=notes["deferred"],
+                                path="log/deferred.jsonl"))
+    if meta.get("truncated_lines"):
+        out.append("- " + cat.t("log.truncated", lines=meta["truncated_lines"]))
+    out.append("")
+
+    text = ("" if run_n == 1 else "\n") + "\n".join(out)
+    if dry_run:
+        return
+    if not _inside(ws, path):
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(path), "a", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        pass
+
+
+def should_notify(cfg, snap, prev_snap, meta, notes):
+    """The quiet rule: a system that tells you punctually every day that nothing
+    happened gets muted in week three. Reasons are English on purpose -- they are
+    operator diagnostics in runs.jsonl, not part of the brief."""
+    want = set(((cfg or {}).get("notify") or {}).get("only_if") or [])
+    if prev_snap is None:
+        return True, "first run"
+    prevp = {p.get("id"): p for p in prev_snap.get("projects", [])}
+    if "change" in want:
+        for p in snap.get("projects") or []:
+            q = prevp.get(p.get("id"))
+            if not q:
+                return True, "new project registered"
+            if (p.get("evidence") or {}).get("best_date") != (q.get("evidence") or {}).get("best_date"):
+                return True, "a project changed"
+    if "deadline_lead" in want:
+        for p in snap.get("projects") or []:
+            q = prevp.get(p.get("id")) or {}
+            old = {d.get("date"): d for d in (q.get("deadlines") or [])}
+            for d in p.get("deadlines") or []:
+                if d.get("in_lead_window") and not (old.get(d.get("date"), {}).get("in_lead_window")):
+                    return True, "deadline entered its lead window"
+    if "neglect" in want and meta["neglected"]:
+        return True, "a project is neglected"
+    if "new_stalled" in want and meta["stalled"]:
+        return True, "a project is stalled"
+    if notes.get("dropped_claims") or notes.get("reverted_fields"):
+        return True, "claims were dropped or fields reverted"
+    return False, "nothing changed; staying quiet"
+
+
+def notify_body(meta, brief_obj, cat: Catalog) -> str:
+    nexts = (brief_obj or {}).get("next_actions") or []
+    if nexts:
+        body = str(nexts[0].get("title", ""))[:80]
+    elif meta["ranked"]:
+        body = cat.t("notify.most_urgent", name=meta["ranked"][0].get("name", ""))
+    else:
+        body = cat.t("notify.updated")
+    tail = []
+    if meta["decision_pending"]:
+        tail.append(cat.t("brief.header.decision_pending", count=len(meta["decision_pending"])))
+    if meta["stalled"]:
+        tail.append(cat.t("brief.header.stalled", count=len(meta["stalled"])))
+    if tail:
+        body += cat.t("sep.dot") + cat.t("sep.dot").join(tail)
+    return body
+
+
+def _send_notification(cfg, meta, brief_obj, cat: Catalog) -> bool:
+    """Delegate to the sink layer. Wrapped because a desktop notification failing
+    is never a reason for the run to fail."""
+    title = ((cfg or {}).get("notify") or {}).get("title") or cat.t("notify.title")
+    try:
+        from .sinks import notify as sink_notify
+        return bool(sink_notify(title, notify_body(meta, brief_obj, cat), cfg))
+    except Exception as exc:                                   # noqa: BLE001 - fail-open
+        print("notification skipped: %s" % exc, file=sys.stderr)
+        return False
+
+
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="nextbrief render",
+        description="stage 3 -- evidence gate, caps, and rendering (no model)",
+    )
+    ap.add_argument("--workspace", help="workspace directory (default: $NEXTBRIEF_WORKSPACE, "
+                                        "the configured pointer, or the nearest registry.jsonc)")
+    ap.add_argument("--out", help="where generated files go (default: the workspace itself)")
+    ap.add_argument("--locale", help="output locale, e.g. en or zh")
+    ap.add_argument("--no-notify", action="store_true")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print BRIEF.md, write nothing")
+    return ap
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    started = dt.datetime.now()
+
+    try:
+        ws = resolve_workspace(args.workspace, out=args.out)
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    try:
+        cfg = load_jsonc(ws.config_path) if ws.config_path.exists() else {}
+        reg = load_jsonc(ws.registry_path)
+    except JSONCError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    cat = load_catalog(args.locale or cfg.get("locale"))
+
+    if not ws.snapshot.exists():
+        print("no snapshot at %s -- run `nextbrief sense` first" % ws.snapshot, file=sys.stderr)
+        return 2
+    try:
+        snap = json.loads(ws.snapshot.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print("cannot read %s: %s" % (ws.snapshot, exc), file=sys.stderr)
+        return 2
+
+    run = snap.get("run") or {}
+    try:
+        dt.datetime.fromisoformat(run["generated_at"])
+        dt.date.fromisoformat(run["as_of_date"])
+    except (KeyError, TypeError, ValueError):
+        # Everything downstream is dated from these two fields; a snapshot
+        # without them is not a snapshot we can render honestly.
+        print("%s has no usable run.generated_at / run.as_of_date -- re-run `nextbrief sense`"
+              % ws.snapshot, file=sys.stderr)
+        return 2
+
+    prev_snap = None
+    if ws.snapshot_prev.exists():
+        try:
+            prev_snap = json.loads(ws.snapshot_prev.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prev_snap = None
+
+    brief = None
+    if ws.brief_json.exists():
+        try:
+            brief = json.loads(ws.brief_json.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # fail-open: a broken interpretation layer degrades to v0, it does
+            # not cost you the deterministic half of the brief.
+            print("%s did not parse (%s) -- falling back to v0" % (ws.brief_json, exc),
+                  file=sys.stderr)
+
+    # ★ One stamp for the whole run, taken from the snapshot rather than the
+    #   clock. Everything downstream -- run records, rejected entries, the "last
+    #   run" line -- is derived from it, which is what makes a re-render of the
+    #   same snapshot produce byte-identical output.
+    stamp = run["generated_at"]
+
+    rejected: List[dict] = []
+    notes: Dict[str, Any] = {"prev_run": read_prev_run(ws, stamp), "conflicts": []}
+
+    backlog = load_backlog(ws, rejected)
+    gate = enforce_write_permissions(ws, backlog, rejected, args.dry_run)
+    notes["reverted_fields"] = gate.reverted
+    notes["write_gate"] = gate.state
+    notes["write_gate_detail"] = gate.detail
+
+    # ---- gates 1 + 2 ----
+    index = dict(snap.get("evidence_index") or {})
+    # Backlog entries are legitimate things to cite -- "this is already on the
+    # list" is a checkable fact. The sensing stage does not load the backlog, so
+    # we add them here rather than let the evidence gate kill honest claims.
+    # Both spellings are indexed: the path relative to the workspace and the one
+    # relative to the projects root, which is how the sensing stage names files.
+    for b in backlog:
+        rel = ws.backlog.name + "/" + b["_file"]
+        for src in (rel, ws.root.name + "/" + rel, b.get("id")):
+            if src:
+                index.setdefault(src, {"kinds": ["file_mtime", "human"], "value": b.get("title")})
+    dropped = 0
+    if brief:
+        projects = {p.get("id"): p for p in (snap.get("projects") or [])}
+        caps = caps_of(cfg)
+        capmap = {"next_actions": caps["max_next_actions"],
+                  "agent_queue": caps["max_agent_queue"],
+                  "waiting_for": caps["max_waiting_for"]}
+        for key in ("next_actions", "project_lines", "agent_queue", "waiting_for"):
+            kept = []
+            for claim in brief.get(key) or []:
+                if not check_evidence(claim, index, cfg, rejected, key, cat):
+                    dropped += 1
+                    continue
+                ng = (projects.get(claim.get("project")) or {}).get("non_goals")
+                flag = non_goal_flag(
+                    " ".join(str(claim.get(k, "")) for k in ("title", "text", "why")), ng)
+                if flag:
+                    claim["non_goal_flag"] = flag
+                kept.append(claim)
+            # ---- gate 4: caps ----
+            if key in capmap and len(kept) > capmap[key]:
+                for extra in kept[capmap[key]:]:
+                    append_jsonl(ws, ws.log / "deferred.jsonl",
+                                 {"at": stamp, "section": key, "item": extra,
+                                  "why": "over caps.%s" % key})
+                notes["deferred"] = notes.get("deferred", 0) + len(kept) - capmap[key]
+                kept = kept[:capmap[key]]
+            brief[key] = kept
+    notes["dropped_claims"] = dropped
+
+    # Conflicts the registry has already adjudicated -- stated once here so the
+    # model does not relitigate them every single day.
+    for p in (snap.get("projects") or []):
+        for c in p.get("conflicts") or []:
+            notes["conflicts"].append(cat.t(
+                "reminder.conflict", doc=c.get("doc", ""), other=c.get("contradicts", ""),
+                about=c.get("about", ""), winner=c.get("authority_wins", "")))
+
+    # How stale the standing brief is, measured against the previous *run* rather
+    # than BRIEF.md's mtime: our own write moves that mtime, so using it would
+    # make the banner appear on one run and vanish on the next over identical
+    # inputs.
+    prev = notes.get("prev_run") or {}
+    if prev.get("at"):
+        try:
+            age = (dt.date.fromisoformat(str(snap["run"]["as_of_date"]))
+                   - dt.date.fromisoformat(str(prev["at"])[:10])).days
+            if age >= 2:
+                notes["stale_brief_days"] = age
+        except ValueError:
+            pass
+
+    meta = classify(snap, backlog, cfg, reg, ws)
+    text, meta = render_brief(snap, brief, backlog, cfg, reg, cat, notes, meta)
+
+    if args.dry_run:
+        sys.stdout.write(text)
+        for r in rejected:
+            print("REJECTED: " + json.dumps(r, ensure_ascii=False), file=sys.stderr)
+        return 0
+
+    ws.ensure_dirs()
+    write_text(ws, ws.brief_md, text)
+
+    # ★ Computed once, rendered twice. The HTML re-decides nothing; it receives
+    #   the same data that already went through all four gates.
+    try:
+        from . import html as html_mod
+        write_text(ws, ws.brief_html,
+                   html_mod.render_html(snap, brief, backlog, cfg, reg, cat, notes, meta))
+    except Exception as exc:                                   # noqa: BLE001 - fail-open
+        print("BRIEF.html failed to render (BRIEF.md unaffected): %s" % exc, file=sys.stderr)
+
+    for r in rejected:
+        r["at"] = stamp
+        append_jsonl(ws, ws.log / "rejected.jsonl", r)
+
+    as_of = dt.date.fromisoformat(snap["run"]["as_of_date"])
+    write_day_log(ws, as_of, snap, prev_snap, meta, notes, cat, args.dry_run)
+
+    do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes)
+    notified = False
+    if do_notify and not args.no_notify:
+        notified = _send_notification(cfg, meta, brief, cat)
+
+    # ★ Success sentinel. Never trust a green check: a scheduler reports green
+    #   when the session exited without an infrastructure error, which says
+    #   nothing about whether the work happened. This line is the only reliable
+    #   liveness signal, so it is written last and read by the next run.
+    append_jsonl(ws, ws.log / "runs.jsonl", {
+        "at": stamp,
+        "duration_s": round((dt.datetime.now() - started).total_seconds(), 2),
+        "mode": "v1" if brief else "v0",
+        "locale": cat.locale,
+        "projects": len(snap.get("projects") or []),
+        "open_items": meta["open_items"],
+        "dropped_claims": dropped,
+        "reverted_fields": notes.get("reverted_fields", 0),
+        "write_gate": gate.state,
+        "write_gate_detail": gate.detail,
+        "deferred": notes.get("deferred", 0),
+        "truncated_lines": meta.get("truncated_lines", 0),
+        "notified": notified,
+        "notify_reason": why,
+        "ok": True,          # <- success sentinel, must be the last thing written
+    })
+
+    print("render: %s | %d lines | %s | notify: %s"
+          % (ws.brief_md, len(text.splitlines()), "v1" if brief else "v0 (no model)", why))
+    if dropped:
+        print("  %d unverifiable claim(s) dropped -> log/rejected.jsonl" % dropped)
+    if notes.get("reverted_fields"):
+        print("  %d illegal field write(s) reverted -> log/rejected.jsonl"
+              % notes["reverted_fields"])
+    if gate.state != "ran":
+        print("  write-permission gate did not run (%s: %s)" % (gate.state, gate.detail),
+              file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
