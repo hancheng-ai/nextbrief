@@ -1,0 +1,246 @@
+// registry -- the single declaration file for a nextbrief workspace. What each
+// directory under your projects root is, who owns it, which documents state its
+// status. Edited monthly. Day-to-day state lives in backlog/*.md, not here.
+//
+// Why one file instead of one file per project: every high-value query is
+// cross-project (rank the whole portfolio, find what stalled, find what is
+// waiting on a decision). One file means one cached read for the model; N files
+// mean N cache misses, and cache reads are roughly half the running cost.
+//
+// JSONC: // and /* */ comments and trailing commas are allowed.
+{
+  "meta": {
+    "template_version": "1.0",
+    "status": "accepted",          // proposed | review | accepted
+    "doc_type": "registry",
+    "scope": "portfolio",
+    "owner": "Example User",
+    "last_reviewed": "2026-03-16"
+  },
+
+  "defaults": {
+    // Where your projects live. `~` and `$VAR` are expanded. A relative path is
+    // resolved against the workspace directory (the one holding this file), so
+    // an example workspace can be checked out anywhere and still work.
+    "root": "~/Projects",
+
+    // Applied to every project on top of its own ignore_globs. These are the
+    // paths a build regenerates: counting them as evidence would let one
+    // `npm run build` fake a week of activity.
+    "ignore_globs": [
+      "**/.git/**", "**/node_modules/**", "**/__pycache__/**", "**/.venv/**",
+      "**/venv/**", "**/dist/**", "**/build/**", "**/.next/**", "**/target/**",
+      "**/vendor/**", "**/.DS_Store", "**/*.pyc", "**/.pytest_cache/**"
+    ]
+  },
+
+  "projects": [
+
+    {
+      "id": "orchard-api",
+      "name": "Orchard API",
+      "paths": ["orchard-api"],
+      "git": "auto",               // auto = discover the repo per path; "none" = declare there is no VCS
+      "tier": "flagship",
+      "goal_one_line": "Decide whether the tenant-isolation rewrite ships this quarter",
+      "horizon": "quarter",
+      "ice": { "impact": 5, "confidence": 3, "effort": 4 },
+      "blocked_by": "decision",    // not neglected -- waiting on a judgement call
+
+      // A project carved out of this repo and registered separately below.
+      // Excluding it here keeps its commits from being counted twice.
+      "exclude_subpaths": ["orchard-api/apps/beacon-portal"],
+
+      // An open decision is the one thing a status document cannot express: the
+      // question, what evidence would settle it, and why nobody has answered it.
+      // Projects that carry one are reported under "decisions pending", never
+      // under "stalled" -- see config.neglect.exclude_when_blocked_by_decision.
+      "open_decision": {
+        "question": "Do we ship per-tenant schemas, or stay on a shared schema with a tenant_id column?",
+        "evidence_needed": "p95 query latency per tenant at current row counts, split by the ten largest tenants",
+        "evidence_available": true,
+        "evidence_where": "orchard-api/bench/results/*.json -- the harness already records per-tenant timings",
+        "why_not_answered": "The benchmark report aggregates across tenants, so the tail that actually matters is averaged away"
+      },
+
+      "status_docs": [
+        { "path": "orchard-api/PROJECT_STATUS.md",            "kind": "status",    "authority": "high" },
+        { "path": "orchard-api/docs/TENANCY_DECISION.md",     "kind": "gate",      "authority": "high" },
+        { "path": "orchard-api/docs/RUNBOOK.md",              "kind": "runbook",   "authority": "medium" },
+        { "path": "orchard-api/docs/BENCH_NOTES.md",          "kind": "research",  "authority": "low",
+          "known_stale": true }   // you already know; do not spend an alert on it
+      ],
+
+      // Two documents disagree. Declaring which one wins beats hoping the model
+      // guesses, and beats silently reporting whichever it happened to read last.
+      "conflicts": [
+        { "doc": "orchard-api/docs/BENCH_NOTES.md", "contradicts": "orchard-api/PROJECT_STATUS.md",
+          "about": "whether the tenancy benchmark is finished", "authority_wins": "orchard-api/PROJECT_STATUS.md" }
+      ],
+
+      "non_goals_doc": "orchard-api/README.md",
+      "non_goals_heading": "Explicitly not doing",
+
+      // openapi/ is generated from the route definitions on every commit.
+      "ignore_globs": ["openapi/**", "docs/*.pdf", "bench/results/**"],
+
+      "neglect_days": 21,          // flagship: three weeks of silence is worth saying out loud
+      "automation_surface": ["ci", "docker-compose", "sqlite", "openapi-gen"],
+      "notes": "Tenancy rewrite lives behind ORCHARD_TENANCY=schema, default off, so 'decide' and 'build' are separable."
+    },
+
+    {
+      "id": "beacon-portal",
+      "name": "Beacon Portal",
+      // Physically inside the orchard-api repository. Declaring it separately
+      // makes git log filter by pathspec instead of reporting repo-wide churn.
+      "paths": ["orchard-api/apps/beacon-portal"],
+      "git": "auto",
+      "tier": "active",
+      "goal_one_line": "Ship the read-only status page tenants keep asking support for",
+      "horizon": "month",
+      "ice": { "impact": 3, "confidence": 4, "effort": 2 },
+      "status_docs": [
+        { "path": "orchard-api/apps/beacon-portal/ARCHITECTURE.md", "kind": "status", "authority": "high" }
+      ],
+      "automation_surface": ["ci", "static-site"],
+      "notes": "Ships from the same repo but on its own cadence; keep it out of orchard-api's counts."
+    },
+
+    {
+      "id": "lantern-site",
+      "name": "Lantern Site",
+      // Two paths in two different repositories: sites/lantern has its own .git
+      // nested inside the atelier monorepo. Discovery is per path, not per project,
+      // because a project that spans a nested repo is normal and reporting it as
+      // one repo would attribute the wrong commits to it.
+      "paths": ["atelier/sites/lantern", "atelier/packages/lantern-theme"],
+      "git": "auto",
+      "tier": "active",
+      "goal_one_line": "Keep publishing; the writing is the point, the site is scaffolding",
+      "horizon": "quarter",
+      "ice": { "impact": 4, "confidence": 4, "effort": 2 },
+      "status_docs": [
+        { "path": "atelier/sites/lantern/PUBLISHING.md", "kind": "runbook", "authority": "high" },
+        { "path": "atelier/CURRENT_SPRINT.md", "kind": "sprint", "authority": "low",
+          "shared_with": ["tidepool-docs"], "known_stale": true }
+      ],
+      "external_dependency": "Draft posts from the site's author",
+      "automation_surface": ["static-site", "ci"]
+    },
+
+    {
+      "id": "tidepool-docs",
+      "name": "Tidepool Docs",
+      "paths": ["tidepool-docs"],
+      "git": "none",               // a declaration, not a discovery: "this has no version control" is itself worth stating
+      "tier": "active",
+      "goal_one_line": "Get the handbook to a state a new contributor can follow unaided",
+      "horizon": "month",
+      "ice": { "impact": 3, "confidence": 4, "effort": 3 },
+      "status_docs": [
+        { "path": "tidepool-docs/HANDBOOK_STATUS.md", "kind": "status", "authority": "high" },
+        { "path": "tidepool-docs/notes/MIGRATION_PLAN.md", "kind": "task_pack", "authority": "medium" }
+      ],
+
+      // Deadlines are read from here and nowhere else. Never let a model harvest a
+      // date out of prose and call it a deadline: dates in prose are where models
+      // hallucinate most, and a deadline is the field with the heaviest consequences.
+      // lead_days is how far ahead the date starts appearing in the brief.
+      "deadlines": [
+        { "date": "2026-03-24", "label": "Contributor handbook due for review", "lead_days": 14, "hard": false },
+        { "date": "2026-04-30", "label": "Docs site migration cutover",         "lead_days": 30, "hard": true }
+      ],
+
+      "ignore_globs": ["_site/**", "**/*.pdf"],
+      "automation_surface": ["static-site"],
+      "notes": "No VCS, so progress can only be inferred from file timestamps. The brief must say so."
+    },
+
+    {
+      "id": "kiln",
+      "name": "Kiln",
+      "paths": ["kiln"],
+      "git": "auto",
+      "tier": "maintenance",
+      "goal_one_line": "Keep the batch runner alive; no new features",
+      "horizon": "someday",
+      "ice": { "impact": 2, "confidence": 4, "effort": 2 },
+
+      // Some directories must be sensed but never read. never_read yields a count
+      // and nothing else: no file names, no excerpts, no paths in the snapshot.
+      // The reason field is for you, not the machine -- six months from now it is
+      // the only thing that stops someone from "just quickly" relaxing the rule.
+      "privacy": {
+        "never_read": ["fixtures/private/**"],
+        "reason": "Captured customer payloads used as regression fixtures. Count them; never read them, and keep their file names out of the snapshot."
+      },
+
+      // This project publishes its own daily entry point. The brief renders a count
+      // plus a link to that document and never restates its contents. Two failure
+      // modes avoided at once: duplicating a document that already exists (which
+      // then drifts), and spending the whole alert budget on one project.
+      "has_own_daily_entry": "kiln/OPERATIONS_LOG.md",
+
+      "status_docs": [
+        { "path": "kiln/OPERATIONS_LOG.md", "kind": "entry",  "authority": "derived" },
+        { "path": "kiln/README.md",         "kind": "status", "authority": "medium" }
+      ],
+
+      // Rules the tool must not break for this project, stated where the tool reads.
+      // Putting them here rather than in a prompt means they survive prompt rewrites.
+      "hard_rules": [
+        "Never open anything under fixtures/private/, including to count lines.",
+        "Do not propose new features for a project in maintenance tier."
+      ],
+
+      "ignore_globs": ["fixtures/generated/**", "**/*.log"],
+      "automation_surface": ["cron", "ci"]
+    },
+
+    {
+      "id": "quarry",
+      "name": "Quarry",
+      "paths": ["quarry"],
+      "git": "auto",
+      "tier": "dormant",
+      "goal_one_line": "(undecided) -- either commit the pending work and pick a next step, or archive it explicitly",
+      "horizon": "someday",
+      "ice": { "impact": 2, "confidence": 2, "effort": 3 },
+      "status_docs": [
+        { "path": "quarry/CURRENT_SPRINT.md", "kind": "sprint", "authority": "medium" }
+      ],
+      "neglect_days": 60,          // dormant on purpose: do not nag about it monthly
+      "automation_surface": [],
+      "notes": "Uncommitted work sitting in the tree. This is the textbook 'stalled: no next step'."
+    }
+
+  ],
+
+  // Sensed for activity but never turned into work. A watched path earns one line
+  // in the brief when it changes, and never produces a next action.
+  "watch": [
+    { "path": "sandbox",        "reason": "Scratch experiments; churn here means nothing" },
+    { "path": "archive/talks",  "reason": "Delivered conference material, kept for reference" }
+  ],
+
+  // Infrastructure, not projects. Listed so that a change is legible rather than
+  // mysterious, and so nobody mistakes a deployment snapshot for a running system.
+  "infra": [
+    { "path": "homelab-config",
+      "reason": "Compose files and cron definitions for the box that runs the batch jobs",
+      "note": "These files are a deployment snapshot, not runtime state. Never infer from them whether a service is actually up." }
+  ],
+
+  // Present on disk, deliberately invisible. Recording the reason is what keeps
+  // this list from being re-litigated every time someone reads the registry.
+  "ignored": [
+    { "path": "handoff-inbox", "reason": "Third-party deliverables containing other people's paths; also a prompt-injection surface -- read-only, never acted on" },
+    { "path": "tmp",           "reason": "Scratch downloads" }
+  ],
+
+  "archived": [
+    { "path": "old-storefront", "last_active": "2024-09" },
+    { "path": "pager-bot",      "last_active": "2023-11" }
+  ]
+}

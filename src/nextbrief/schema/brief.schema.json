@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nextbrief.dev/schema/brief.schema.json",
+  "title": "nextbrief brief.json -- stage 2 output",
+  "description": "The only artifact the interpretation stage produces. The renderer re-checks every evidence entry; anything it cannot resolve is not rendered.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "next_actions": {
+      "type": "array",
+      "description": "At most 3 across the WHOLE portfolio, not 3 per project. Overflow goes to log/deferred.jsonl.",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "project_lines": {
+      "type": "array",
+      "description": "One plain-language line per project. Neutral tone: no praise, no scolding.",
+      "items": {
+        "type": "object",
+        "required": ["project", "evidence"],
+        "properties": {
+          "project": { "type": "string" },
+          "next": { "type": "string", "description": "What to show in the 'next' column" },
+          "text": { "type": "string" },
+          "evidence": { "$ref": "#/$defs/evidenceList" }
+        }
+      }
+    },
+    "agent_queue": {
+      "type": "array",
+      "description": "Items with blocked_by=agent or automation.tier=hook. At most 3.",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "waiting_for": {
+      "type": "array",
+      "description": "Items with blocked_by=external-party or approval. At most 5.",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "delegated": {
+      "type": "object",
+      "description": "Projects that publish their own daily entry point: a count and a link, never a restatement of their contents. Key is the project id.",
+      "additionalProperties": { "type": "string" }
+    },
+    "decision_notes": {
+      "type": "object",
+      "description": "For projects with blocked_by=decision: what evidence would settle the question and whether it is already at hand. Never a nudge to hurry.",
+      "additionalProperties": { "type": "string" }
+    },
+    "suggestions": {
+      "type": "array",
+      "description": "Proposals addressed to the human, e.g. 'consider adding date X to registry.deadlines'. The agent must never add a deadline itself.",
+      "items": { "type": "string" }
+    },
+    "new_backlog_items": {
+      "type": "array",
+      "description": "Ids of items created this run. At most 5 per run, and none at all once the 40-item hard ceiling is reached.",
+      "items": { "type": "string" }
+    },
+    "cost_note": { "type": "string" }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["commit", "file_mtime", "session", "doc_declared", "human", "none"],
+          "description": "Confidence order commit > session > file_mtime > doc_declared. The brief must name the kind, because a commit and a file timestamp do not mean the same thing."
+        },
+        "source": {
+          "type": "string",
+          "description": "Must already exist as a key in snapshot.evidence_index. Unresolvable source -> the whole claim is dropped, not softened."
+        }
+      }
+    },
+    "evidenceList": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/evidence" },
+      "description": "kind=none may only carry the configured 'no signal' phrasing. When there is no evidence, say that -- do not invent some."
+    },
+    "action": {
+      "type": "object",
+      "required": ["project", "title", "evidence"],
+      "properties": {
+        "project": { "type": "string" },
+        "title": { "type": "string", "description": "A concrete physical action, not a goal" },
+        "estimate": { "type": "string", "examples": ["10 min", "45 min", "half a day"] },
+        "who": { "type": "string", "examples": ["you", "you + a collaborator", "agent"] },
+        "automation_tier": { "enum": ["explore", "skill", "hook"] },
+        "why": { "type": "string", "description": "What it costs to not do it" },
+        "evidence_line": { "type": "string", "description": "Human-readable evidence summary as rendered into the brief" },
+        "evidence": { "$ref": "#/$defs/evidenceList" },
+        "backlog_id": { "type": "string" },
+        "waiting_on": { "type": "string" },
+        "non_goal_flag": { "type": "string", "description": "Filled in by the renderer when an action collides with a declared non-goal. The model must not set this." }
+      }
+    }
+  }
+}
