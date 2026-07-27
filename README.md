@@ -88,8 +88,10 @@ then `nextbrief --workspace . sense --as-of 2026-03-16 && nextbrief --workspace 
 
 ## 60-second quickstart
 
+How to get the `nextbrief` command is the next section; the shortest path is one
+file and no package manager. Once you have it:
+
 ```sh
-pipx install nextbrief          # or: pip install nextbrief
 nextbrief init ~/brief          # scaffold a workspace; it offers nearby projects
 nextbrief v0                    # build a brief with no model at all
 nextbrief open                  # read it in your browser
@@ -107,6 +109,93 @@ instead of producing nothing.
 Zero runtime dependencies, Python 3.9+, macOS and Linux. The nightly job is
 launched by a system scheduler with a minimal `PATH`, so the package has to work
 under the system interpreter with nothing installed alongside it.
+
+## Install
+
+Zero dependencies means every option below installs one thing and nothing else.
+They are ordered by how little you have to commit up front, because the whole
+point of `v0` is that you can evaluate this before spending anything.
+
+> **PyPI publication is pending.** Anything that resolves through PyPI — `uvx`,
+> `pipx install nextbrief`, `uv tool install nextbrief` — does not work yet. The
+> zipapp and a from-source install do. Every option below says which it is,
+> because a first command that fails is the fastest way to lose a reader.
+
+**1 · Run it without installing anything** — *needs PyPI; not live yet*
+
+```sh
+uvx nextbrief v0
+```
+
+**2 · One file, no package manager** — *works today*
+
+A zipapp is the whole program in one executable file — locales, prompts and
+templates included, no `site-packages`, no virtualenv, any Python 3.9 or newer:
+
+Every tagged release attaches a prebuilt `nextbrief.pyz` and a `SHA256SUMS`:
+
+```sh
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/nextbrief.pyz
+chmod +x nextbrief.pyz
+./nextbrief.pyz --version
+```
+
+Or build it yourself from a checkout — the script strips bytecode and smoke
+tests the artifact by running `init` and `v0` inside it, because a zipapp that
+builds but cannot read its own locales still answers `--version` correctly:
+
+```sh
+git clone --depth 1 https://github.com/hancheng-ai/nextbrief
+bash nextbrief/scripts/build-zipapp.sh    # writes dist/nextbrief.pyz
+```
+
+Put `nextbrief.pyz` anywhere on your `PATH` and you are done; deleting the file
+uninstalls it.
+
+> No release is tagged yet, so the `curl` above has nothing to fetch until
+> `v0.1.0` lands. Building from a checkout works now.
+
+**3 · The durable install** — *the short form needs PyPI; the git form works today*
+
+```sh
+pipx install --python /usr/bin/python3 nextbrief             # not live yet
+uv tool install --python /usr/bin/python3 nextbrief          # not live yet
+
+pipx install --python /usr/bin/python3 \
+  "git+https://github.com/hancheng-ai/nextbrief"             # works today
+```
+
+`--python /usr/bin/python3` is deliberate. The scheduled run is started by a GUI
+launcher with a minimal `PATH`, so pinning the system interpreter means a
+Homebrew Python upgrade — which retires the interpreter a pipx venv was built
+against — cannot break the nightly run. That interpreter is also tested on its
+own in CI, for the same reason.
+
+**4 · Homebrew, macOS** — *pending the first release*
+
+```sh
+brew tap <owner>/tap
+brew install nextbrief
+```
+
+`<owner>` is the GitHub account in this repository's URL; the tap is its
+`homebrew-tap` repository. The formula is version-controlled here, in
+[`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb), so it is
+reviewed alongside the change that would break it — and the tap goes live once
+`v0.1.0` is cut.
+
+### Distribution
+
+Which channels are live and which are not, at a glance:
+
+| Channel | State |
+|---|---|
+| Source checkout — `git clone`, `pip install .` | **live** |
+| Zipapp built from a checkout | **live** |
+| PyPI — `pip`, `pipx`, `uv`, `uvx` | **pending**: Trusted Publishing is already wired up in `.github/workflows/release.yml`, but nothing is published until a `v*` tag is pushed |
+| GitHub release assets — sdist and wheel | **pending** the first tag; the release workflow uploads them |
+| `nextbrief.pyz` as a release asset | **not built**: the release workflow uploads `dist/*` only, so there is no zipapp to download yet |
+| Homebrew tap | **pending**: the formula exists, the tap repository does not |
 
 ## A brief
 

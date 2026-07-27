@@ -65,8 +65,9 @@ render: BRIEF.md | 45 lines | v1 | notify: first run
 
 ## 60 秒上手
 
+怎么把 `nextbrief` 这个命令弄到手见下一节——最短的一条路是**一个文件、不需要任何包管理器**。拿到之后：
+
 ```sh
-pipx install nextbrief          # 或 pip install nextbrief
 nextbrief init ~/brief          # 建 workspace，它会把附近的项目「提议」给你
 nextbrief v0                    # 完全不用模型跑一份简报
 nextbrief open                  # 在浏览器里读
@@ -77,6 +78,64 @@ nextbrief open                  # 在浏览器里读
 `v0` 同时也是整套系统的地板。模型那段缺失、坏掉、离线或者没付费的时候，`nextbrief run` 退化成的就是它，而不是什么都产不出来。
 
 零运行时依赖，Python 3.9+，macOS 与 Linux。无人值守任务是被系统调度器拉起来的，只有最小 `PATH`，所以这个包必须能在系统解释器下、周围什么都没装的情况下跑起来。
+
+## 安装
+
+零依赖的意思是：下面每一种方式都只装一样东西，不带别的。顺序按「你要先付出多少」从少到多排——因为整件事的卖点就是，你可以先评估、再决定花不花钱。
+
+> **PyPI 尚未发布。** 凡是走 PyPI 解析的——`uvx`、`pipx install nextbrief`、`uv tool install nextbrief`——现在都还不通。zipapp 和从源码装是**现在就能用**的。下面每一条都标了状态：一条一上来就失败的命令，是丢掉读者最快的方式。
+
+**1 · 什么都不装，直接跑** —— *依赖 PyPI，尚未生效*
+
+```sh
+uvx nextbrief v0
+```
+
+**2 · 单个文件，不需要包管理器** —— *现在就能用*
+
+zipapp 就是把整个程序装进一个可执行文件——locale、提示词、模板都在里面，不需要 `site-packages`，不需要虚拟环境，任意 Python 3.9 及以上：
+
+```sh
+git clone --depth 1 https://github.com/hancheng-ai/nextbrief
+bash nextbrief/scripts/build-zipapp.sh    # 产出 dist/nextbrief.pyz
+./nextbrief/dist/nextbrief.pyz --version
+```
+
+构建脚本会剔除字节码，并且**真的把产物跑一遍**（在里面执行 `init` 和 `v0`）——因为一个「能构建、但读不到自己 locale」的 zipapp，`--version` 照样答得好好的。
+
+每个打了 tag 的发布都会附带编译好的 `nextbrief.pyz` 与 `SHA256SUMS`：
+
+```sh
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/nextbrief.pyz
+chmod +x nextbrief.pyz
+```
+
+把 `nextbrief.pyz` 放到 `PATH` 上任意位置就算装好了；删掉这个文件就算卸载。
+
+> 目前还没打过 tag，所以上面那条 `curl` 暂时取不到东西；从源码构建现在就能用。
+
+**3 · 长期安装** —— *短形式要等 PyPI；git 形式现在就能用*
+
+```sh
+pipx install --python /usr/bin/python3 nextbrief             # 尚未生效
+uv tool install --python /usr/bin/python3 nextbrief          # 尚未生效
+
+pipx install --python /usr/bin/python3 \
+  "git+https://github.com/hancheng-ai/nextbrief"             # 现在就能用
+```
+
+`--python /usr/bin/python3` 是刻意的。定时任务是被一个 GUI 启动器拉起来的，`PATH` 极简；把解释器钉在系统那一个上，意味着 Homebrew 升级 Python（顺手把 pipx 虚拟环境所依赖的那个旧解释器退役掉）也不会弄坏每晚那次运行。CI 里也单独测这个解释器，理由完全一样。
+
+**4 · Homebrew（macOS）** —— *等第一个 release*
+
+```sh
+brew tap <owner>/tap
+brew install nextbrief
+```
+
+`<owner>` 就是本仓 URL 里的那个 GitHub 账号，tap 是它名下的 `homebrew-tap` 仓库。formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review。tap 会在 `v0.1.0` 切出来之后生效。
+
+（各发布渠道当前是「已生效」还是「待发布」，见英文版的 [Distribution](README.md#distribution) 一节。）
 
 ## 一份简报长什么样
 
