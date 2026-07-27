@@ -117,10 +117,13 @@ class ReadmeDemoReproduces(TempCase):
                 sensed.split("|")[0].strip() + " | " + sensed.split("|")[1].strip(),
                 console, "%s: stale `sense` line" % name,
             )
-            self.assertIn(
-                "| %d lines |" % len(brief_md.splitlines()), console,
-                "%s: the transcript's line count is stale" % name,
-            )
+            # Deliberately NOT asserted: the brief's line count. It differs
+            # between machines -- a reminder appears or does not depending on
+            # what is installed and on the git context the workspace sits in --
+            # so pinning it here fails the build for a reason that has nothing
+            # to do with the demonstration. The count of dropped claims and the
+            # rejected.jsonl content are the claims worth holding, and both are
+            # asserted above and below.
 
             self.assertEqual(
                 fenced_block(doc, "jsonl", "unresolvable_evidence"),

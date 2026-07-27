@@ -54,7 +54,7 @@ $ rm -rf log                     # rejected.jsonl is appended to, not rewritten
 $ nextbrief --workspace . sense --as-of 2026-03-16
 sense: 6 projects | 3 hot | 0 parse failures | snapshot 34KB / digest 13KB
 $ nextbrief --workspace . render --no-notify
-render: …/examples/workspace/BRIEF.md | 44 lines | v1 | notify: suppressed (--no-notify; would have been: first run)
+render: …/examples/workspace/BRIEF.md | v1 | notify: suppressed (--no-notify; would have been: first run)
   4 unverifiable claim(s) dropped -> log/rejected.jsonl
 ```
 
