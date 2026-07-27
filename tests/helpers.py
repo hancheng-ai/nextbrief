@@ -563,12 +563,25 @@ class TempCase(unittest.TestCase):
         return make_workspace(self.tmp / name, **kwargs)
 
     def copy_example(self, name="example"):
-        """A private copy of ``examples/workspace``.
+        """A private copy of ``examples/workspace``, inputs only.
 
         Copied rather than used in place for two reasons: the run writes
         ``state/`` and ``BRIEF.md`` into the workspace, and the repository's own
         example must not become test output.
+
+        Generated artifacts are excluded rather than copied. A contributor who
+        has run the example once would otherwise inherit its ``state/`` here, and
+        every test asserting on a first run -- that ``--stdout`` writes nothing,
+        that a missing snapshot reports itself missing -- would fail for a reason
+        that has nothing to do with the code. CI never sees it, because a fresh
+        checkout has no artifacts; only the person who actually used the example
+        does. The list mirrors examples/workspace/.gitignore.
         """
         dest = self.tmp / name
-        shutil.copytree(str(EXAMPLE_WORKSPACE), str(dest), symlinks=True)
+        shutil.copytree(
+            str(EXAMPLE_WORKSPACE),
+            str(dest),
+            symlinks=True,
+            ignore=shutil.ignore_patterns("state", "log", "BRIEF.md", "BRIEF.html"),
+        )
         return dest
