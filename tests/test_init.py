@@ -232,3 +232,50 @@ class SchemaInTheWorkspace(TempCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class PointerIsNotStolen(TempCase):
+    """The pointer is one line of global state that decides which workspace every
+    later bare command reads. init used to overwrite it unconditionally, so
+    creating a second workspace -- to try something, to help someone, inside a
+    test -- silently redirected the daily brief, and the result still looked like
+    a brief.
+
+    That is not hypothetical. A test run of init in a scratch directory took the
+    pointer during development, and the next `nextbrief ls` reported an empty
+    backlog for a workspace whose backlog was not empty at all.
+    """
+
+    def _init(self, name, **extra):
+        target = self.tmp / name
+        target.mkdir(exist_ok=True)
+        return capture(init_mod.init_workspace, str(target), yes=True, scan=False, **extra)
+
+    def _pointer(self):
+        return pointer_file().read_text(encoding="utf-8").strip()
+
+    def test_the_first_workspace_claims_it(self):
+        self.assertEqual(self._init("a")[0], 0)
+        self.assertEqual(self._pointer(), str(self.tmp / "a"))
+
+    def test_a_second_workspace_does_not_take_it(self):
+        self._init("a")
+        code, out, _ = self._init("b")
+        self.assertEqual(code, 0)
+        self.assertEqual(self._pointer(), str(self.tmp / "a"))
+        # And it has to say so: a silent no-op here is its own trap.
+        self.assertIn("default workspace", out.lower())
+
+    def test_set_default_repoints_deliberately(self):
+        self._init("a")
+        code, _, _ = capture(
+            init_mod.init_workspace, str(self.tmp / "b"), yes=True, scan=False, set_default=True
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(self._pointer(), str(self.tmp / "b"))
+
+    def test_re_initing_the_same_workspace_is_not_a_conflict(self):
+        self._init("a")
+        code, out, _ = self._init("a")
+        self.assertEqual(code, 0)
+        self.assertEqual(self._pointer(), str(self.tmp / "a"))
+        self.assertNotIn("default workspace is still", out.lower())

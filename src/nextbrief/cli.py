@@ -1060,7 +1060,8 @@ def cmd_do(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
 def cmd_init(args: argparse.Namespace, cat: Optional[Catalog]) -> int:
     from .init import init_workspace
 
-    return init_workspace(args.directory, yes=args.yes, cat=cat, scan=not args.no_scan)
+    return init_workspace(args.directory, yes=args.yes, cat=cat, scan=not args.no_scan,
+                          set_default=getattr(args, 'set_default', False))
 
 
 # ---------------------------------------------------------------------------
@@ -1168,6 +1169,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("directory", nargs="?", help="where to create it (default: here)")
     p.add_argument("-y", "--yes", action="store_true", help="adopt every discovered project without asking")
     p.add_argument("--no-scan", action="store_true", help="do not look for nearby projects")
+    p.add_argument("--set-default", action="store_true",
+                   help="make this the default workspace even if another one already is")
 
     return ap
 

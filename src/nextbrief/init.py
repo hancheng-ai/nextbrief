@@ -638,6 +638,7 @@ def init_workspace(
     yes: bool = False,
     cat: Optional[Catalog] = None,
     scan: bool = True,
+    set_default: bool = False,
 ) -> int:
     if cat is None:
         try:
@@ -695,7 +696,7 @@ def init_workspace(
         print(tr(cat, "init.exists", "{path} is already a workspace; leaving registry.jsonc alone.", path=str(root)))
         if created:
             print(tr(cat, "init.added", "Added: {files}", files=", ".join(created)))
-        pointed = _write_pointer(root, notes)
+        pointed = _write_pointer(root, notes, set_default)
         for note in notes:
             print(note)
         _next_steps(root, cat, pointed)
@@ -718,7 +719,7 @@ def init_workspace(
     created.append("registry.jsonc")
 
     _git_baseline(root, notes)
-    pointed = _write_pointer(root, notes)
+    pointed = _write_pointer(root, notes, set_default)
 
     print()
     print(tr(cat, "init.done", "Workspace ready: {path}", path=str(root)))
@@ -751,13 +752,51 @@ def init_workspace(
     return 0
 
 
-def _write_pointer(root: Path, notes: List[str]) -> bool:
+def _write_pointer(root: Path, notes: List[str], set_default: bool = False) -> bool:
     """Record the default workspace so later commands need no flags at all.
+
+    Refuses to steal an existing pointer. The pointer is global mutable state:
+    one line that decides which workspace every later bare command reads. If
+    ``init`` repoints it whenever it runs, then creating a second workspace --
+    to try something, to help someone, inside a test -- silently redirects the
+    daily brief, and the result still looks like a brief. You would find out the
+    next morning, if at all, because a confident report about the wrong
+    workspace reads exactly like a correct one.
+
+    That is not hypothetical: it happened during development. A test run of
+    ``init`` in a scratch directory took the pointer, and the next
+    ``nextbrief ls`` reported an empty backlog for a workspace whose backlog
+    was not empty at all.
+
+    So: claim the pointer when there is none, keep it when it already names this
+    workspace, and otherwise leave it alone and say so. ``--set-default``
+    repoints deliberately.
 
     Reports whether it worked, because the caller prints a promise about it and
     a promise that is not checked is worse than no pointer at all.
     """
     pointer = pointer_file()
+
+    if not set_default:
+        try:
+            current = pointer.read_text(encoding="utf-8").strip()
+        except OSError:
+            current = ""
+        if current:
+            try:
+                same = Path(current).expanduser().resolve() == root.resolve()
+            except OSError:
+                same = False
+            if same:
+                return True
+            notes.append(
+                "The default workspace is still %s, so bare commands keep reporting on it.\n"
+                "  For this one, use `nextbrief --workspace %s ...`,\n"
+                "  or re-run with `nextbrief init %s --set-default` to switch."
+                % (current, root, root)
+            )
+            return False
+
     try:
         pointer.parent.mkdir(parents=True, exist_ok=True)
         pointer.write_text(str(root) + "\n", encoding="utf-8")
@@ -778,8 +817,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("directory", nargs="?")
     ap.add_argument("-y", "--yes", action="store_true")
     ap.add_argument("--no-scan", action="store_true")
+    ap.add_argument("--set-default", action="store_true",
+                    help="make this the default workspace even if another already is")
     args = ap.parse_args(list(argv) if argv is not None else None)
-    return init_workspace(args.directory, yes=args.yes, scan=not args.no_scan)
+    return init_workspace(args.directory, yes=args.yes, scan=not args.no_scan,
+                          set_default=args.set_default)
 
 
 if __name__ == "__main__":  # pragma: no cover

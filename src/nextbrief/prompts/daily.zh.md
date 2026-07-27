@@ -97,8 +97,18 @@ hook     步骤每次完全相同 —— 固化成确定性脚本/钩子，零�
 `registry` 里带 `has_own_daily_entry` 的（例如 lantern → `DECISIONS.md`）：只给**计数 + 最高优先级那条的链接**，**绝不复述内容**。写进 `delegated`：
 
 ```json
-"delegated": {"lantern": "3 个问题等你拍板（最高 Q-014，high）→ DECISIONS"}
+"delegated": {
+  "lantern": {
+    "text": "3 个问题等你拍板（最高 Q-014，high）→ DECISIONS",
+    "evidence": [{"kind": "doc_declared", "source": "lantern/DECISIONS.md"}]
+  }
+}
 ```
+
+`delegated` 与 `decision_notes` 和其他陈述一样要过证据门，所以每个值都要写成
+`text` + `evidence`。只写一个字符串也能解析，但会被丢掉——字符串引用不了任何东西。
+如果你没法引用你正在计数的那份文档，就干脆别写这一条：渲染层本来就会给出指向它的
+链接，而一条被丢弃的陈述会白白花掉「N 条陈述被丢弃」这个警告。
 
 复述会造成两个后果：和那份文档漂移、吃光告警预算。nextbrief 只**排序**它，不**转述**它。
 
@@ -131,8 +141,8 @@ hook     步骤每次完全相同 —— 固化成确定性脚本/钩子，零�
      blocked_by 与 automation.tier 字段生成——那是结构化数据，不是判断，你加不上
      任何东西。写了不但费 token，而且这类陈述天然没有可引用的 source，会被证据门
      每次运行都丢掉一遍。一条每天都因为无害原因亮起的警告，到第三周就没人看了。*/
-  "delegated":    { "lantern": "…" },
-  "decision_notes": { "atlas": "能回答那个问题的证据是…" },
+  "delegated":    { "lantern": { "text": "…", "evidence": [ … ] } },
+  "decision_notes": { "atlas": { "text": "能回答那个问题的证据是…", "evidence": [ … ] } },
   "suggestions": [ "建议把 X 日期加进 registry.deadlines" ],
   "new_backlog_items": [ /* 见下 */ ],
   "cost_note": "…"

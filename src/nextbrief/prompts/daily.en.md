@@ -97,8 +97,20 @@ Every entry must give **all three**:
 For projects marked `has_own_daily_entry` in the registry (e.g. lantern → `DECISIONS.md`): give **a count and a link to the highest-priority item only**, and **never restate the content**. Put it in `delegated`:
 
 ```json
-"delegated": {"lantern": "3 open questions waiting on you (top: Q-014, high) → DECISIONS"}
+"delegated": {
+  "lantern": {
+    "text": "3 open questions waiting on you (top: Q-014, high) → DECISIONS",
+    "evidence": [{"kind": "doc_declared", "source": "lantern/DECISIONS.md"}]
+  }
+}
 ```
+
+`delegated` and `decision_notes` go through the evidence gate like everything
+else, so each value needs `text` plus `evidence`. A bare string is accepted and
+then dropped, because a bare string cites nothing. If you cannot cite the
+document you are counting, omit the entry -- the renderer already prints a link
+to it without your help, and a dropped claim spends the "N claims dropped"
+warning on nothing.
 
 Restating causes two things: drift against that document, and the whole alerting budget spent on it. nextbrief **ranks** it; it does not **retell** it.
 
@@ -134,8 +146,8 @@ Full definition in `{workspace_root}/schema/brief.schema.json`. Skeleton:
      no citable source, which the evidence gate then drops on every single
      run. A warning that fires every day for a harmless reason is a warning
      nobody reads by week three. */
-  "delegated":    { "lantern": "…" },
-  "decision_notes": { "atlas": "the evidence that would answer it is…" },
+  "delegated":    { "lantern": { "text": "…", "evidence": [ … ] } },
+  "decision_notes": { "atlas": { "text": "the evidence that would answer it is…", "evidence": [ … ] } },
   "suggestions": [ "consider adding date X to registry.deadlines" ],
   "new_backlog_items": [ /* see below */ ],
   "cost_note": "…"
