@@ -163,6 +163,20 @@ class Ranking(unittest.TestCase):
         late = render.score_project(served, cfg, {"o": self.dated(-5)})
         self.assertGreater(late, far)
 
+    def test_a_finished_outcome_stops_boosting(self):
+        # An outcome whose date has passed is `overdue`, which takes the maximum
+        # boost -- right for one you missed, permanent nonsense for one you met.
+        # The engine cannot tell those apart. `done` is the human saying which.
+        cfg = {}
+        served = make_project_entry(tier="active", serves=["o"])
+        missed = dict(self.dated(-5))
+        met = dict(missed, done=True)
+        self.assertGreater(render.score_project(served, cfg, {"o": missed}),
+                           render.score_project(served, cfg, {"o": met}))
+        # And a met commitment leaves the project scoring as if it served nothing.
+        self.assertEqual(render.score_project(served, cfg, {"o": met}),
+                         render.score_project(make_project_entry(tier="active"), cfg, {}))
+
     def test_a_compounding_outcome_changes_no_score(self):
         # No date to be near, and a constant for "long-term counts extra" would
         # be an uncitable number on a page that requires citations.

@@ -585,7 +585,11 @@ def _dated_commitments(p, outcomes=None):
         return out
     for oid in p.get("serves") or []:
         o = outcomes.get(oid)
-        if o and o.get("kind") == "dated":
+        # `done` is why a satisfied commitment stops shouting. An outcome whose
+        # date has passed is `overdue`, which takes the maximum boost -- correct
+        # for one you missed, permanent nonsense for one you met. The engine
+        # cannot tell those apart; the person who was there can.
+        if o and o.get("kind") == "dated" and not o.get("done"):
             out.append(o)
     return out
 

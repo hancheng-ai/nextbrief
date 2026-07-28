@@ -271,6 +271,9 @@
       "by": "2026-06-30",
       "lead_days": 30,          // how long before the date it starts climbing
       "hard": true,             // someone else set this date and cannot move it
+      // "done": true,          // it happened. A past date is `overdue` and takes the
+                               // maximum urgency forever -- right for one you missed,
+                               // wrong for one you met. Only you know which.
       "statement": "The external review happens with the deliverable submitted"
     },
     {

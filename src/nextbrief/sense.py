@@ -1234,6 +1234,9 @@ def check_shapes(cfg: Any, reg: Any) -> None:
                  "%s.id" % at, "a non-empty string", o.get("id"))
             want(o.get("kind") in ("dated", "compounding"),
                  "%s.kind" % at, '"dated" or "compounding"', o.get("kind"))
+            if o.get("done") is not None:
+                want(isinstance(o.get("done"), bool),
+                     "%s.done" % at, "true or false", o.get("done"))
             # A dated outcome without a date is the one shape that would fail
             # silently: it would parse, carry no urgency, and look like a
             # compounding outcome the author had merely mislabelled.
@@ -1351,6 +1354,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "kind": o.get("kind"),
             "statement": o.get("statement") or "",
             "hard": bool(o.get("hard", False)),
+            # Only a human can tell a commitment that was met from one that was
+            # missed: both are simply a date in the past to the engine, and an
+            # unqualified past date takes the maximum urgency boost forever.
+            "done": bool(o.get("done", False)),
             "by": None, "days_until": None, "lead_days": None,
             "in_lead_window": False, "overdue": False,
             "contributors": [],
