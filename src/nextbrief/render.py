@@ -46,7 +46,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional
 
-from .frontmatter import parse_frontmatter, rewrite_fields
+from .frontmatter import parse_frontmatter
+from .fs import append_jsonl, append_text, rewrite_fields, write_text
 from .i18n import Catalog, load_catalog
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
@@ -104,48 +105,13 @@ def scoring_of(cfg) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# workspace-scoped IO. Every write goes through here.
+# workspace-scoped IO
+#
+# `write_text`, `append_text`, `append_jsonl` and `rewrite_fields` are imported
+# from nextbrief.fs, which is the only module in the package that mutates a
+# filesystem. They are re-exported here because this is where they used to live
+# and where a reader looking for "what does the renderer write" still looks.
 # ---------------------------------------------------------------------------
-
-def _inside(ws: Workspace, path) -> bool:
-    return ws.contains(path)
-
-
-def write_text(ws: Workspace, path, text: str) -> bool:
-    """Write `text` to `path` if it differs. Returns True if the file changed.
-
-    Two invariants live in these six lines. The containment check makes the
-    engine *structurally* unable to write outside the workspace -- not a rule
-    someone has to remember, a precondition. Skipping identical content keeps
-    mtimes stable, without which a re-run of an unchanged tree would look like
-    fresh activity to the sensing stage.
-    """
-    p = Path(path)
-    if not _inside(ws, p):
-        raise WorkspaceError("refusing to write outside the workspace: %s" % p)
-    try:
-        if p.read_text(encoding="utf-8") == text:
-            return False
-    except (OSError, UnicodeDecodeError):
-        pass
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
-    return True
-
-
-def append_jsonl(ws: Workspace, path, obj) -> bool:
-    """Append one JSON object. Log writes fail silently -- losing a log line is
-    never a reason to abandon a run that has real output to produce."""
-    p = Path(path)
-    if not _inside(ws, p):
-        return False
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(str(p), "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(obj, ensure_ascii=False, sort_keys=True) + "\n")
-        return True
-    except OSError:
-        return False
 
 
 def _run(args, cwd=None, timeout=GIT_TIMEOUT):
@@ -384,9 +350,9 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
                 "why": "field is human-writable only",
             })
             reverted += 1
-        if not dry_run and on_disk and _inside(ws, it["_path"]):
+        if not dry_run and on_disk and ws.contains(it["_path"]):
             try:
-                rewrite_fields(Path(it["_path"]), on_disk)
+                rewrite_fields(ws, it["_path"], on_disk)
             except OSError:
                 pass
     return WriteGate("ran", reverted, "", unchecked)
@@ -1194,14 +1160,9 @@ def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catal
     text = ("" if run_n == 1 else "\n") + "\n".join(out)
     if dry_run:
         return
-    if not _inside(ws, path):
+    if not ws.contains(path):
         return
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(str(path), "a", encoding="utf-8") as fh:
-            fh.write(text)
-    except OSError:
-        pass
+    append_text(ws, path, text)
 
 
 def should_notify(cfg, snap, prev_snap, meta, notes):

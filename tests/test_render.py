@@ -489,13 +489,28 @@ class Containment(TempCase):
         self.assertFalse((self.outside / "escaped.md").exists())
 
     def test_append_jsonl_refuses_a_path_outside_the_workspace(self):
+        from nextbrief.paths import WorkspaceError, resolve_workspace
+
+        ws = resolve_workspace(str(self.ws))
+        # Log appends are fail-open about the *environment* -- a full disk or a
+        # read-only mount costs a log line, never the run -- but not about the
+        # target. A path outside the workspace is a caller bug, and a bug that
+        # returns False is a bug that ships.
+        with self.assertRaises(WorkspaceError):
+            render.append_jsonl(ws, self.outside / "escaped.jsonl", {"a": 1})
+        self.assertFalse((self.outside / "escaped.jsonl").exists())
+
+    def test_a_log_append_survives_an_unwritable_target(self):
+        # The other half of that split: inside the workspace, an OSError is
+        # swallowed. The run has a brief to finish.
         from nextbrief.paths import resolve_workspace
 
         ws = resolve_workspace(str(self.ws))
-        # Log writes fail silently rather than raising: losing a log line is never
-        # a reason to abandon a run with real output to produce.
-        self.assertFalse(render.append_jsonl(ws, self.outside / "escaped.jsonl", {"a": 1}))
-        self.assertFalse((self.outside / "escaped.jsonl").exists())
+        blocked = self.ws / "log" / "blocked"
+        blocked.mkdir(parents=True, exist_ok=True)
+        # A directory where the log line expects a file: open(..., "a") raises
+        # IsADirectoryError, which is an OSError.
+        self.assertFalse(render.append_jsonl(ws, blocked, {"a": 1}))
 
 
 class Notification(RenderCase):

@@ -42,10 +42,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import resources
+from .fs import write_outside_workspace, write_text
 from .i18n import Catalog, load_catalog
 from .jsonc import JSONCError, loads_jsonc
 from .launch import tr
-from .paths import expand, pointer_file
+from .paths import Workspace, expand, pointer_file
 
 __all__ = ["init_workspace", "main"]
 
@@ -588,15 +589,20 @@ def _git_baseline(root: Path, notes: List[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_if_absent(dst: Path, text: Optional[str]) -> bool:
+def _write_if_absent(ws: Workspace, dst: Path, text: Optional[str]) -> bool:
     """Write a bundled file into the workspace unless something is already there.
 
     Never overwrites: on a re-run the file on disk is the one the user may have
     edited, and init is idempotent by contract.
+
+    ``ws`` is the workspace being scaffolded rather than a resolved one -- it does
+    not exist yet, which is the point of the command -- but it is still what makes
+    the containment check meaningful: every path init writes has to land under the
+    directory the user named.
     """
     if text is None or dst.exists():
         return False
-    dst.write_text(text, encoding="utf-8")
+    write_text(ws, dst, text)
     return True
 
 
@@ -681,6 +687,12 @@ def init_workspace(
         _err("error: packaged templates are missing -- reinstall nextbrief.")
         return 1
 
+    # The workspace init is building. It has no registry yet, so it cannot be
+    # resolved the ordinary way -- but every write below is still checked against
+    # it, so a template or a settings file cannot land outside the directory the
+    # user actually named.
+    ws = Workspace(root=root, out=root, source="init")
+
     registry_path = root / "registry.jsonc"
     already = registry_path.is_file()
 
@@ -700,27 +712,25 @@ def init_workspace(
     notes: List[str] = []
 
     if not (root / ".gitignore").exists():
-        (root / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+        write_text(ws, root / ".gitignore", GITIGNORE)
         created.append(".gitignore")
 
     agent_settings = root / ".claude" / "settings.json"
     if not agent_settings.exists():
         try:
-            agent_settings.parent.mkdir(parents=True, exist_ok=True)
-            agent_settings.write_text(
-                json.dumps(agent_permissions(root), indent=2) + "\n", encoding="utf-8"
-            )
+            write_text(ws, agent_settings,
+                       json.dumps(agent_permissions(root), indent=2) + "\n")
             created.append(".claude/settings.json")
         except OSError as exc:
             notes.append("Could not write %s (%s); the scheduled run will stop at a "
                          "permission prompt until it exists." % (agent_settings, exc))
-    if _write_if_absent(root / "config.jsonc", config_template):
+    if _write_if_absent(ws, root / "config.jsonc", config_template):
         created.append("config.jsonc")
     for name in resources.list_names(PROMPT_DIR, ".md"):
-        if _write_if_absent(root / "prompts" / name, resources.read_text(PROMPT_DIR, name)):
+        if _write_if_absent(ws, root / "prompts" / name, resources.read_text(PROMPT_DIR, name)):
             created.append("prompts/%s" % name)
     for name in resources.list_names(SCHEMA_DIR):
-        if _write_if_absent(root / "schema" / name, resources.read_text(SCHEMA_DIR, name)):
+        if _write_if_absent(ws, root / "schema" / name, resources.read_text(SCHEMA_DIR, name)):
             created.append("schema/%s" % name)
 
     if already:
@@ -750,7 +760,7 @@ def init_workspace(
     except (JSONCError, ValueError) as exc:
         _err("error: packaged %s is not valid JSONC (%s)" % (REGISTRY_TEMPLATE, exc))
         return 1
-    registry_path.write_text(text, encoding="utf-8")
+    write_text(ws, registry_path, text)
     created.append("registry.jsonc")
 
     _git_baseline(root, notes)
@@ -874,7 +884,7 @@ def _write_pointer(root: Path, notes: List[str], set_default: bool = False) -> b
 
     try:
         pointer.parent.mkdir(parents=True, exist_ok=True)
-        pointer.write_text(str(root) + "\n", encoding="utf-8")
+        write_outside_workspace(pointer, str(root) + "\n", "init:pointer")
     except OSError as exc:
         notes.append(
             "Could not write %s (%s); pass --workspace %s or set NEXTBRIEF_WORKSPACE."

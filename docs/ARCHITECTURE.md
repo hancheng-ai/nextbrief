@@ -198,6 +198,48 @@ therefore cannot disagree, and a change to a gate lands in both at once.
 
 ---
 
+## The floor: what the engine can touch at all
+
+The four gates above decide what reaches the page. This one decides what reaches
+the disk, and it is not numbered among them because it is not part of the render
+pass — it holds for every stage, every command, and every code path that has ever
+opened a file for writing.
+
+All of it lives in `nextbrief.fs`, which is the only module in the package that
+mutates a filesystem. Everything else calls into it.
+
+**Containment.** Nothing outside `Workspace.root` or `Workspace.out` may be
+created, modified or removed. This is what makes it safe to point the engine at a
+directory holding a dozen unrelated repositories: the neighbours are input, and
+the engine is structurally unable to treat them as output. Not a rule a
+contributor has to remember — a precondition on every mutating call, with no
+unchecked function left to reach for.
+
+**Human-only paths.** Backlog entries, `registry.jsonc` and `config.jsonc` cannot
+be deleted or renamed. Gate 3 already refuses to let anything automated write a
+terminal status, and deletion reaches that same end state by a shorter route: an
+item that is gone is closed, and closed without the record that it was ever open.
+The registry and config are protected for a second reason — they declare what the
+engine may look at, so a run able to delete them is a run able to widen its own
+scope. Directories are refused outright. There is no recursive delete in this
+package and nothing has needed one.
+
+**Declared exits.** Three things legitimately live outside every workspace: the
+pointer file recording your default workspace, the agent settings file that
+`permissions --merge-into` edits, and the backup taken beside it. Each names
+itself against a list in `fs.ESCAPES`, and an undeclared reason raises. The list
+is short and hand-maintained on purpose — it is the review surface, and adding to
+it should be conspicuous in a diff rather than a one-line call at some new site.
+Neither `sense` nor `render` imports the escape at all, which is asserted by a
+test: no unattended nightly run can write outside a workspace by any path.
+
+One deliberate asymmetry. Log appends are fail-open about the *environment* — a
+full disk costs a log line, never the run — but not about the *target*. A path
+outside the workspace raises, because that is a bug in the caller, and a bug that
+returns `False` is a bug that ships.
+
+---
+
 ## Cost, as measured
 
 The figures below are measurements from the reference workspace the engine was
@@ -249,7 +291,7 @@ not been taken.
 
 ---
 
-## Two properties that are easy to lose
+## Three properties that are easy to lose
 
 **Determinism.** The self-check re-runs the sense stage and compares the result
 to what is on disk; it exits `3` when they differ. That check is only meaningful

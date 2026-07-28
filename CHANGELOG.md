@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Containment and delete gates**, in a new `nextbrief.fs` module that is now
+  the only place in the package that mutates a filesystem. Every write, append,
+  frontmatter rewrite, rename and delete is checked against the resolved
+  workspace before it happens. Previously this held only for the two helpers in
+  the renderer; the sensing stage, the CLI and the frontmatter writer wrote
+  unchecked, so the guarantee covered roughly the code that remembered it.
+- **Human-only paths.** Backlog entries, `registry.jsonc` and `config.jsonc`
+  cannot be deleted or renamed by the engine. The write-permission gate already
+  refused to let anything automated set a terminal status; deleting an entry
+  reaches the same end state and destroys the record that it ever existed, so it
+  is refused in the same spirit. Directories are refused outright — there is no
+  recursive delete and nothing has needed one.
+- **Declared exits.** The three places that legitimately write outside a
+  workspace — the `init` pointer file, `permissions --merge-into`, and its
+  backup — now name themselves against a list in `fs.ESCAPES`. An undeclared
+  reason raises. A test asserts the list and the call sites have not drifted
+  apart, and that neither `sense` nor `render` can reach the door at all.
+- `nextbrief done` now refuses to `git add` a path outside the workspace, so a
+  commit cannot stage someone else's work under a backlog message.
+
+### Changed
+
+- `append_jsonl` and `append_text` now **raise** on a target outside the
+  workspace instead of returning `False`. Log writes remain fail-open for
+  `OSError` — a full disk still costs a log line rather than the run — but an
+  out-of-workspace target is a caller bug, and a bug that returns `False` ships.
+  No caller in the package was affected; all of them append inside `log/`.
+
 ## [0.1.0rc5] - 2026-07-27
 
 First public prerelease. On [TestPyPI](https://test.pypi.org/project/nextbrief/),

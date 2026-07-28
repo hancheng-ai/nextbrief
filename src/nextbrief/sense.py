@@ -64,6 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import __version__
 from .frontmatter import parse_frontmatter
+from .fs import write_text
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
@@ -1926,12 +1927,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # Yesterday's snapshot is what the renderer diffs against; losing it
         # costs a day of "what changed", so a failed rotation is not fatal.
         try:
-            ws.snapshot_prev.write_text(ws.snapshot.read_text(encoding="utf-8"),
-                                        encoding="utf-8")
+            write_text(ws, ws.snapshot_prev, ws.snapshot.read_text(encoding="utf-8"),
+                       skip_identical=False)
         except OSError:
             pass
-    ws.snapshot.write_text(text, encoding="utf-8")
-    ws.digest.write_text(dtext, encoding="utf-8")
+    # skip_identical=False: the sense stage rewrites unconditionally, which is
+    # what its own --check determinism test was written against.
+    write_text(ws, ws.snapshot, text, skip_identical=False)
+    write_text(ws, ws.digest, dtext, skip_identical=False)
 
     n_hot = sum(1 for p in snap["projects"] if p["evidence"]["signal"] == "hot")
     print("sense: %d projects | %d hot | %d parse failures | snapshot %.0fKB / digest %.0fKB"

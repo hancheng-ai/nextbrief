@@ -35,7 +35,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import __version__, resources
-from .frontmatter import parse_frontmatter, rewrite_fields
+from .frontmatter import parse_frontmatter
+from .fs import rewrite_fields, write_outside_workspace, write_text
 from .i18n import Catalog, load_catalog
 from .jsonc import JSONCError, load_jsonc
 from .launch import LaunchError, build_context, tr
@@ -300,6 +301,15 @@ def _commit_human(ws: Workspace, path: Path, action: str, item_id: str) -> bool:
     Callers must treat ``False`` as a failed command. Reporting success for an
     edit the next run will revert is worse than reporting nothing at all.
     """
+    # `git add` is a write, and the pathspec below decides what it writes. The
+    # containment rule that governs every other mutation governs this one too:
+    # a commit is the only way this package changes a file it did not itself
+    # author, and a pathspec pointing out of the workspace would stage someone
+    # else's work under a message about a backlog item.
+    if not ws.contains(path):
+        _err("error: refusing to commit %s: it is outside the workspace %s" % (path, ws.root))
+        return False
+
     # Re-running `done` on an item that is already done changes nothing, and a
     # commit attempt would only produce a scary "nothing to commit" warning about
     # a file that is already the baseline.
@@ -346,7 +356,7 @@ def _mark(
     fields = dict(fields)
     fields["updated_date"] = dt.date.today().isoformat()
     try:
-        rewrite_fields(path, fields)
+        rewrite_fields(ws, path, fields)
     except OSError as exc:
         _err("error: cannot write %s: %s" % (path, exc))
         return EXIT_FAIL
@@ -563,8 +573,7 @@ def _stage_interpret(ws: Workspace, cat: Optional[Catalog]) -> None:
         _err("warning: provider %r did not return JSON (%s); keeping the previous brief" % (name, exc))
         return
     try:
-        ws.state.mkdir(parents=True, exist_ok=True)
-        ws.brief_json.write_text(text + "\n", encoding="utf-8")
+        write_text(ws, ws.brief_json, text + "\n")
     except OSError as exc:
         _err("warning: cannot write %s: %s" % (ws.brief_json, exc))
 
@@ -1132,14 +1141,18 @@ def cmd_permissions(ws: Workspace, args: argparse.Namespace, cat: Optional[Catal
         # one moment they would want it is the one moment it would not exist.
         backup = path.with_suffix(path.suffix + ".nextbrief-backup")
         try:
-            backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            write_outside_workspace(
+                backup, path.read_text(encoding="utf-8"), "permissions:backup")
         except OSError as exc:
             _err("error: cannot write %s (%s); refusing to modify the original." % (backup, exc))
             return EXIT_FAIL
 
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_outside_workspace(
+            path,
+            json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
+            "permissions:merge-into",
+        )
     except OSError as exc:
         _err("error: cannot write %s (%s)" % (path, exc))
         return EXIT_FAIL
