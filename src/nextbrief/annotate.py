@@ -34,7 +34,8 @@ question stays visibly unanswered and never quietly becomes data.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import json
+from typing import Any, Dict, List, Sequence, Tuple
 
 from .fs import write_text
 from .jsonc import JSONCError, load_jsonc
@@ -48,6 +49,8 @@ __all__ = [
     "derive_effort",
     "load_annotations",
     "needs_annotating",
+    "pending_count",
+    "question_targets",
     "record_answers",
 ]
 
@@ -206,8 +209,6 @@ def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]]) -> int:
                 entry[key] = value
         current[pid] = entry
 
-    import json
-
     body = json.dumps({"projects": current}, ensure_ascii=False, indent=2, sort_keys=True)
     header = (
         "// Written by `nextbrief review`, from questions you answered.\n"
@@ -231,7 +232,3 @@ def question_targets(snapshot, self_ids=None, limit: int = 2) -> List[Dict[str, 
 def pending_count(snapshot, self_ids=None) -> int:
     return len(needs_annotating(snapshot, self_ids))
 
-
-def stored_for(project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """What `review` would store for a project given only what is observable."""
-    return {"ice": {"effort": derive_effort(project)}}

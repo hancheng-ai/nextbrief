@@ -20,6 +20,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from .annotate import QUESTIONS, question_targets
 from .i18n import Catalog
 
 # Markdown checkbox prefix: "- [ ] " / "- [x] " / "* [X] ".
@@ -204,6 +205,7 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
         caps_of,
         classify,
         gated_text,
+        self_project_ids,
     )
 
     notes = notes or {}
@@ -399,6 +401,23 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
             A("<li>%s</li>" % md_inline(cat.t("brief.waiting.project", name=p.get("name", ""),
                                               dep=p.get("external_dependency", ""))))
         A("</ul></div>")
+
+    # ---------- the one thing only a person can answer ----------
+    # Mirrors BRIEF.md exactly. `question_targets` is the same function the
+    # renderer calls, given the same snapshot, so the two artifacts cannot ask
+    # different questions -- which is the whole reason neither of them is
+    # allowed to decide anything for itself.
+    asking = question_targets(snapshot, self_project_ids(snapshot, reg),
+                              limit=caps.get("max_questions", 2))
+    if asking:
+        A("<h2>%s</h2><div class=card>" % e(cat.t("brief.section.questions")))
+        for p_ in asking:
+            A("<p><b>%s</b> &mdash; %s</p><ul class=plain>"
+              % (e(p_.get("name") or p_.get("id")), e(cat.t("review.q.impact"))))
+            for _value, key in QUESTIONS[0].choices:
+                A("<li>%s</li>" % e(cat.t(key)))
+            A("</ul>")
+        A("</div>")
 
     # ---------- reminders ----------
     rem = notes.get("reminders") or []

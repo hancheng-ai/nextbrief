@@ -197,6 +197,27 @@ class TheBriefAsks(TempCase):
         text = self.render([entry("done", ice={"impact": 4, "confidence": 3, "effort": 2})])
         self.assertNotIn("slipped by a month", text)
 
+    def test_both_renderings_ask_the_same_question(self):
+        """The invariant this feature broke on arrival.
+
+        BRIEF.md and BRIEF.html are rendered from one gated dataset and neither
+        is allowed to decide anything for itself, so they cannot disagree. The
+        first cut of this feature added the section to the Markdown only, which
+        meant the HTML reader was never asked at all -- silently, since nothing
+        compares the two.
+        """
+        text = self.render([entry("newthing", ice=None)])
+        html = (self.ws / "BRIEF.html").read_text(encoding="utf-8")
+        self.assertIn("slipped by a month", text)
+        self.assertIn("slipped by a month", html)
+        self.assertIn("it is exploration", html)
+        self.assertIn("I would drop other things to protect it", html)
+
+    def test_neither_rendering_asks_once_it_is_answered(self):
+        self.render([entry("done", ice={"impact": 4, "confidence": 3, "effort": 2})])
+        html = (self.ws / "BRIEF.html").read_text(encoding="utf-8")
+        self.assertNotIn("slipped by a month", html)
+
     def test_the_section_is_capped(self):
         # It must never compete with the brief it is printed inside.
         text = self.render([entry("a", ice=None, days=1), entry("b", ice=None, days=2),
