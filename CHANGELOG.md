@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0rc8] - 2026-07-28
+
 ### Added
 
 - **Outcomes** — `registry.outcomes` plus per-project `serves`. A deadline is a
@@ -30,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outcome is recorded in `parse_failed` rather than dropped: silently ignoring it
   leaves the project looking unattached, which is indistinguishable from never
   having declared the link.
+
+- **`outcomes[].done`** — a met commitment stops shouting. A dated outcome whose
+  date has passed is `overdue`, which takes the maximum urgency boost: right for
+  one you missed, permanent nonsense for one you met, and the contributors stay
+  pinned to the top of the table for something that is finished. The engine cannot
+  tell those apart — both are a date in the past, and the difference is entirely a
+  fact about what happened. `done: true` is the person who was there saying which.
 
 ## [0.1.0rc7] - 2026-07-28
 
@@ -162,7 +171,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc7...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc8...HEAD
+[0.1.0rc8]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc8
 [0.1.0rc7]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc7
 [0.1.0rc6]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc6
 [0.1.0rc5]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc5
