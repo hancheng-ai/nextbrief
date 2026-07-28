@@ -20,7 +20,7 @@
 # On every later release, bump `version` and re-derive the checksum from the
 # published asset -- the url is built from `version`, so one edit moves both:
 #
-#   V=0.1.0rc8
+#   V=0.1.0rc9
 #   curl -fsSLO "https://github.com/hancheng-ai/nextbrief/releases/download/v$V/nextbrief-$V.tar.gz"
 #   shasum -a 256 "nextbrief-$V.tar.gz"      # paste over the sha256 below
 #   cd homebrew-tap
@@ -56,11 +56,11 @@ class Nextbrief < Formula
   # filename, and `version`. They are spelled out rather than interpolated
   # because Homebrew audits the stanza order (url, version, sha256), which leaves
   # nothing to interpolate from at the point the url is written.
-  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc8/nextbrief-0.1.0rc8.tar.gz"
-  # Declared rather than inferred from the filename: `0.1.0rc8` is exactly the
+  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc9/nextbrief-0.1.0rc9.tar.gz"
+  # Declared rather than inferred from the filename: `0.1.0rc9` is exactly the
   # kind of string Homebrew's parser is entitled to read as `0.1.0-rc1`, and the
   # test block compares `version` against what the binary prints.
-  version "0.1.0rc8"
+  version "0.1.0rc9"
   sha256 "ca552226e99c6011dcefcfae56d5ecffb9c712882c5f0948f13079eef731c396"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"

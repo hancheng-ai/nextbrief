@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0rc9] - 2026-07-28
+
 ### Added
 
 - **`nextbrief review`, and a question channel in the brief.** The registry
@@ -39,7 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `review` refuses to prompt when stdin is not a terminal, and says what it would
   have asked instead. A scheduled run that blocks on a prompt at 21:30 produces
   nothing at all, and this command is named in the brief.
-
 
 ## [0.1.0rc8] - 2026-07-28
 
@@ -205,7 +206,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc8...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc9...HEAD
+[0.1.0rc9]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc9
 [0.1.0rc8]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc8
 [0.1.0rc7]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc7
 [0.1.0rc6]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc6
