@@ -278,6 +278,48 @@ reason the field exists.
 
 ---
 
+## Asking, when only a person can answer
+
+Two of the three ICE axes are judgements the engine cannot make, and the third
+is a measurement it can. The registry asked for all three as integers, and the
+predictable result was that they went unfilled — which is how a portfolio ends up
+ranked on a `{3, 3, 3}` fallback nobody chose.
+
+The split now follows what is knowable:
+
+| axis | how |
+|---|---|
+| effort | **measured** from file count; a guess here is worse than a count |
+| impact | **asked** as a consequence, four fixed answers |
+| confidence | **asked** as a consequence, three fixed answers |
+
+Nothing asks for a number. *"If this slipped by a month, what happens?"* is
+answerable in a second and stays comparable between projects and over time;
+"impact 4" is neither, and its own author cannot reconstruct it a month later.
+The stored integer is an implementation detail of the scoring formula.
+
+Answers go to `annotations.jsonc`, never to `registry.jsonc`. The registry is the
+human's file — comments, ordering and all — and a tool that rewrites it will
+eventually get that wrong on the one file whose loss costs the most. The overlay
+also keeps authorship legible: everything in the registry was typed by its owner,
+everything in the overlay was answered by them. Where the two disagree the
+registry wins, because someone who opened their own file said something more
+deliberate than someone who clicked a menu.
+
+The brief carries at most two questions, most recently active first, and each
+disappears once answered — so the unanswered backlog drains in a fortnight with
+no setup session. `nextbrief review` does them in one sitting, and refuses to
+prompt when stdin is not a terminal: a scheduled run that blocks on a prompt
+produces nothing, and this command is named inside the brief.
+
+The rule the whole design turns on: **a proposal awaiting an answer is not an
+assertion.** Suggested answers can be pre-selected as aggressively as is useful,
+provided an unanswered question stays visibly unanswered and never quietly
+becomes data. That is exactly the line discovery crossed with its synthesised
+`tier: "active"`, and had to be walked back across.
+
+---
+
 ## The floor: what the engine can touch at all
 
 The four gates above decide what reaches the page. This one decides what reaches

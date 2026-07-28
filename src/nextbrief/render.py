@@ -46,6 +46,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional
 
+from .annotate import QUESTIONS, pending_count, question_targets
 from .frontmatter import parse_frontmatter
 from .fs import append_jsonl, append_text, rewrite_fields, write_text
 from .i18n import Catalog, load_catalog
@@ -1089,6 +1090,26 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         rem.append(cat.t("reminder.deferred", count=notes["deferred"],
                          path="log/deferred.jsonl"))
     notes["reminders"] = rem   # the HTML reuses this list, so the two cannot drift
+
+    # ---- the one thing only a person can answer -------------------------
+    #
+    # Not a claim, so gate 1 has nothing to check: every word here is either a
+    # fixed string from the catalogue or a fact about the registry's own
+    # contents, which the reader can verify by opening it. That is also why this
+    # can be asked daily without becoming noise -- it disappears the moment it
+    # is answered, and answering it is one command.
+    own = self_project_ids(snap, reg)
+    asking = question_targets(snap, own, limit=caps.get("max_questions", 2))
+    if asking:
+        L.append("## " + cat.t("brief.section.questions"))
+        for p in asking:
+            L.append("- **%s** — %s" % (p.get("name") or p.get("id"),
+                                        cat.t("review.q.impact")))
+            for _value, key in QUESTIONS[0].choices:
+                L.append("  - " + cat.t(key))
+        L.append("")
+        rem.append(cat.t("review.pending", n=pending_count(snap, own)))
+
     if rem:
         L.append("## " + cat.t("brief.section.reminders"))
         for r in rem[:8]:

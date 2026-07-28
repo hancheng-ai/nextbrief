@@ -35,6 +35,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import __version__, resources
+from .annotate import (
+    ANNOTATIONS_NAME,
+    QUESTIONS,
+    derive_effort,
+    needs_annotating,
+    record_answers,
+)
 from .frontmatter import parse_frontmatter
 from .fs import rewrite_fields, write_outside_workspace, write_text
 from .i18n import Catalog, load_catalog
@@ -73,6 +80,7 @@ commands:
   ls           list every open item
   prune        list items worth revisiting, with what to do about them
 
+  review       answer the questions only you can answer (multiple choice)
   init [dir]   create a workspace and get to a first brief
   permissions  print, or merge in, the rules an unattended run needs
 """
@@ -1164,6 +1172,92 @@ def cmd_permissions(ws: Workspace, args: argparse.Namespace, cat: Optional[Catal
     return EXIT_OK
 
 
+
+def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Ask, in one sitting, the questions only a person can answer.
+
+    Everything here is multiple choice. The registry wants three integers per
+    project and nobody supplies them, because "impact 4" is an absolute number
+    on a scale nobody defined -- unanswerable in the moment and unreadable a
+    month later. A consequence is answerable instantly and stays comparable:
+    "if this slipped a month, what happens?"
+
+    Effort is never asked. It is measured, and on that axis a guess is worse
+    than a count.
+
+    Refuses to ask anything when stdin is not a terminal, and says what it would
+    have asked. A scheduled run that blocks on a prompt at 21:30 is a run that
+    silently produces nothing, and this command is reachable from a brief.
+    """
+    snap_path = ws.snapshot
+    if not snap_path.is_file():
+        _err("error: no snapshot yet -- run `nextbrief sense` first.")
+        return EXIT_FAIL
+    try:
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _err("error: cannot read %s (%s)" % (snap_path, exc))
+        return EXIT_FAIL
+
+    from .render import self_project_ids
+
+    targets = needs_annotating(snap, self_project_ids(snap, None, ws))
+    if not targets:
+        print(tr(cat, "review.nothing", "Nothing to ask about -- every active project has an answer."))
+        return EXIT_OK
+
+    if not sys.stdin.isatty():
+        print(tr(cat, "review.not_a_tty",
+                 "Not an interactive terminal, so nothing was asked. It would ask about: {names}",
+                 names=", ".join(str(p.get("id")) for p in targets)))
+        return EXIT_OK
+
+    answers: Dict[str, Any] = {}
+    for proj in targets:
+        pid = str(proj.get("id"))
+        print("")
+        print("== %s ==" % (proj.get("name") or pid))
+        ice: Dict[str, Any] = {"effort": derive_effort(proj)}
+        print("   " + tr(cat, "review.effort_derived",
+                         "Effort is measured, not asked: {n} files.",
+                         n=(proj.get("fs") or {}).get("total_files") or 0))
+        for q in QUESTIONS:
+            if (proj.get("ice") or {}).get(q.field) is not None:
+                continue
+            print("")
+            print("   " + tr(cat, q.key, q.key))
+            for i, (_v, key) in enumerate(q.choices, 1):
+                print("     %d) %s" % (i, tr(cat, key, key)))
+            picked = _ask_choice(len(q.choices), tr(cat, "review.skip", "Enter to skip"))
+            if picked is None:
+                continue
+            ice[q.field] = q.choices[picked - 1][0]
+        # Only record a project the user actually answered something for. An
+        # entry holding nothing but a derived effort is the tool writing its own
+        # measurement back as though it were an answer.
+        if len(ice) > 1:
+            answers[pid] = {"ice": ice}
+
+    n = record_answers(ws, answers)
+    if n:
+        print("")
+        print(tr(cat, "review.saved", "Recorded {n} project(s) in {path}.",
+                 n=n, path=ANNOTATIONS_NAME))
+    return EXIT_OK
+
+
+def _ask_choice(count: int, skip_hint: str) -> Optional[int]:
+    """Read a 1..count choice. Anything else, including EOF, means skip."""
+    try:
+        raw = input("   [1-%d, %s] " % (count, skip_hint)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not raw.isdigit():
+        return None
+    n = int(raw)
+    return n if 1 <= n <= count else None
+
+
 _HANDLERS = {
     "run": cmd_run,
     "v0": cmd_v0,
@@ -1181,6 +1275,7 @@ _HANDLERS = {
     "ls": cmd_ls,
     "prune": cmd_prune,
     "permissions": cmd_permissions,
+    "review": cmd_review,
 }
 
 
@@ -1217,6 +1312,8 @@ def build_parser() -> argparse.ArgumentParser:
     # The four pipeline commands document the stage flags they are most often
     # given, but forward whatever was typed verbatim (see `_stage_args`), so a
     # flag a stage grows later needs no change here.
+    add("review", "answer the questions only you can answer")
+
     p = add("run", "all three stages")
     p.add_argument("extra", nargs="*", help="passed through to render")
 

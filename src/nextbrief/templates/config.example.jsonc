@@ -75,6 +75,11 @@
     "max_agent_queue": 3,
     "max_new_items_per_run": 5,   // overflow goes to log/deferred.jsonl, never straight into backlog
     "max_decision_pending": 3,
+
+    // How many "only you can answer this" questions the brief may carry.
+    // Two: enough that the backlog of unanswered projects drains in a fortnight,
+    // few enough that the section never competes with the actual brief.
+    "max_questions": 2,
     "per_project_line_chars": 140,
     "brief_max_lines": 60
   },

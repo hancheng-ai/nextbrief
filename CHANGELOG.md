@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nextbrief review`, and a question channel in the brief.** The registry
+  wanted three integers per project and nobody supplied them — not from laziness,
+  but because the question is harder than the judgement it captures. "Impact 4"
+  is an absolute number on a scale nobody defined, unanswerable in the moment and
+  unreadable a month later.
+
+  So nothing asks for a number any more. **Effort is never asked** — it is
+  measured from what is on disk, the one axis where a guess is worse than a
+  count. **Impact and confidence are asked as consequences**, multiple choice:
+  *"If this slipped by a month, what happens?"* — nothing, I'd be annoyed, a date
+  slips or someone is blocked, I'd drop other things to protect it. Answerable in
+  a second, and comparable between projects and across time in a way a remembered
+  "4" is not.
+
+  The brief carries at most `caps.max_questions` (default 2) of these, most
+  recently active first, and each disappears the moment it is answered. So the
+  backlog of unanswered projects drains over a fortnight without anyone
+  scheduling a setup session.
+
+- **`annotations.jsonc`** — where those answers land. Never `registry.jsonc`:
+  that file is the human's, comments and ordering included, and a tool that
+  rewrites it will eventually get that wrong on the file whose loss costs most.
+  Anything typed into the registry overrides the overlay, so a hand edit is never
+  quietly undone. Applied *after* discovery, so a discovered project can be
+  annotated without first being declared — which is the point, since the person
+  who has not written a registry entry is exactly the person being asked.
+
+  `review` refuses to prompt when stdin is not a terminal, and says what it would
+  have asked instead. A scheduled run that blocks on a prompt at 21:30 produces
+  nothing at all, and this command is named in the brief.
+
+
 ## [0.1.0rc8] - 2026-07-28
 
 ### Added

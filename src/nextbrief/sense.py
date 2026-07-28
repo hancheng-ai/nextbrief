@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import __version__
+from .annotate import apply_annotations, load_annotations
 from .discovery import discover
 from .frontmatter import parse_frontmatter
 from .fs import write_text
@@ -1294,6 +1295,12 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     if discovered:
         reg = dict(reg)
         reg["projects"] = list(reg.get("projects") or []) + discovered
+
+    # Answers recorded by `nextbrief review`, laid over the registry. Applied
+    # after discovery so a discovered project can be annotated without first
+    # being declared -- which is the whole point, since the person who has not
+    # written a registry entry is exactly the person being asked.
+    reg = apply_annotations(reg, load_annotations(ws))
 
     # Root-relative privacy globs, applied to every walk regardless of which
     # project declared them (FIX-1a: a private directory nested in another
