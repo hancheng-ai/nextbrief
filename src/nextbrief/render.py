@@ -565,7 +565,32 @@ def non_goal_flag(text, non_goals):
 # ranking
 # ---------------------------------------------------------------------------
 
-def score_project(p, cfg):
+def _dated_commitments(p, outcomes=None):
+    """Every dated thing this project is on the hook for: its own deadlines, plus
+    the dated outcomes it serves.
+
+    The two are scored by identical arithmetic and combined with ``max``, which is
+    what keeps a shared commitment from being counted once per contributor. Three
+    projects serving one date used to duplicate that date into three registry
+    entries and each earn the full boost independently, so one commitment produced
+    three urgent rows at the top of the table. Declared once as an outcome, it
+    lifts each contributor exactly as much as its own deadline would have.
+
+    Compounding outcomes are absent on purpose. They have no date to be near, and
+    a constant standing in for "long-term work counts extra" would be precisely
+    the uncitable number this engine refuses to put on a page.
+    """
+    out = list(p.get("deadlines") or [])
+    if not outcomes:
+        return out
+    for oid in p.get("serves") or []:
+        o = outcomes.get(oid)
+        if o and o.get("kind") == "dated":
+            out.append(o)
+    return out
+
+
+def score_project(p, cfg, outcomes=None):
     ice = p.get("ice") or {"impact": 3, "confidence": 3, "effort": 3}
     imp = ice.get("impact", 3) or 3
     conf = ice.get("confidence", 3) or 3
@@ -593,7 +618,7 @@ def score_project(p, cfg):
     decay_term = floor + (1.0 - floor) * decay
 
     boost = 1.0
-    for d in p.get("deadlines") or []:
+    for d in _dated_commitments(p, outcomes):
         if d.get("days_until", 0) < 0:
             boost = max(boost, 1.0 + sc["deadline_boost_max"])
         elif d.get("in_lead_window") and d.get("lead_days"):
@@ -617,7 +642,9 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     """
     projects = snap.get("projects") or []
     self_ids = self_project_ids(snap, reg, ws)
-    ranked = sorted(projects, key=lambda p: (-score_project(p, cfg), str(p.get("id"))))
+    outcomes = {o["id"]: o for o in (snap.get("outcomes") or []) if o.get("id")}
+    ranked = sorted(projects,
+                    key=lambda p: (-score_project(p, cfg, outcomes), str(p.get("id"))))
 
     open_items = [b for b in backlog
                   if str(b.get("status", "open")).lower() in OPEN_STATUSES]

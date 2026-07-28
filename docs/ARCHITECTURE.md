@@ -239,6 +239,45 @@ non-problem. A count that includes non-problems is a count nobody reads.
 
 ---
 
+## Outcomes: what the work is for
+
+A deadline is a property of a commitment, not of a directory. Written into three
+projects it becomes three deadlines: each boosts its own project independently, so
+one commitment produces three urgent rows — and all three mint the same bare
+`deadline:<date>` citation handle, which collides in the evidence index and keeps
+only the first project's label.
+
+An outcome is that commitment named once, in `registry.outcomes`, with contributors
+pointing at it through `serves`. It is the highest-leverage thing in the registry,
+because one outcome usually explains several projects at once: declaring it beats
+annotating each of them, which matters when the reason someone installed this tool
+is that they have not annotated anything.
+
+Two kinds, and the asymmetry is the design:
+
+| kind | urgency | why |
+|---|---|---|
+| `dated` | inherited by contributors, same arithmetic as an own deadline | a date is a fact, and days-until is arithmetic over it |
+| `compounding` | **none** | there is no date to be near |
+
+The temptation with `compounding` is a constant — long-term work counts 1.5×. That
+would be a number nothing can cite, which is the precise failure the evidence gate
+exists to prevent, and the gate could not catch it: a sort weight never appears on
+the page as a claim, so nothing ever asks it for a source. A compounding outcome
+therefore groups its contributors and tells stage 2 they serve one aim; ranking
+still comes from `tier` and `ice`, which a human wrote.
+
+Contributors inherit a dated outcome's urgency through `max`, exactly as they would
+their own deadline — so a shared commitment is declared once and cited once, without
+any contributor being lifted more, or less, than if it had written the date itself.
+
+A `serves` id that names no declared outcome is recorded in `parse_failed`, never
+dropped. Silently ignoring it would leave the project looking unattached, which is
+indistinguishable from never having declared the link — and the link is the entire
+reason the field exists.
+
+---
+
 ## The floor: what the engine can touch at all
 
 The four gates above decide what reaches the page. This one decides what reaches

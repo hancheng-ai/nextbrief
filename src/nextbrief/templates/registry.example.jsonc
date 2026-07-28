@@ -53,6 +53,10 @@
       "name": "Orchard API",
       "paths": ["orchard-api"],
       "git": "auto",               // auto = discover the repo per path; "none" = declare there is no VCS
+
+      // Which outcomes this project contributes to. Ids from the `outcomes`
+      // block below. A project can serve more than one, and most serve none.
+      "serves": ["external-review"],
       "tier": "flagship",
       "goal_one_line": "Decide whether the tenant-isolation rewrite ships this quarter",
       "horizon": "quarter",
@@ -242,6 +246,38 @@
     { "path": "homelab-config",
       "reason": "Compose files and cron definitions for the box that runs the batch jobs",
       "note": "These files are a deployment snapshot, not runtime state. Never infer from them whether a service is actually up." }
+  ],
+
+  // What the work is FOR. Optional, and the highest-leverage thing in this file:
+  // one outcome usually explains several projects at once, so declaring it beats
+  // annotating each of them.
+  //
+  // `dated` carries urgency, because a date is a fact and days-until is
+  // arithmetic over it. Contributors inherit that urgency — declare the date ONCE
+  // here rather than copying it into each project's `deadlines`. Copied dates are
+  // separate deadlines to the renderer: each boosts its own project, so one
+  // commitment produces several urgent rows, and they all mint the same bare
+  // `deadline:<date>` citation handle, which collides.
+  //
+  // `compounding` carries NO urgency on purpose. It has no date to be near, and a
+  // constant meaning "long-term work counts extra" would be a number nothing can
+  // cite — exactly what the evidence gate exists to keep off the page. It groups
+  // contributors and tells the model they serve one aim; ranking still comes from
+  // `tier` and `ice`.
+  "outcomes": [
+    {
+      "id": "external-review",
+      "kind": "dated",
+      "by": "2026-06-30",
+      "lead_days": 30,          // how long before the date it starts climbing
+      "hard": true,             // someone else set this date and cannot move it
+      "statement": "The external review happens with the deliverable submitted"
+    },
+    {
+      "id": "reach",
+      "kind": "compounding",
+      "statement": "Known by more people who do this work; earlier effort compounds longer"
+    }
   ],
 
   // Present on disk, deliberately invisible. Recording the reason is what keeps

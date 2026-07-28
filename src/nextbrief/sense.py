@@ -1203,7 +1203,7 @@ def check_shapes(cfg: Any, reg: Any) -> None:
             want(isinstance(pr.get("id"), str) and pr["id"].strip(),
                  "%s.id" % at, "a non-empty string", pr.get("id"))
             for key in ("paths", "ignore_globs", "exclude_subpaths", "status_docs",
-                        "deadlines", "hard_rules", "conflicts"):
+                        "deadlines", "hard_rules", "conflicts", "serves"):
                 if pr.get(key) is not None:
                     want(isinstance(pr[key], list), "%s.%s" % (at, key), "an array", pr[key])
             for key in ("privacy", "ice"):
@@ -1223,6 +1223,23 @@ def check_shapes(cfg: Any, reg: Any) -> None:
         for i, w in enumerate(watch):
             want(isinstance(w, dict) and isinstance(w.get("path"), str),
                  "registry watch[%d]" % i, "an object with a path", w)
+
+    outcomes = reg.get("outcomes")
+    if outcomes is not None:
+        want(isinstance(outcomes, list), "registry outcomes", "an array", outcomes)
+        for i, o in enumerate(outcomes):
+            at = "registry outcomes[%d]" % i
+            want(isinstance(o, dict), at, "an object", o)
+            want(isinstance(o.get("id"), str) and o["id"].strip(),
+                 "%s.id" % at, "a non-empty string", o.get("id"))
+            want(o.get("kind") in ("dated", "compounding"),
+                 "%s.kind" % at, '"dated" or "compounding"', o.get("kind"))
+            # A dated outcome without a date is the one shape that would fail
+            # silently: it would parse, carry no urgency, and look like a
+            # compounding outcome the author had merely mislabelled.
+            if o.get("kind") == "dated":
+                want(isinstance(o.get("by"), str) and o["by"].strip(),
+                     "%s.by" % at, "an ISO date, since kind is \"dated\"", o.get("by"))
 
 
 def resolve_root(ws: Workspace, reg: Dict[str, Any]) -> Path:
@@ -1313,6 +1330,52 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             e["kinds"].append(kind)
         if value is not None and e.get("value") is None:
             e["value"] = value
+
+    # ---- outcomes: the thing in the world that projects serve --------------
+    #
+    # A deadline written into three projects is three deadlines as far as the
+    # renderer is concerned: each one boosts its own project independently, so
+    # one commitment produces three urgent rows. An outcome is that commitment
+    # named once, with contributors pointing at it.
+    #
+    # Only dated outcomes carry urgency. A compounding outcome deliberately
+    # carries none -- it has no date to be close to, and inventing a constant
+    # "long-term work is worth 1.5x" would be exactly the unciteable number this
+    # engine refuses to put on a page. Its value is that it groups contributors
+    # and tells stage 2 they serve one aim.
+    outcomes_out = []
+    for o in reg.get("outcomes", []) or []:
+        oid = str(o.get("id"))
+        entry = {
+            "id": oid,
+            "kind": o.get("kind"),
+            "statement": o.get("statement") or "",
+            "hard": bool(o.get("hard", False)),
+            "by": None, "days_until": None, "lead_days": None,
+            "in_lead_window": False, "overdue": False,
+            "contributors": [],
+        }
+        if o.get("kind") == "dated":
+            try:
+                d = dt.date.fromisoformat(str(o.get("by")))
+            except (ValueError, TypeError):
+                parse_failed.append({"path": "outcomes/" + oid, "code": "bad_outcome_date",
+                                     "why": "outcome `by` is not a valid ISO date: %s"
+                                            % (o.get("by"),)})
+                continue
+            days_until = (d - as_of).days
+            lead = o.get("lead_days", 21)
+            entry.update({
+                "by": d.isoformat(), "days_until": days_until, "lead_days": lead,
+                "in_lead_window": 0 <= days_until <= lead, "overdue": days_until < 0,
+            })
+        # One handle per outcome, so contributors cite the same commitment rather
+        # than colliding on a bare date the way per-project deadlines do.
+        add_ev("outcome:" + oid, "human", entry["statement"] or None)
+        outcomes_out.append(entry)
+
+    outcomes_by_id = {o["id"]: o for o in outcomes_out}
+    outcomes_out.sort(key=lambda o: (o["by"] or "9999-12-31", o["id"]))
 
     projects_out = []
     for pr in reg.get("projects", []) or []:
@@ -1518,6 +1581,22 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         # Stable sort: same-day deadlines keep the order the human wrote them in.
         deadlines.sort(key=lambda x: x["date"])
 
+        # ---- what this project serves ----
+        # A dangling id is recorded rather than ignored. Silently dropping it
+        # would leave the project looking unattached to anything, which is
+        # indistinguishable from never having declared a link -- and the whole
+        # point of the field is that the link changes how the project ranks.
+        serves = []
+        for oid in pr.get("serves", []) or []:
+            oid = str(oid)
+            if oid not in outcomes_by_id:
+                parse_failed.append({"path": pid, "code": "unknown_outcome",
+                                     "why": "serves names an outcome the registry does "
+                                            "not declare: %s" % oid})
+                continue
+            serves.append(oid)
+            outcomes_by_id[oid]["contributors"].append(pid)
+
         # ---- freshest evidence ----
         sess = sessions.get(pid) or {}
         cands: List[Tuple[str, str]] = []
@@ -1591,6 +1670,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "status_docs": docs,
             "non_goals": non_goals,
             "deadlines": deadlines,
+            "serves": serves,
             "conflicts": pr.get("conflicts"),
             "hard_rules": pr.get("hard_rules"),
             "has_own_daily_entry": pr.get("has_own_daily_entry"),
@@ -1659,6 +1739,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         },
         "registry_meta": reg.get("meta"),
         "projects": projects_out,
+        "outcomes": outcomes_out,
         "watch": watch_out,
         "infra": reg.get("infra"),
         "archived": reg.get("archived"),
@@ -1734,6 +1815,8 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         cite.extend((p["fs"].get("top_changed_paths") or [])[:3])
         for dl in p.get("deadlines") or []:
             cite.append("deadline:" + dl["date"])
+        for oid in p.get("serves") or []:
+            cite.append("outcome:" + oid)
 
         g0 = (p.get("git") or [{}])[0]
         projs.append({
@@ -1772,6 +1855,7 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
                             "age_days": d.get("declared_age_days")}
                            for d in (p.get("status_docs") or []) if d.get("stale")],
             "conflicts": p.get("conflicts"),
+            "serves": p.get("serves") or [],
             "automation_surface": p.get("automation_surface"),
             "notes": p.get("registry_notes"),
             "cite": sorted({c for c in cite if c}),
@@ -1786,6 +1870,7 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         "caps": cfg["caps"],
         "limits": cfg["limits"],
         "projects": projs,
+        "outcomes": snap.get("outcomes") or [],
         "backlog": load_backlog_summary(ws),
         "watch": snap.get("watch"),
         "health": {

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Outcomes** — `registry.outcomes` plus per-project `serves`. A deadline is a
+  property of a commitment, not of a directory; written into three projects it
+  becomes three deadlines, each boosting its own project, so one commitment
+  produces three urgent rows and all three mint the same colliding
+  `deadline:<date>` citation handle. Declared once as an outcome, contributors
+  inherit its urgency through `max` — lifted exactly as much as an own deadline
+  would have, no more and no less — and cite one handle, `outcome:<id>`.
+
+  Two kinds. `dated` carries urgency, because a date is a fact and days-until is
+  arithmetic over it. `compounding` carries **none**: there is no date to be near,
+  and a constant meaning "long-term work counts extra" would be a number nothing
+  can cite. The evidence gate could not catch it either — a sort weight never
+  appears on the page as a claim, so nothing asks it for a source. A compounding
+  outcome groups contributors and tells stage 2 they serve one aim; ranking still
+  comes from `tier` and `ice`, which a human wrote.
+
+  Outcomes reach the digest, so stage 2 can see them — a ranking signal the model
+  never receives changes nothing the model writes. A `serves` id naming no declared
+  outcome is recorded in `parse_failed` rather than dropped: silently ignoring it
+  leaves the project looking unattached, which is indistinguishable from never
+  having declared the link.
+
 ## [0.1.0rc7] - 2026-07-28
 
 ### Added
