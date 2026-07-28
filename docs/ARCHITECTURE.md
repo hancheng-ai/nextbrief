@@ -198,6 +198,47 @@ therefore cannot disagree, and a change to a gate lands in both at once.
 
 ---
 
+## What counts as a project
+
+`defaults.root` is a directory you keep ongoing work in, and everything in it is
+a project. A directory added tomorrow is sensed tomorrow, with no edit to the
+registry.
+
+That inverts what the registry is for. It is not the list of what exists — it is
+the list of what you have said something *about*. An entry buys a tier, a goal,
+a deadline, a privacy rule. Without one, a directory is still sensed and still
+ranked; it just carries neutral placeholders instead of judgements, and the
+snapshot marks it `declared: false` so nothing downstream has to guess which is
+which. Nothing invents a `goal_one_line`, because that is the one field where a
+placeholder would be a fabrication rather than an absence.
+
+The reason for the inversion is that the alternative fails silently. Under
+declare-first, a project you start and never register is not reported as missing
+— it is simply absent, and the brief reads exactly like a brief for a week in
+which nothing else happened. There is no error, no empty section, no dropped
+claim. A portfolio with a hole in it is indistinguishable from a calm one, which
+makes it the one failure the evidence gate cannot help with: you cannot demand a
+citation for a project nobody mentioned.
+
+Five things are never adopted, and together they are why pointing this at a real
+directory does not produce nonsense:
+
+| not adopted | why |
+|---|---|
+| anything in `projects`, `watch`, `infra`, `archived` | already spoken for; matched on the first path segment, so `atlas/apps/site` still claims `atlas` |
+| anything in `ignored` | the opt-out — and the reason `ignored` is now read by the sensing stage, not just by `init` |
+| dotfile directories, `node_modules`, `dist`, `Downloads`, … | build output and OS folders are not work |
+| the workspace itself | otherwise the brief reports on the thing writing it |
+| nextbrief's own checkout | it sits beside your projects more often than not, and is the one directory guaranteed to look busy while being the tool rather than the work |
+
+Whether a discovered directory is under version control is checked rather than
+assumed. `git: auto` on a directory that turns out not to be a repository is
+reported as a parse failure reading "declared as a git project" — untrue of an
+entry nobody declared, and it spends the run's parse-failure count on a
+non-problem. A count that includes non-problems is a count nobody reads.
+
+---
+
 ## The floor: what the engine can touch at all
 
 The four gates above decide what reaches the page. This one decides what reaches

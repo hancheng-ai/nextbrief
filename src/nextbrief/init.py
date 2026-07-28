@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import resources
+from .discovery import DOC_PATTERNS, SKIP_NAMES
 from .fs import write_outside_workspace, write_text
 from .i18n import Catalog, load_catalog
 from .jsonc import JSONCError, loads_jsonc
@@ -67,31 +68,6 @@ GITIGNORE = """\
 /BRIEF.html
 .DS_Store
 """
-
-# Directories that are never a project of yours. Kept deliberately short: this is
-# a first guess a human is about to review, not a classifier.
-SKIP_NAMES = {
-    "node_modules", "venv", ".venv", "__pycache__", "dist", "build", "target",
-    "vendor", "Library", "Applications", "Downloads", "Desktop", "Pictures",
-    "Music", "Movies", "Public",
-}
-
-# Documents that tend to say what a project is and where it stands. `kind` is the
-# registry's own vocabulary; sense treats `status` as the one that ought to carry
-# a "last updated" line.
-DOC_PATTERNS: Sequence[Tuple[str, str]] = (
-    ("README.md", "status"),
-    ("README.markdown", "status"),
-    ("README.rst", "status"),
-    ("README.txt", "status"),
-    ("ROADMAP.md", "plan"),
-    ("PLAN.md", "plan"),
-    ("STATUS.md", "status"),
-    ("CHANGELOG.md", "changelog"),
-    ("docs/README.md", "status"),
-    ("docs/ROADMAP.md", "plan"),
-    ("docs/STATUS.md", "status"),
-)
 
 # Bounds on the mtime walk. A stranger's home directory can contain a tree with a
 # hundred thousand files in it, and init must feel instant or it will be read as

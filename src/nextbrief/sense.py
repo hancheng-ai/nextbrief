@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import __version__
+from .discovery import discover
 from .frontmatter import parse_frontmatter
 from .fs import write_text
 from .jsonc import JSONCError, load_jsonc
@@ -1258,6 +1259,22 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     stale_days = cfg["signal"]["stale_threshold_days"]
     self_id = (reg.get("defaults") or {}).get("self_project_id")
 
+    # Adopt whatever is in the root that the registry has not spoken for, and do
+    # it here -- before anything reads reg["projects"] -- so that privacy globs,
+    # the session scan and the main walk all see one list. Merging later would
+    # produce a project that is sensed but whose privacy declarations were
+    # collected from a registry that had never heard of it.
+    #
+    # check_shapes has already run against the declared registry above. These
+    # entries are synthesised by us and are well-formed by construction, so they
+    # are deliberately not re-validated: a failure here would be our bug, and
+    # reporting it as the user's malformed registry would send them editing a
+    # file that is fine.
+    discovered = discover(root, reg, ws)
+    if discovered:
+        reg = dict(reg)
+        reg["projects"] = list(reg.get("projects") or []) + discovered
+
     # Root-relative privacy globs, applied to every walk regardless of which
     # project declared them (FIX-1a: a private directory nested in another
     # project's tree used to be walked by that project).
@@ -1555,6 +1572,9 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "name": pr.get("name", pid),
             "paths": paths,
             "is_self": bool(self_id) and pid == self_id,
+            # False when the entry was synthesised by discovery rather than
+            # written by a human: its tier and ICE are placeholders, not choices.
+            "declared": not pr.get("discovered", False),
             "tier": pr.get("tier"),
             "goal_one_line": pr.get("goal_one_line"),
             "horizon": pr.get("horizon"),

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Projects are discovered, not declared.** Everything in `defaults.root` is
+  sensed, whether or not the registry names it. A directory you add tomorrow is
+  in tomorrow's brief with no edit to `registry.jsonc`.
+
+  The registry stops being the list of what exists and becomes the list of what
+  you have said something *about* — a tier, a goal, a deadline, a privacy rule.
+  A discovered project is ranked like any other but carries neutral placeholders
+  instead of judgements, and the snapshot marks it `declared: false`. No
+  `goal_one_line` is invented: that is the one field where a placeholder would
+  be a fabrication rather than an absence.
+
+  This replaces a failure with no symptom. Under declare-first, a project you
+  started and never registered was not reported as missing — it was absent, and
+  the brief read exactly like a brief for a week in which nothing else happened.
+
+  Never adopted: anything already in `projects` / `watch` / `infra` / `archived`
+  (matched on the first path segment, so `atlas/apps/site` still claims
+  `novel`); anything in `ignored`; dotfile directories and build/OS folders; the
+  workspace itself; and nextbrief's own source checkout.
+
+### Fixed
+
+- **`ignored` now does something during a run.** It was read only by `init`, so
+  a list written specifically to keep directories out of the brief had no effect
+  on any brief. It is the opt-out for discovery, and the sensing stage honours
+  it.
+
 ## [0.1.0rc6] - 2026-07-28
 
 Second prerelease, still on TestPyPI. The engine's read-only promise stops being

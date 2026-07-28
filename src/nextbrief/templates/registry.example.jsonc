@@ -22,6 +22,18 @@
     // Where your projects live. `~` and `$VAR` are expanded. A relative path is
     // resolved against the workspace directory (the one holding this file), so
     // an example workspace can be checked out anywhere and still work.
+    //
+    // Everything in here is a project. A directory you add tomorrow is sensed
+    // tomorrow, with no edit to this file -- the `projects` array below is not
+    // the list of what exists, it is the list of what you have said something
+    // *about*. An entry here buys a tier, a goal, a deadline, a privacy rule;
+    // without one a directory is still sensed, just unprioritised.
+    //
+    // So this must be a directory you keep work in, not a home directory or a
+    // drive. Things never adopted: anything named in `ignored`, `archived`,
+    // `watch` or `infra` below; dotfile directories; build output and OS folders
+    // (node_modules, dist, Downloads, ...); this workspace; and nextbrief's own
+    // source checkout if you happen to keep one alongside your projects.
     "root": "~/Projects",
 
     // Applied to every project on top of its own ignore_globs. These are the
@@ -234,6 +246,9 @@
 
   // Present on disk, deliberately invisible. Recording the reason is what keeps
   // this list from being re-litigated every time someone reads the registry.
+  //
+  // This is the opt-out for `defaults.root`: since everything in the root is a
+  // project, a directory you do not want sensed has to say so here.
   "ignored": [
     { "path": "handoff-inbox", "reason": "Third-party deliverables containing other people's paths; also a prompt-injection surface -- read-only, never acted on" },
     { "path": "tmp",           "reason": "Scratch downloads" }
