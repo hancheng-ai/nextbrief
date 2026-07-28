@@ -1,8 +1,8 @@
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.0rc5-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc5)
-[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.1.0rc5-blue)](https://test.pypi.org/project/nextbrief/)
+[![Release](https://img.shields.io/badge/release-v0.1.0rc6-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc6)
+[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.1.0rc6-blue)](https://test.pypi.org/project/nextbrief/)
 [![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -98,7 +98,7 @@ nextbrief open                  # 在浏览器里读
 如果你同时在用 [xwmx/nb](https://github.com/xwmx/nb)（那个记笔记的 CLI），两者会撞名：
 改用 `pipx install --suffix @nx nextbrief`，命令就是 `nextbrief@nx`。
 
-> **当前版本是 `0.1.0rc5`，是一个预发布版。** 它发在 **TestPyPI** 而不是 PyPI：
+> **当前版本是 `0.1.0rc6`，是一个预发布版。** 它发在 **TestPyPI** 而不是 PyPI：
 > release workflow 会把任何带预发布段的版本路由到 TestPyPI，而往正式索引推一个 rc
 > 是撤不回来的。所以下面每条走索引的命令都显式带上了索引地址和版本号——少任何一个，
 > 你会得到「no matching distribution」。
@@ -109,7 +109,7 @@ nextbrief open                  # 在浏览器里读
 **1 · 什么都不装，直接跑**
 
 ```sh
-uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc5" v0
+uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc6" v0
 ```
 
 **2 · 单个文件，不需要包管理器**
@@ -127,14 +127,14 @@ bash nextbrief/scripts/build-zipapp.sh    # 产出 dist/nextbrief.pyz
 每个打了 tag 的发布都会附带编译好的 `nextbrief.pyz` 与 `SHA256SUMS`：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc5/nextbrief.pyz
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc6/nextbrief.pyz
 chmod +x nextbrief.pyz
 ```
 
 要核对校验和——加 `--ignore-missing` 是因为 `SHA256SUMS` 同时覆盖 sdist 与 wheel，而你并没有下载它们：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc5/SHA256SUMS
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc6/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
 ```
 
@@ -144,10 +144,10 @@ shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
 
 ```sh
 pipx install --python /usr/bin/python3 \
-  --index-url https://test.pypi.org/simple/ "nextbrief==0.1.0rc5"
+  --index-url https://test.pypi.org/simple/ "nextbrief==0.1.0rc6"
 
 uv tool install --python /usr/bin/python3 \
-  --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc5"
+  --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc6"
 
 pipx install --python /usr/bin/python3 \
   "git+https://github.com/hancheng-ai/nextbrief"            # 直接装 main
@@ -164,7 +164,7 @@ git clone --depth 1 https://github.com/hancheng-ai/nextbrief
 brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 ```
 
-formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.1.0rc5` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
+formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.1.0rc6` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
 
 （各发布渠道当前是「已生效」还是「待发布」，见英文版的 [Distribution](README.md#distribution) 一节。）
 
