@@ -178,8 +178,19 @@ def apply_annotations(reg: Dict[str, Any], annotations: Dict[str, Any]) -> Dict[
         merged = dict(pr)
         for key, value in ann.items():
             if key == "ice":
-                ice = dict(value or {})
-                ice.update({k: v for k, v in (pr.get("ice") or {}).items() if v is not None})
+                # Shapes are checked here rather than trusted. This file invites
+                # hand-editing -- its own header says it is safe to delete -- and
+                # `check_shapes` never sees it, so `"ice": "high"` reaches this
+                # line unvalidated. It used to raise straight out of `build`,
+                # which on the unattended path is a stack trace and no brief at
+                # all: the exact opposite of the fail-open contract
+                # `load_annotations` states one function above.
+                if not isinstance(value, dict):
+                    continue
+                own = pr.get("ice")
+                ice = dict(value)
+                if isinstance(own, dict):
+                    ice.update({k: v for k, v in own.items() if v is not None})
                 merged["ice"] = ice
             elif pr.get(key) is None:
                 merged[key] = value

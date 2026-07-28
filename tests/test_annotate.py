@@ -123,6 +123,18 @@ class Overlay(TempCase):
         self.assertIn("nextbrief review", text)
         self.assertIn("Safe to delete", text)
 
+    def test_a_hand_edited_ice_of_the_wrong_shape_does_not_kill_the_run(self):
+        """The file's own header invites hand-editing, and check_shapes never
+        sees it -- so a wrong shape reaches the merge unvalidated. It used to
+        raise straight out of `build`: on the unattended path that is a stack
+        trace and no brief, the opposite of the stated fail-open contract."""
+        for bad in ('"high"', "5", '["impact", 5]', "null"):
+            (self.ws_root / ANNOTATIONS_NAME).write_text(
+                '{"projects": {"orchard": {"ice": %s}}}' % bad, encoding="utf-8")
+            code, _, err = capture(
+                sense.main, ["--workspace", str(self.ws_root), "--as-of", AS_OF])
+            self.assertEqual(code, 0, "ice=%s killed the run: %s" % (bad, err))
+
     def test_a_discovered_project_can_be_annotated_without_being_declared(self):
         """The whole point: the person who has not written a registry entry is
         exactly the person being asked, so the overlay is applied after

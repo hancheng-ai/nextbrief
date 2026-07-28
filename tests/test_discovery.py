@@ -150,13 +150,34 @@ class WhatIsAlreadyClaimed(DiscoverCase):
         self.dirs("junk", "real")
         self.assertEqual(self.found({"ignored": ["junk"]}), ["real"])
 
+    def test_a_dot_slash_path_still_claims_its_directory(self):
+        """The form this repo's own example workspace uses for defaults.root.
+
+        Stripping slashes then splitting turns "./x" into a segment of ".", so
+        every list in the registry silently claimed nothing: an `ignored` entry
+        stopped ignoring, and a declared project was adopted a second time as an
+        undeclared duplicate with its files counted twice.
+        """
+        self.dirs("junk", "real")
+        self.assertEqual(self.found({"ignored": [{"path": "./junk"}]}), ["real"])
+
+    def test_a_dot_slash_project_path_is_not_adopted_twice(self):
+        self.dirs("orchard", "other")
+        reg = {"projects": [{"id": "orchard", "paths": ["./orchard"]}]}
+        self.assertEqual(self.found(reg), ["other"])
+
+    def test_backslashes_are_normalised_too(self):
+        self.dirs("junk", "real")
+        self.assertEqual(self.found({"ignored": [{"path": r".\junk"}]}), ["real"])
+
     def test_claimed_segments_collects_every_list(self):
         reg = {
             "projects": [{"id": "a", "paths": ["one/deep/deeper", "two"]}],
             "watch": [{"path": "three"}],
             "ignored": [{"path": "four/five"}],
+            "archived": [{"path": "./five"}],
         }
-        self.assertEqual(claimed_segments(reg), {"one", "two", "three", "four"})
+        self.assertEqual(claimed_segments(reg), {"one", "two", "three", "four", "five"})
 
 
 class WhatIsNeverAProject(DiscoverCase):

@@ -107,6 +107,26 @@ def _slug(name: str) -> str:
     return _SLUG.sub("-", name.lower()).strip("-") or "project"
 
 
+def _first_segment(rel) -> str:
+    """The first meaningful path segment of a human-written relative path.
+
+    Splitting on "/" after stripping slashes looked equivalent to this and was
+    not: it turns a leading "./" into a segment of ".", so a registry that wrote
+    the dot-slash form -- the form this repo's own example workspace uses for
+    ``defaults.root`` -- silently claimed nothing at all. An ``ignored`` entry
+    stopped ignoring, and a declared project was adopted a second time as an
+    undeclared duplicate with its files counted twice, which is precisely the
+    outcome :func:`claimed_segments` exists to prevent.
+
+    Backslashes are normalised too, since these strings are hand-typed.
+    """
+    for part in str(rel).replace("\\", "/").split("/"):
+        part = part.strip()
+        if part and part not in (".", ".."):
+            return part
+    return ""
+
+
 def claimed_segments(reg: Dict[str, Any]) -> Set[str]:
     """First path segment of everything the registry already speaks for.
 
@@ -120,7 +140,7 @@ def claimed_segments(reg: Dict[str, Any]) -> Set[str]:
         if not isinstance(pr, dict):
             continue
         for rel in pr.get("paths") or []:
-            seg = str(rel).strip("/").split("/")[0]
+            seg = _first_segment(rel)
             if seg:
                 claimed.add(seg)
     for key in ("watch", "infra", "ignored", "archived"):
@@ -128,7 +148,7 @@ def claimed_segments(reg: Dict[str, Any]) -> Set[str]:
             rel = entry.get("path") if isinstance(entry, dict) else entry
             if not rel:
                 continue
-            seg = str(rel).strip("/").split("/")[0]
+            seg = _first_segment(rel)
             if seg:
                 claimed.add(seg)
     return claimed

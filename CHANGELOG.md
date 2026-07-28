@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A registry path written as `./x` claimed nothing.** `claimed_segments`
+  stripped slashes and split, which turns `"./handoff-inbox"` into a segment of
+  `"."`. Consequences, both silent: an `ignored` entry stopped ignoring — and
+  `ignored` is the only opt-out for `defaults.root`, so the directory was walked
+  and its filenames reached the snapshot and then the digest the model reads; and
+  a declared project was adopted a *second* time as an undeclared duplicate with
+  its files counted twice, which is the precise outcome that function exists to
+  prevent. The `./` form is not contrived — this repo's own example workspace
+  uses it for `defaults.root`. Backslashes are normalised too.
+
+- **A hand-edited `annotations.jsonc` could kill the run.** `apply_annotations`
+  did `dict(value or {})` on the overlay's `ice`, so `"ice": "high"` raised
+  straight out of `build` — a stack trace and no brief, on the unattended path,
+  contradicting the fail-open contract `load_annotations` states one function
+  above. `check_shapes` never sees the overlay, and the file's own header invites
+  editing it, so the shapes are now checked rather than trusted.
+
+- **The question section reached `BRIEF.md` but not `BRIEF.html`**, so the
+  rendering meant for reading asked nothing. Both artifacts render from one gated
+  dataset and neither decides anything for itself; this one disagreed on arrival.
+  A test now asserts they ask the same question and both drop it once answered.
+
+- `docs/ARCHITECTURE.md` still described discovered projects as carrying "neutral
+  placeholders", which `0.1.0rc9` was cut specifically to remove — and
+  contradicted itself a hundred lines later.
+
+
 ## [0.1.0rc9] - 2026-07-28
 
 ### Added

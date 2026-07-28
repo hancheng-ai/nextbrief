@@ -207,10 +207,19 @@ registry.
 That inverts what the registry is for. It is not the list of what exists — it is
 the list of what you have said something *about*. An entry buys a tier, a goal,
 a deadline, a privacy rule. Without one, a directory is still sensed and still
-ranked; it just carries neutral placeholders instead of judgements, and the
-snapshot marks it `declared: false` so nothing downstream has to guess which is
-which. Nothing invents a `goal_one_line`, because that is the one field where a
-placeholder would be a fabrication rather than an absence.
+ranked; it simply asserts **nothing** about itself — no tier, no ICE, no goal —
+and the snapshot marks it `declared: false` so nothing downstream has to guess
+which is which.
+
+Not neutral values: *no* values. An earlier version synthesised `tier: "active"`
+and ICE 3/3/3 on the theory that a midpoint is the least opinionated guess, and
+that turned out to be the opposite of harmless — `tier` in `("flagship",
+"active")` is the entry condition for the *neglected* and *stalled* verdicts, so
+a directory somebody made once and abandoned began, on day 31, announcing that it
+had been neglected. Nobody had ever said it mattered; the engine said it, then
+reported its own invention back as a finding. See
+[Asking, when only a person can answer](#asking-when-only-a-person-can-answer) —
+the same line, drawn once and then crossed.
 
 The reason for the inversion is that the alternative fails silently. Under
 declare-first, a project you start and never register is not reported as missing
