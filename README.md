@@ -1,8 +1,8 @@
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.0rc6-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc6)
-[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.1.0rc6-blue)](https://test.pypi.org/project/nextbrief/)
+[![Release](https://img.shields.io/badge/release-v0.1.0rc7-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc7)
+[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.1.0rc7-blue)](https://test.pypi.org/project/nextbrief/)
 [![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -135,7 +135,7 @@ Every command also answers to **`nb`**, installed alongside `nextbrief` — `nb 
 the note-taking CLI, the two collide: install with
 `pipx install --suffix @nx nextbrief` and use `nextbrief@nx` instead.
 
-> **The current release is `0.1.0rc6`, and it is a prerelease.** It lives on
+> **The current release is `0.1.0rc7`, and it is a prerelease.** It lives on
 > **TestPyPI**, not PyPI, because the release workflow routes any version with a
 > pre-release segment there and publishing an rc to the real index cannot be
 > undone. So every index command below carries an explicit index URL and an
@@ -148,7 +148,7 @@ the note-taking CLI, the two collide: install with
 **1 · Run it without installing anything**
 
 ```sh
-uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc6" v0
+uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc7" v0
 ```
 
 **2 · One file, no package manager**
@@ -158,7 +158,7 @@ templates included, no `site-packages`, no virtualenv, any Python 3.9 or newer.
 Every tagged release attaches a prebuilt `nextbrief.pyz` and a `SHA256SUMS`:
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc6/nextbrief.pyz
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc7/nextbrief.pyz
 chmod +x nextbrief.pyz
 ./nextbrief.pyz --version
 ```
@@ -167,7 +167,7 @@ To check it against the published checksums — `--ignore-missing` because
 `SHA256SUMS` also covers the sdist and the wheel, which you did not download:
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc6/SHA256SUMS
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.1.0rc7/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS     # sha256sum on Linux
 ```
 
@@ -187,10 +187,10 @@ uninstalls it.
 
 ```sh
 pipx install --python /usr/bin/python3 \
-  --index-url https://test.pypi.org/simple/ "nextbrief==0.1.0rc6"
+  --index-url https://test.pypi.org/simple/ "nextbrief==0.1.0rc7"
 
 uv tool install --python /usr/bin/python3 \
-  --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc6"
+  --default-index https://test.pypi.org/simple/ "nextbrief==0.1.0rc7"
 
 pipx install --python /usr/bin/python3 \
   "git+https://github.com/hancheng-ai/nextbrief"            # straight from main
@@ -215,22 +215,22 @@ brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 The formula is version-controlled here, in
 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb), so it is
 reviewed alongside the change that would break it. It is pinned to the
-`v0.1.0rc6` sdist. A `<owner>/homebrew-tap` repository — which would make this
+`v0.1.0rc7` sdist. A `<owner>/homebrew-tap` repository — which would make this
 `brew tap` plus `brew install nextbrief` — has not been created yet; the header
 comment in the formula has the steps.
 
 ### Distribution
 
 Which channels are live and which are not, at a glance. Everything here is
-`0.1.0rc6`, a prerelease.
+`0.1.0rc7`, a prerelease.
 
 | Channel | State |
 |---|---|
 | Source checkout — `git clone`, `pip install .` | **live** |
 | Zipapp built from a checkout | **live** |
-| [TestPyPI](https://test.pypi.org/project/nextbrief/) — `pip`, `pipx`, `uv`, `uvx` with an explicit index URL | **live**: `0.1.0rc6`, sdist and wheel |
+| [TestPyPI](https://test.pypi.org/project/nextbrief/) — `pip`, `pipx`, `uv`, `uvx` with an explicit index URL | **live**: `0.1.0rc7`, sdist and wheel |
 | PyPI | **not yet**: the release workflow routes pre-release versions to TestPyPI and only a final version to PyPI. `pip install nextbrief` with no index URL will not resolve |
-| GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.1.0rc6`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc6), with a build-provenance attestation. Use the tagged URL: `/releases/latest/` skips prereleases |
+| GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.1.0rc7`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc7), with a build-provenance attestation. Use the tagged URL: `/releases/latest/` skips prereleases |
 | Homebrew tap | **pending**: the formula exists and installs from a local path, the tap repository does not |
 
 ## A brief
