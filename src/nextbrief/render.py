@@ -99,8 +99,24 @@ def limits_of(cfg) -> Dict[str, Any]:
 
 
 def scoring_of(cfg) -> Dict[str, Any]:
+    """Shipped defaults with the workspace's ``scoring`` block laid over them.
+
+    Nested tables merge key by key rather than being replaced wholesale. A config
+    that names one tier -- ``"tier_weight": {"flagship": 1.5}`` -- means "that one
+    is heavier", not "the other three cease to exist"; under a flat update they
+    silently fell back to the 1.0 default and every non-flagship project quietly
+    changed weight. The failure is invisible in the config file, which still reads
+    as though it says one thing.
+    """
     merged = dict(SCORING_DEFAULTS)
-    merged.update((cfg or {}).get("scoring") or {})
+    for key, value in ((cfg or {}).get("scoring") or {}).items():
+        base = merged.get(key)
+        if isinstance(base, dict) and isinstance(value, dict):
+            nested = dict(base)
+            nested.update(value)
+            merged[key] = nested
+        else:
+            merged[key] = value
     return merged
 
 
@@ -560,7 +576,17 @@ def score_project(p, cfg):
     sc = scoring_of(cfg)
     floor = sc["decay_floor"]
     if days is None:
-        decay = 1.0
+        # No readable evidence at all -- no commit, no file mtime, no session.
+        # This used to score 1.0, the *maximum* freshness term, so a directory
+        # nobody had touched ranked exactly as though it had been worked on this
+        # morning. Absence of evidence was being read as evidence of activity.
+        #
+        # It was close to unreachable while every project was hand-declared. Once
+        # discovery began adopting whatever sits in the root, empty and
+        # unreadable directories became ordinary, and so did the inversion.
+        # Unknown recency now earns no recency credit; the floor still keeps the
+        # project on the page, which is the whole point of having a floor.
+        decay = 0.0
     else:
         decay = 0.5 ** (days / float(sc["half_life_days"]))
     # ★ Why the floor: pure decay buries exactly the thing you are avoiding.

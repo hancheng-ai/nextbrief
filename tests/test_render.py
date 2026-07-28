@@ -403,6 +403,39 @@ class Ranking(unittest.TestCase):
             render.score_project(stale, cfg) / render.score_project(fresh, cfg), 0.25
         )
 
+    def test_no_readable_evidence_does_not_score_as_freshly_worked(self):
+        # `days_since is None` means no commit, no file mtime, no session -- an
+        # empty or unreadable directory. It used to take decay = 1.0, the maximum
+        # freshness term, so absence of evidence read as evidence of activity and
+        # an untouched directory ranked level with one worked on this morning.
+        # Near-unreachable while every project was declared by hand; ordinary once
+        # discovery started adopting whatever sits in the root.
+        cfg = {}
+        blank = make_project_entry(
+            evidence={"best_kind": None, "best_date": None, "days_since": None,
+                      "signal": "unknown", "caveat_code": None, "caveat": None}
+        )
+        fresh = make_project_entry(
+            evidence={"best_kind": "commit", "best_date": "2026-03-16", "days_since": 0,
+                      "signal": "hot", "caveat_code": None, "caveat": None}
+        )
+        self.assertLess(render.score_project(blank, cfg), render.score_project(fresh, cfg))
+        # Still on the page, though: the floor exists so that what you are
+        # avoiding stays visible, and "unreadable" is not a reason to vanish.
+        self.assertGreater(render.score_project(blank, cfg), 0.0)
+
+    def test_a_partial_tier_weight_does_not_delete_the_other_tiers(self):
+        # A flat dict update replaced the whole nested table, so naming one tier
+        # silently reset the other three to the 1.0 fallback -- invisible in the
+        # config file, which still reads as though it changed one number.
+        cfg = {"scoring": {"tier_weight": {"flagship": 1.5}}}
+        merged = render.scoring_of(cfg)
+        self.assertEqual(merged["tier_weight"]["flagship"], 1.5)
+        self.assertEqual(merged["tier_weight"]["maintenance"], 0.6)
+        self.assertEqual(merged["tier_weight"]["dormant"], 0.4)
+        # Scalars still replace wholesale.
+        self.assertEqual(render.scoring_of({"scoring": {"decay_floor": 0.1}})["decay_floor"], 0.1)
+
     def test_an_overdue_deadline_outranks_a_fresher_project(self):
         cfg = {}
         overdue = make_project_entry(

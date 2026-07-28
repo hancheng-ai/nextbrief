@@ -14,7 +14,14 @@ from __future__ import annotations
 import json
 import unittest
 
-from helpers import AS_OF, TempCase, capture, make_workspace
+from helpers import (
+    AS_OF,
+    TempCase,
+    capture,
+    make_project_entry,
+    make_snapshot,
+    make_workspace,
+)
 
 from nextbrief import discovery, sense
 from nextbrief.discovery import claimed_segments, discover
@@ -48,9 +55,20 @@ class Adoption(DiscoverCase):
         entry = discover(self.root, {}, self.ws)[0]
         self.assertEqual(entry["paths"], ["newthing"])
         self.assertEqual(entry["name"], "newthing")
-        self.assertEqual(entry["tier"], discovery.DISCOVERED_TIER)
-        self.assertEqual(entry["ice"], discovery.DISCOVERED_ICE)
         self.assertTrue(entry["discovered"])
+
+    def test_no_tier_and_no_ice_are_stated_rather_than_guessed_at(self):
+        # A synthesised midpoint is not a neutral guess, it is an assertion, and
+        # `tier in ("flagship", "active")` is the entry condition for the
+        # neglected and stalled verdicts. A placeholder tier would have the engine
+        # invent an importance and then report the consequences back as a finding.
+        self.dirs("newthing")
+        entry = discover(self.root, {}, self.ws)[0]
+        self.assertIsNone(entry["tier"])
+        self.assertIsNone(entry["ice"])
+        self.assertIsNone(entry["goal_one_line"])
+        self.assertIsNone(discovery.DISCOVERED_TIER)
+        self.assertIsNone(discovery.DISCOVERED_ICE)
 
     def test_version_control_is_checked_rather_than_assumed(self):
         # `auto` on a directory that is not a repository is reported by sense as
@@ -235,6 +253,29 @@ class EndToEnd(TempCase):
         self.assertEqual(self.sense()[0], 0)
         self.assertEqual((self.ws / "state" / "snapshot.json").read_text(encoding="utf-8"), first)
         self.assertEqual([p["id"] for p in self.snapshot()["projects"]], ["orchard", "kiln"])
+
+    def test_a_forgotten_directory_is_never_called_neglected(self):
+        """The harm a placeholder tier caused, stated as a test.
+
+        Make a directory, poke it once, forget it. Thirty-one days later the brief
+        used to announce that it had been neglected -- about a project nobody had
+        ever said mattered. The engine asserted the importance itself, via the
+        synthesised tier, then reported the consequences of its own assertion back
+        to its owner as a finding. With discovery adopting the whole root, every
+        abandoned experiment would do this, permanently.
+        """
+        from nextbrief import render
+
+        old = {"best_kind": "file_mtime", "best_date": "2025-11-01", "days_since": 200,
+               "signal": "dormant", "caveat_code": None, "caveat": None}
+        discovered = make_project_entry(pid="latecomer", tier=None, ice=None,
+                                        declared=False, evidence=old)
+        stated = make_project_entry(pid="chosen", tier="active", evidence=old)
+
+        meta = render.classify(make_snapshot(projects=[discovered, stated]), [], {}, {})
+        neglected = {p["id"] for p in meta["neglected"]}
+        self.assertNotIn("latecomer", neglected, "nagged about a project nobody chose")
+        self.assertIn("chosen", neglected, "a stated priority should still be flagged")
 
     def test_a_discovered_project_is_still_deterministic(self):
         (self.ws / "projects" / "latecomer").mkdir(parents=True)

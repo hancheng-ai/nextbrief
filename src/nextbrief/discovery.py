@@ -15,10 +15,16 @@ error, no empty section, no dropped-claim count -- nothing to notice. A portfoli
 with a hole in it is indistinguishable from a calm week.
 
 So discovery adopts rather than offers. What it will not do is invent the human
-half. A discovered project gets a neutral tier, neutral ICE and no goal at all,
-because those are judgements and the engine does not have them; it carries
-``declared: false`` into the snapshot so anything downstream can tell the
-difference between a value you chose and a value nobody chose.
+half. A discovered project states **no** tier, **no** ICE and no goal -- not
+neutral values, no values, because those are judgements and the engine does not
+have them. It carries ``declared: false`` into the snapshot so anything downstream
+can tell an absence from a choice.
+
+The distinction is not pedantry. A synthesised midpoint is an assertion, and the
+renderer reads assertions: ``tier`` in ``("flagship", "active")`` is the entry
+condition for the *neglected* and *stalled* verdicts, so a placeholder tier makes
+the engine invent an importance and then, a month later, report the consequences
+of its own invention back to the user as a finding.
 
 Four things are never adopted, and between them they are why pointing this at a
 real home directory does not produce nonsense:
@@ -77,13 +83,22 @@ DOC_PATTERNS: Sequence[Tuple[str, str]] = (
     ("docs/STATUS.md", "status"),
 )
 
-# Neutral by construction. `active` is weight 1.0 in the shipped scoring table --
-# it neither promotes a directory above work you have actually prioritised nor
-# buries it. ICE is the midpoint on all three axes for the same reason: the
-# engine is recording that nobody has scored this, not guessing what the score
-# would be.
-DISCOVERED_TIER = "active"
-DISCOVERED_ICE = {"impact": 3, "confidence": 3, "effort": 3}
+# Deliberately absent, not neutral.
+#
+# An earlier version of this module synthesised `tier: "active"` and ICE 3/3/3 on
+# the theory that a midpoint is the least opinionated guess. It is not a guess at
+# all -- it is an assertion, and the renderer reads it as one. `tier in
+# ("flagship", "active")` is the entry condition for the *neglected* and *stalled*
+# branches, so a directory somebody made once and abandoned began, on day 31,
+# telling its owner it had been neglected. Nobody ever said it mattered. The
+# engine said it, then reported it back as news.
+#
+# So a discovered project states no tier and no ICE. Every consumer already
+# tolerates the absence: the score falls back to the same numbers it used before,
+# and the nag branches simply do not apply. `declared: false` in the snapshot is
+# what says the silence is deliberate.
+DISCOVERED_TIER = None
+DISCOVERED_ICE = None
 
 _SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -230,7 +245,7 @@ def discover(root: Path, reg: Dict[str, Any], ws: Optional[Workspace] = None) ->
             # parse failure if left to `auto` to discover the hard way.
             "git": "auto" if _looks_versioned(directory) else "none",
             "tier": DISCOVERED_TIER,
-            "ice": dict(DISCOVERED_ICE),
+            "ice": DISCOVERED_ICE,
             "goal_one_line": None,
             "status_docs": _status_docs(directory, name),
             "discovered": True,
