@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0rc10] - 2026-07-29
+
 ### Fixed
 
 - **The question section evicted the brief's warnings.** Gate 4 keeps the first
@@ -33,8 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is verbatim the failure this module was written to eliminate, reproduced inside
   it. Colliding ids are now numbered rather than discarded.
 
-- `docs/ARCHITECTURE.md` is now checked by `test_docs_consistency`, which is why
-  it was able to ship a release describing behaviour that release had removed.
+- **`docs/ARCHITECTURE.md` described behaviour `0.1.0rc9` had removed** — that a
+  discovered project carries "neutral placeholders" — and contradicted itself a
+  hundred lines later. It shipped that way because the file was the one document
+  `test_docs_consistency` never opened. Corrected, and now covered: the test
+  checks every `nextbrief` command it names, every registry key it documents, and
+  ties the placeholder claim to `DISCOVERED_TIER` so the assertion retires itself
+  if a default tier is ever deliberately reintroduced.
 
 - **A registry path written as `./x` claimed nothing.** `claimed_segments`
   stripped slashes and split, which turns `"./handoff-inbox"` into a segment of
@@ -57,11 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rendering meant for reading asked nothing. Both artifacts render from one gated
   dataset and neither decides anything for itself; this one disagreed on arrival.
   A test now asserts they ask the same question and both drop it once answered.
-
-- `docs/ARCHITECTURE.md` still described discovered projects as carrying "neutral
-  placeholders", which `0.1.0rc9` was cut specifically to remove — and
-  contradicted itself a hundred lines later.
-
 
 ## [0.1.0rc9] - 2026-07-28
 
@@ -262,7 +264,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc9...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc10...HEAD
+[0.1.0rc10]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc10
 [0.1.0rc9]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc9
 [0.1.0rc8]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc8
 [0.1.0rc7]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc7
