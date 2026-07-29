@@ -60,7 +60,10 @@ EXIT_USAGE = 2
 
 OPEN_STATUSES = ("open", "waiting", "in_progress")
 
-EPILOG = """\
+DESCRIPTION = """\
+A daily brief across every project you own, where every claim is checked
+against evidence before it prints.
+
 commands:
   run          all three stages: sense -> a model reads it -> render
   v0           sense + render only, no model at all: zero tokens, nothing to invent
@@ -80,6 +83,7 @@ commands:
   ls           list every open item
   prune        list items worth revisiting, with what to do about them
 
+  projects     one line per project: what is here, and how fresh it is
   review       answer the questions only you can answer (multiple choice)
   init [dir]   create a workspace and get to a first brief
   permissions  print, or merge in, the rules an unattended run needs
@@ -1258,6 +1262,68 @@ def _ask_choice(count: int, skip_hint: str) -> Optional[int]:
     return n if 1 <= n <= count else None
 
 
+
+def cmd_projects(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """One line per project, straight from the snapshot.
+
+    `ls` lists backlog items and there was nothing that listed projects, so the
+    only way to see the portfolio was to render a whole brief and read the table
+    inside it. That was tolerable while the registry was the project list. It
+    stopped being tolerable when discovery started adopting directories on its
+    own: the set can now change without anyone editing anything, and "what is
+    the tool actually watching?" became a question with no cheap answer.
+
+    Reads the snapshot and prints. No model, no render, no writes.
+    """
+    if not ws.snapshot.is_file():
+        _err(tr(cat, "cli.projects.empty", "No snapshot yet -- run `nextbrief sense` first."))
+        return EXIT_FAIL
+    try:
+        snap = json.loads(ws.snapshot.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _err("error: cannot read %s (%s)" % (ws.snapshot, exc))
+        return EXIT_FAIL
+
+    from .render import self_project_ids
+
+    own = self_project_ids(snap, None, ws)
+    rows = []
+    for p in snap.get("projects") or []:
+        ev = p.get("evidence") or {}
+        days = ev.get("days_since")
+        rows.append((
+            str(p.get("id") or ""),
+            str(ev.get("signal") or "?"),
+            "-" if days is None else str(days),
+            str(ev.get("best_kind") or "-"),
+            str(p.get("tier") or "-"),
+            str(p.get("name") or p.get("id") or ""),
+            bool(p.get("declared", True)),
+        ))
+    if not rows:
+        print(tr(cat, "cli.projects.empty", "No projects."))
+        return EXIT_OK
+
+    heads = tuple(tr(cat, "cli.projects.head." + k, k)
+                  for k in ("id", "signal", "days", "evidence", "tier", "name"))
+    widths = [max(_width(r[i]) for r in rows + [heads]) for i in range(6)]
+    print("  ".join(_pad(h, w) for h, w in zip(heads, widths)))
+    print("-" * (sum(widths) + 12))
+    for r in rows:
+        line = "  ".join(_pad(r[i], widths[i]) for i in range(6))
+        if not r[6]:
+            line += "  " + tr(cat, "cli.projects.undeclared", "(not in the registry)")
+        print(line)
+
+    unanswered = len(needs_annotating(snap, own))
+    print("")
+    print(tr(cat, "cli.projects.footer",
+             "{n} project(s); {undeclared} discovered, {unanswered} still unanswered.",
+             n=len(rows), undeclared=sum(1 for r in rows if not r[6]),
+             unanswered=unanswered))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "run": cmd_run,
     "v0": cmd_v0,
@@ -1276,6 +1342,7 @@ _HANDLERS = {
     "prune": cmd_prune,
     "permissions": cmd_permissions,
     "review": cmd_review,
+    "projects": cmd_projects,
 }
 
 
@@ -1299,21 +1366,24 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="nextbrief",
         parents=[common],
-        description="A daily brief across every project you own, where every claim is checked against evidence before it prints.",
-        epilog=EPILOG,
+        description=DESCRIPTION,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--version", action="version", version="nextbrief %s" % __version__)
-    sub = ap.add_subparsers(dest="command", metavar="<command>")
+    # SUPPRESS, because argparse would otherwise print its own list of the same
+    # twenty subcommands underneath the hand-written one in the description --
+    # the same information twice, in two different orders and two different
+    # levels of detail. The written list wins: it groups the commands by what
+    # you are trying to do, which the alphabetical machine version cannot.
+    sub = ap.add_subparsers(dest="command", metavar="<command>", help=argparse.SUPPRESS)
 
     def add(name: str, help_text: str) -> argparse.ArgumentParser:
-        return sub.add_parser(name, parents=[common], help=help_text)
+        # `help` is deliberately not forwarded; see the SUPPRESS note above.
+        return sub.add_parser(name, parents=[common])
 
     # The four pipeline commands document the stage flags they are most often
     # given, but forward whatever was typed verbatim (see `_stage_args`), so a
     # flag a stage grows later needs no change here.
-    add("review", "answer the questions only you can answer")
-
     p = add("run", "all three stages")
     p.add_argument("extra", nargs="*", help="passed through to render")
 
@@ -1358,6 +1428,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("ls", "list open items")
     add("prune", "list items worth revisiting")
+
+    add("projects", "one line per project")
+    add("review", "answer the questions only you can answer")
 
     p = add("permissions", "print or install the pre-approval rules an agent needs")
     p.add_argument("--merge-into", metavar="FILE",

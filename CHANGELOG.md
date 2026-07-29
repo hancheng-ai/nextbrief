@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nextbrief projects`** — one line per project, straight from the snapshot:
+  signal, days since evidence, what that evidence was, tier, and a marker for
+  anything discovery adopted that the registry never named.
+
+  `ls` lists backlog items and nothing listed projects, so the only way to see
+  the portfolio was to render a whole brief and read the table inside it. That
+  was tolerable while the registry *was* the project list. It stopped being
+  tolerable when discovery began adopting directories on its own: the set can now
+  change without anyone editing anything, and "what is the tool actually
+  watching?" had no cheap answer. No model, no render, no writes.
+
+### Changed
+
+- **`--help` prints one command list instead of two.** argparse generated its own
+  list of every subcommand and printed it above the hand-written one — the same
+  twenty commands twice, in two orders and two levels of detail. The written list
+  wins: it groups by what you are trying to do, which the alphabetical machine
+  version cannot. It also moved from the epilog into the description, so the
+  reader meets the commands before the flags.
+
+
 ## [0.1.0rc10] - 2026-07-29
 
 ### Fixed

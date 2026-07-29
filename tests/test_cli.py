@@ -24,11 +24,12 @@ from helpers import (
     make_project_entry,
     make_snapshot,
     requires_git,
+    tree_state,
     write_backlog_item,
     write_snapshot,
 )
 
-from nextbrief import cli
+from nextbrief import cli, sense
 from nextbrief.frontmatter import parse_frontmatter
 from nextbrief.paths import pointer_file
 
@@ -645,3 +646,84 @@ class Permissions(TempCase):
     def test_a_missing_file_is_created(self):
         self.assertEqual(self._run("--merge-into", str(self.target))[0], 0)
         self.assertIn("allow", self._written()["permissions"])
+
+
+class ProjectsCommand(TempCase):
+    """`ls` lists backlog items; nothing listed projects.
+
+    Tolerable while the registry *was* the project list. Once discovery started
+    adopting directories on its own the set could change with nobody editing
+    anything, and "what is the tool actually watching?" had no cheap answer --
+    you had to render a whole brief and read the table inside it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+
+    def run_cmd(self, *extra):
+        return capture(cli.main, ["--workspace", str(self.ws), "projects"] + list(extra))
+
+    def test_it_lists_every_project_with_its_freshness(self):
+        code, _, err = capture(sense.main, ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        code, out, err = self.run_cmd()
+        self.assertEqual(code, 0, err)
+        self.assertIn("orchard", out)
+        self.assertIn("kiln", out)
+        self.assertIn("2 project", out)
+
+    def test_a_discovered_project_is_marked_as_such(self):
+        # The distinction the whole registry-as-annotation model turns on.
+        (self.ws / "projects" / "latecomer").mkdir(parents=True)
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+        code, out, err = self.run_cmd()
+        self.assertEqual(code, 0, err)
+        self.assertIn("latecomer", out)
+        self.assertIn("registry", out, "a discovered project is not flagged as undeclared")
+        self.assertIn("1 discovered", out)
+
+    def test_it_says_what_to_run_when_there_is_no_snapshot(self):
+        code, _, err = self.run_cmd()
+        self.assertNotEqual(code, 0)
+        self.assertIn("sense", err)
+
+    def test_it_writes_nothing(self):
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+        before = tree_state(self.ws)
+        self.assertEqual(self.run_cmd()[0], 0)
+        self.assertEqual(tree_state(self.ws), before)
+
+
+class HelpIsNotPrintedTwice(unittest.TestCase):
+    def test_the_command_list_appears_once(self):
+        """argparse would print its own list of the same twenty subcommands
+        under the hand-written one -- the same information twice, in two orders
+        and two levels of detail."""
+        code, out, _ = capture(cli.main, ["--help"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("all three stages"), 1)
+        self.assertEqual(out.count("idempotence self-check"), 1)
+
+    def test_the_commands_come_before_the_flags(self):
+        # The usage line names the flags first; that is argparse's own layout and
+        # is not what this is about. What matters is that the reader meets the
+        # command list before the option list, which is why it moved from the
+        # epilog into the description.
+        code, out, _ = capture(cli.main, ["--help"])
+        self.assertEqual(code, 0)
+        options = next(h for h in ("\noptions:", "\noptional arguments:") if h in out)
+        self.assertLess(out.index("commands:"), out.index(options))
+
+    def test_every_command_in_the_help_text_is_real(self):
+        import re
+
+        code, out, _ = capture(cli.main, ["--help"])
+        listed = set(re.findall(r"(?m)^  ([a-z0-9]+)\s{2,}", out))
+        real = set()
+        for action in cli.build_parser()._subparsers._group_actions:
+            real |= set(action.choices)
+        self.assertTrue(listed)
+        self.assertEqual(sorted(listed - real), [])
