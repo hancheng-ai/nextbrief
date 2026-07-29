@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`capability`** — what the thing built here could also serve, beyond what it
+  currently does. A registry field, a `describe --capability` flag, and a second
+  labelled block in the inventory.
+
+  A description says what a project *is*, and one sentence covers that. It does
+  not cover the question an agent weighing "build this, or reuse something?"
+  actually has, which is what capability was built and where else it applies. A
+  tool built for one customer is also a rules engine whose customer is a
+  configuration; a single generated report is also a pipeline that could
+  produce a hundred more.
+  Collapse those into "what it is" and the reuse question becomes unanswerable
+  from the artifact.
+
+  **Always declared, never derived, and with no fallback.** A manifest states what
+  a package is; no file on disk states that something generalises beyond its
+  current use. That is a judgement about potential — the most speculative thing
+  here — so it carries its own `declared` label and an agent can see it is reading
+  somebody's optimism rather than a fact about the tree.
+
+### Changed
+
+- `describe <id>` with no text is now a usage error rather than a silent clear. A
+  forgotten argument looked identical to an intent to erase; `describe <id> ""`
+  is how you clear it. And `--capability` no longer blanks a description it did
+  not mention.
+
+### Added
+
 - **`nextbrief describe <id> "<sentence>"`** — say what a project is without
   opening a JSON file.
 

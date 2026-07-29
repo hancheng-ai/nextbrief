@@ -1795,6 +1795,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             # merge happens inside build(), and main() holds an unmerged
             # registry, so anything reading `reg` out there sees stale data.
             "description": pr.get("description"),
+            # What the thing built here could also serve. Declared only:
+            # no file on disk states a capability generalising beyond its
+            # current use, so there is nothing to derive it from.
+            "capability": pr.get("capability"),
             "horizon": pr.get("horizon"),
             "ice": pr.get("ice"),
             "git_declared": pr.get("git", "none"),

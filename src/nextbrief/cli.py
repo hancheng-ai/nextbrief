@@ -1406,6 +1406,7 @@ def cmd_describe(ws, args, cat):
     """
     pid = (getattr(args, "id", None) or "").strip()
     text = (getattr(args, "text", None) or "").strip()
+    cap = getattr(args, "capability", None)
     if not pid:
         _err(tr(cat, "cli.describe.missing", "Which project, and what is it?"))
         return EXIT_USAGE
@@ -1422,11 +1423,26 @@ def cmd_describe(ws, args, cat):
             _err(tr(cat, "cli.describe.unknown", "No project called {id}.", id=pid))
             return EXIT_FAIL
 
-    record_answers(ws, {pid: {"description": text}})
-    if text:
-        print(tr(cat, "cli.describe.saved", "{id}: {what}", id=pid, what=text))
-    else:
+    # Only touch what was actually supplied. `describe id --capability "..."`
+    # must not blank the description as a side effect of not repeating it.
+    fields = {}
+    if text or getattr(args, "text", None) is not None:
+        fields["description"] = text
+    if cap is not None:
+        fields["capability"] = cap.strip()
+    if not fields:
+        _err(tr(cat, "cli.describe.missing", "Which project, and what is it?"))
+        return EXIT_USAGE
+
+    record_answers(ws, {pid: fields})
+    if fields.get("description"):
+        print(tr(cat, "cli.describe.saved", "{id}: {what}",
+                 id=pid, what=fields["description"]))
+    elif "description" in fields:
         print(tr(cat, "cli.describe.cleared", "{id}: description removed.", id=pid))
+    if fields.get("capability"):
+        print(tr(cat, "cli.describe.capability", "{id} can also: {what}",
+                 id=pid, what=fields["capability"]))
     print(tr(cat, "cli.describe.where", "Recorded in {path}.", path=ANNOTATIONS_NAME))
     return EXIT_OK
 
@@ -1545,7 +1561,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("describe", "say what a project is, in one sentence")
     p.add_argument("id", nargs="?", help="project id, as `nextbrief projects` lists it")
-    p.add_argument("text", nargs="?", default="", help="one sentence; omit to clear it")
+    p.add_argument("text", nargs="?", default=None, help="one sentence; empty string clears it")
+    p.add_argument("--capability", metavar="TEXT",
+                   help="what the thing built here could also serve, beyond its current use")
     add("review", "answer the questions only you can answer")
 
     p = add("permissions", "print or install the pre-approval rules an agent needs")

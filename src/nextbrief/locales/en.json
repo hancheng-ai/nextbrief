@@ -73,6 +73,7 @@
   "cli.context.empty": "No inventory yet — run `nextbrief sense` first.",
   "cli.context.footer": "{n} project(s); {absent} with no description. Add one to registry.jsonc as `description`, or to the project's own README.",
   "cli.context.observed": "observed",
+  "cli.describe.capability": "{id} can also: {what}",
   "cli.describe.cleared": "{id}: description removed.",
   "cli.describe.missing": "Which project, and what is it? For example: nextbrief describe orchard \"A tenancy API for multi-site retailers.\"",
   "cli.describe.saved": "{id}: {what}",

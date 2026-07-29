@@ -73,6 +73,7 @@
   "cli.context.empty": "还没有 inventory —— 先跑 `nextbrief sense`。",
   "cli.context.footer": "共 {n} 个项目；{absent} 个没有描述。在 registry.jsonc 里写 `description`，或者给项目自己的 README 补一句。",
   "cli.context.observed": "读出来的",
+  "cli.describe.capability": "{id} 还能用来：{what}",
   "cli.describe.cleared": "{id}：描述已清掉。",
   "cli.describe.missing": "要写哪个项目、写什么？例如：nextbrief describe orchard \"面向多门店零售商的租户 API。\"",
   "cli.describe.saved": "{id}：{what}",

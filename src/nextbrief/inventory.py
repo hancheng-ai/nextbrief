@@ -33,7 +33,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-__all__ = ["INVENTORY_NAME", "MANIFESTS", "build_inventory", "describe"]
+__all__ = ["INVENTORY_NAME", "MANIFESTS", "build_inventory", "capability",
+           "describe"]
 
 INVENTORY_NAME = "inventory.json"
 
@@ -54,6 +55,11 @@ MANIFESTS: Sequence[Tuple[str, str, str]] = (
 # noise in a list of twelve -- and the first sentence of one is almost always the
 # sentence that says what the thing is.
 MAX_DESCRIPTION = 200
+
+# Capability gets more room and is not cut to one sentence. A description says
+# what a thing is, which one sentence covers; capability says what the thing
+# built could also serve, and that is inherently a clause about scope.
+MAX_CAPABILITY = 400
 
 _SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s")
 
@@ -176,6 +182,26 @@ def describe(root: Path, declared: Optional[str] = None) -> Dict[str, Any]:
     return {"what": None, "kind": "absent", "source": None}
 
 
+def capability(declared: Optional[str]) -> Dict[str, Any]:
+    """What was built here that generalises beyond its current purpose.
+
+    Always declared, never derived, and there is no fallback -- because unlike a
+    description this cannot be observed. A manifest says what a package is; no
+    file on disk says "the scheduling core in here would serve a domain it
+    was never written for". That is a judgement about potential, and the most
+    speculative thing in this artifact.
+
+    Which is exactly why it is a separate field carrying its own label. An agent
+    weighing "should we build X, or is there something to reuse?" needs this more
+    than it needs the current purpose -- and needs to know it is reading somebody
+    optimism rather than a fact about the tree.
+    """
+    if not declared:
+        return {"what": None, "kind": "absent", "source": None}
+    return {"what": " ".join(str(declared).split())[:MAX_CAPABILITY],
+            "kind": "declared", "source": "registry"}
+
+
 def _stacks(root: Path) -> List[str]:
     return sorted({stack for rel, _how, stack in MANIFESTS if (root / rel).is_file()})
 
@@ -197,6 +223,7 @@ def build_inventory(root: Path, projects: Sequence[Dict[str, Any]]) -> List[Dict
             "name": p.get("name") or pid,
             "path": paths[0] if paths else None,
             "description": describe(home, p.get("description")),
+            "capability": capability(p.get("capability")),
             "goal": p.get("goal_one_line"),
             "stacks": _stacks(home),
             "run": _entry_points(home),

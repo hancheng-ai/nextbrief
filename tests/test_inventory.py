@@ -225,9 +225,13 @@ class TheDescribeCommand(TempCase):
         self.assertEqual(code, 2)
         self.assertIn("describe", err)
 
-    def test_an_empty_text_clears_it(self):
+    def test_clearing_has_to_be_explicit(self):
+        # `describe <id>` with nothing after it is ambiguous -- a forgotten
+        # argument looks identical to an intent to erase -- so it is a usage
+        # error, and an empty string is how you actually clear it.
         self.assertEqual(self.run_cmd("orchard", "Something.")[0], 0)
-        self.assertEqual(self.run_cmd("orchard")[0], 0)
+        self.assertEqual(self.run_cmd("orchard")[0], 2)
+        self.assertEqual(self.run_cmd("orchard", "")[0], 0)
         self.assertEqual(capture(sense.main,
                                  ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
         got = self._inventory()["orchard"]["description"]
@@ -255,3 +259,35 @@ class TheDescribeCommand(TempCase):
         kept = load_annotations(resolve_workspace(str(self.ws)))
         self.assertEqual(kept["orchard"]["description"], "Survives a rewording.")
         self.assertNotIn("ice", kept["orchard"])
+
+    def test_capability_is_recorded_separately_from_the_description(self):
+        """A description says what a thing is; capability says what the thing
+        built could also serve. Conflating them loses the reuse question, which
+        is the one an agent weighing "build or reuse?" actually has."""
+        self.assertEqual(self.run_cmd("orchard", "A tenancy API.")[0], 0)
+        code, out, err = self.run_cmd(
+            "orchard", "--capability", "The isolation layer generalises to any multi-tenant store.")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+        e = self._inventory()["orchard"]
+        self.assertEqual(e["description"]["what"], "A tenancy API.")
+        self.assertIn("multi-tenant store", e["capability"]["what"])
+
+    def test_setting_capability_does_not_blank_the_description(self):
+        # The flag must not erase what it did not mention.
+        self.assertEqual(self.run_cmd("orchard", "A tenancy API.")[0], 0)
+        self.assertEqual(self.run_cmd("orchard", "--capability", "Reusable.")[0], 0)
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+        self.assertEqual(self._inventory()["orchard"]["description"]["what"], "A tenancy API.")
+
+    def test_capability_is_never_derived(self):
+        """No file on disk says "this generalises". It is always a declaration,
+        and an agent must be able to see that it is reading somebody's optimism
+        rather than a fact about the tree."""
+        from nextbrief.inventory import capability
+
+        self.assertEqual(capability(None)["kind"], "absent")
+        self.assertEqual(capability("Could do more.")["kind"], "declared")
+        self.assertEqual(capability("Could do more.")["source"], "registry")
