@@ -63,6 +63,20 @@
       "ice": { "impact": 5, "confidence": 3, "effort": 4 },
       "blocked_by": "decision",    // not neglected -- waiting on a judgement call
 
+      // Waiting on another project in this registry. The one relationship the
+      // engine could not otherwise represent -- and the difference between a
+      // platform you parked on purpose until its ecosystem exists, and one you
+      // forgot. Both are quiet; without this the brief calls both "neglected",
+      // which is a verdict about the decision you reasoned hardest about.
+      //
+      // Nothing decides when a need is MET. That is yours to retire: delete the
+      // id when it stops being true. A rule like "met once the other project is
+      // hot" would be the engine inventing a judgement, which is what the rest
+      // of it exists to refuse.
+      //
+      // Dangling ids and cycles are reported in parse_failed, never dropped.
+      // "needs": ["beacon-portal"],
+
       // A project carved out of this repo and registered separately below.
       // Excluding it here keeps its commits from being counted twice.
       "exclude_subpaths": ["orchard-api/apps/beacon-portal"],

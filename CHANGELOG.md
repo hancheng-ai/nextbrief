@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`needs`** — a project may declare that it is waiting on other projects, and
+  the inverse `unlocks` edge is computed for free. This is the relationship the
+  registry could not express: `blocked_by` names a *kind* of blocker, and
+  `external_dependency` names someone outside, but neither could say "this waits
+  on that work existing".
+
+  The reverse edge is the useful half. A contributor now knows what finishing it
+  would release — machine-readable, so an agent choosing what to work on can see
+  that one project sits under three others rather than having to infer it.
+
+  It is a graph, and being a graph earns three things in about thirty lines of
+  standard library, with no dependency and no index: a dangling id is reported
+  rather than dropped, a **cycle** is reported because it can never resolve, and
+  the transitive closure (`needs_all`) answers what a project *ultimately* waits
+  on. Cycle detection is iterative, so a deep hand-written chain cannot exhaust
+  the interpreter's stack.
+
+  Nothing decides when a need is **met**. That belongs to whoever wrote the
+  declaration; a rule like "met once the other project is hot" would be the
+  engine inventing a judgement, which is what the rest of it exists to refuse.
+
+- A project with unmet `needs` is classified as **waiting on other work**, not
+  neglected or stalled — for the case `blocked_by: decision` does not already
+  cover, which is waiting on *work* rather than on a judgement of your own.
+
 ### Changed
 
 - **Licence: Apache 2.0**, for its explicit patent grant and because that is

@@ -663,6 +663,7 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     bootstrapped = len(backlog) > 0
 
     decision_pending, stalled, neglected = [], [], []
+    waiting_on_work = []
     for p in projects:
         pid = p.get("id")
         if pid in self_ids:
@@ -674,6 +675,15 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
         # A project with its own daily entry point is never "stalled": its next
         # step lives elsewhere, and we rank it without restating its contents.
         if p.get("has_own_daily_entry"):
+            continue
+        # Waiting on another project is not neglect. Without this the renderer
+        # cannot tell a platform deliberately parked until its ecosystem exists
+        # from one nobody remembered -- both are simply quiet -- and it called
+        # both neglected, which is a verdict about the decision its owner
+        # reasoned hardest about. Named here rather than counted, because "why"
+        # is the whole content of the answer.
+        if p.get("needs"):
+            waiting_on_work.append(p)
             continue
         ev = p.get("evidence") or {}
         if p.get("tier") in ("flagship", "active"):
@@ -690,6 +700,7 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     return {
         "ranked": ranked,
         "decision_pending": decision_pending,
+        "waiting_on_work": waiting_on_work,
         "stalled": stalled,
         "neglected": neglected,
         "open": open_items,

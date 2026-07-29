@@ -1174,6 +1174,110 @@ def _kind(value: Any) -> str:
     return _JSON_KIND.get(type(value), type(value).__name__)
 
 
+
+def resolve_needs(projects, parse_failed):
+    """Turn each project's declared ``needs`` into a usable dependency graph.
+
+    ``needs`` says "this cannot advance until those exist", and it is the one
+    thing the engine could not previously represent. Without it a platform
+    waiting on its own ecosystem is indistinguishable from a platform nobody
+    remembered -- both are simply quiet, and the renderer called both neglected.
+    That is a verdict about the one decision its owner reasoned hardest about.
+
+    Three things a graph gives that a list does not, all of them cheap at this
+    size and none of them worth a dependency:
+
+    * a dangling id is a declaration error, and is reported rather than dropped
+    * a cycle is a declaration error too -- A waiting on B waiting on A can never
+      resolve, and saying so beats leaving both parties permanently "waiting"
+    * the transitive closure answers what a project *ultimately* waits on, which
+      is the question its owner actually has
+
+    Nothing here decides whether a need is *met*. That is a judgement, it belongs
+    to the person who wrote the declaration, and inventing a rule for it -- "met
+    when the other project is hot", say -- would be exactly the kind of invention
+    the rest of this engine refuses.
+    """
+    known = {str(p["id"]) for p in projects}
+    direct = {}
+    for pr in projects:
+        pid = str(pr["id"])
+        wants = []
+        for other in pr.get("needs") or []:
+            other = str(other)
+            if other == pid:
+                parse_failed.append({"path": pid, "code": "self_need",
+                                     "why": "a project cannot need itself"})
+                continue
+            if other not in known:
+                parse_failed.append({"path": pid, "code": "unknown_need",
+                                     "why": "needs names a project the registry does "
+                                            "not declare: %s" % other})
+                continue
+            wants.append(other)
+        direct[pid] = sorted(set(wants))
+
+    # Cycles. Iterative DFS with an explicit stack: a registry is hand-written,
+    # and a deep chain must not be able to exhaust the interpreter's.
+    cycles = []
+    colour = {}
+    for start in sorted(direct):
+        if colour.get(start):
+            continue
+        stack = [(start, iter(direct.get(start, ())))]
+        colour[start] = 1
+        path = [start]
+        while stack:
+            node, children = stack[-1]
+            nxt = next(children, None)
+            if nxt is None:
+                colour[node] = 2
+                stack.pop()
+                path.pop()
+                continue
+            if colour.get(nxt) == 1:
+                loop = path[path.index(nxt):] + [nxt]
+                if loop not in cycles:
+                    cycles.append(loop)
+                continue
+            if colour.get(nxt) == 2:
+                continue
+            colour[nxt] = 1
+            path.append(nxt)
+            stack.append((nxt, iter(direct.get(nxt, ()))))
+    for loop in cycles:
+        parse_failed.append({"path": loop[0], "code": "needs_cycle",
+                             "why": "circular needs, which can never resolve: %s"
+                                    % " -> ".join(loop)})
+
+    in_cycle = {n for loop in cycles for n in loop}
+
+    def closure(pid, seen):
+        out = []
+        for other in direct.get(pid, ()):
+            if other in seen:
+                continue
+            seen.add(other)
+            out.append(other)
+            out.extend(closure(other, seen)) if other not in in_cycle else None
+        return out
+
+    unlocks = {pid: [] for pid in direct}
+    for pid, wants in direct.items():
+        for other in wants:
+            unlocks.setdefault(other, []).append(pid)
+
+    return {
+        pid: {
+            "needs": direct[pid],
+            "needs_all": sorted(set(closure(pid, {pid}))),
+            "unlocks": sorted(unlocks.get(pid, [])),
+            "in_cycle": pid in in_cycle,
+        }
+        for pid in direct
+    }
+
+
 def check_shapes(cfg: Any, reg: Any) -> None:
     """Reject a malformed-but-parseable registry or config with a sentence.
 
@@ -1204,7 +1308,7 @@ def check_shapes(cfg: Any, reg: Any) -> None:
             want(isinstance(pr.get("id"), str) and pr["id"].strip(),
                  "%s.id" % at, "a non-empty string", pr.get("id"))
             for key in ("paths", "ignore_globs", "exclude_subpaths", "status_docs",
-                        "deadlines", "hard_rules", "conflicts", "serves"):
+                        "deadlines", "hard_rules", "conflicts", "serves", "needs"):
                 if pr.get(key) is not None:
                     want(isinstance(pr[key], list), "%s.%s" % (at, key), "an array", pr[key])
             for key in ("privacy", "ice"):
@@ -1390,6 +1494,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
 
     outcomes_by_id = {o["id"]: o for o in outcomes_out}
     outcomes_out.sort(key=lambda o: (o["by"] or "9999-12-31", o["id"]))
+
+    # After discovery and the overlay, so a discovered project can be named
+    # in someone else's `needs` and a cycle through one is still caught.
+    needs_graph = resolve_needs(reg.get("projects") or [], parse_failed)
 
     projects_out = []
     for pr in reg.get("projects", []) or []:
@@ -1685,6 +1793,9 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "non_goals": non_goals,
             "deadlines": deadlines,
             "serves": serves,
+            "needs": (needs_graph.get(pid) or {}).get("needs") or [],
+            "needs_all": (needs_graph.get(pid) or {}).get("needs_all") or [],
+            "unlocks": (needs_graph.get(pid) or {}).get("unlocks") or [],
             "conflicts": pr.get("conflicts"),
             "hard_rules": pr.get("hard_rules"),
             "has_own_daily_entry": pr.get("has_own_daily_entry"),
@@ -1870,6 +1981,8 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
                            for d in (p.get("status_docs") or []) if d.get("stale")],
             "conflicts": p.get("conflicts"),
             "serves": p.get("serves") or [],
+            "needs": p.get("needs") or [],
+            "unlocks": p.get("unlocks") or [],
             "automation_surface": p.get("automation_surface"),
             "notes": p.get("registry_notes"),
             "cite": sorted({c for c in cite if c}),
