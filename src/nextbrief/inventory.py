@@ -180,8 +180,7 @@ def _stacks(root: Path) -> List[str]:
     return sorted({stack for rel, _how, stack in MANIFESTS if (root / rel).is_file()})
 
 
-def build_inventory(root: Path, projects: Sequence[Dict[str, Any]],
-                    reg_by_id: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_inventory(root: Path, projects: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One entry per sensed project: what it is, how to run it, what it links to.
 
     Deliberately small. This is read to answer "what do we have?", and an artifact
@@ -190,7 +189,6 @@ def build_inventory(root: Path, projects: Sequence[Dict[str, Any]],
     out = []
     for p in projects:
         pid = str(p.get("id"))
-        declared_entry = reg_by_id.get(pid) or {}
         paths = p.get("paths") or []
         home = (root / paths[0]) if paths else root
 
@@ -198,7 +196,7 @@ def build_inventory(root: Path, projects: Sequence[Dict[str, Any]],
             "id": pid,
             "name": p.get("name") or pid,
             "path": paths[0] if paths else None,
-            "description": describe(home, declared_entry.get("description")),
+            "description": describe(home, p.get("description")),
             "goal": p.get("goal_one_line"),
             "stacks": _stacks(home),
             "run": _entry_points(home),

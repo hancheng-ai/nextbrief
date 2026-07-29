@@ -1790,6 +1790,11 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "answered": pid in answered_ids,
             "tier": pr.get("tier"),
             "goal_one_line": pr.get("goal_one_line"),
+            # A declaration, like the goal beside it. Carried here so the
+            # inventory reads the post-overlay value from one place -- the
+            # merge happens inside build(), and main() holds an unmerged
+            # registry, so anything reading `reg` out there sees stale data.
+            "description": pr.get("description"),
             "horizon": pr.get("horizon"),
             "ice": pr.get("ice"),
             "git_declared": pr.get("git", "none"),
@@ -2192,8 +2197,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # it by walking the tree. Written here because sensing already knows the
     # project list, and rewritten every run because it costs nothing.
     inv_root = resolve_root(ws, reg)
-    inv = build_inventory(inv_root, snap["projects"],
-                          {str(pr.get("id")): pr for pr in (reg.get("projects") or [])})
+    inv = build_inventory(inv_root, snap["projects"])
     itext = json.dumps({"generated_at": snap["run"]["generated_at"],
                         "root": str(inv_root), "projects": inv},
                        ensure_ascii=False, indent=2, sort_keys=True) + "\n"

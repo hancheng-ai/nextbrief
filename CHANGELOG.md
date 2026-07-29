@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nextbrief describe <id> "<sentence>"`** — say what a project is without
+  opening a JSON file.
+
+  Descriptions had no path in. `review` captures answers to fixed questions, but
+  a description is free text and cannot be multiple choice, so the only way to
+  supply one was to hand-edit `registry.jsonc` — exactly the friction the overlay
+  exists to remove. Recorded in `annotations.jsonc`, never the registry, and a
+  `description` typed into the registry by hand still wins.
+
+  An id that is not a project is refused rather than recorded: a description
+  nothing will ever read is worse than none.
+
+### Fixed
+
+- **A reworded question destroyed descriptions along with answers.** The version
+  check dropped the whole overlay entry, and a description was never an answer to
+  a worded question. It is now scoped to `ice` and only `ice`.
+
+- **A description in the overlay never reached the inventory.**
+  `apply_annotations` rebinds `reg` inside `build()`, so `main()` still held the
+  unmerged registry and passed *that* to the inventory. The description is now
+  carried into the snapshot alongside `goal_one_line`, which it resembles, so the
+  inventory reads one post-overlay source instead of re-deriving the merge in a
+  scope that never saw it.
+
+
+### Added
+
 - **`state/inventory.json` and `nextbrief context`** — what each project *is*,
   as opposed to what it did this week.
 

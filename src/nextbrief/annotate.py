@@ -164,14 +164,30 @@ def load_annotations(ws: Workspace) -> Dict[str, Any]:
         return {}
     if not isinstance(data, dict):
         return {}
-    # Answers to a question that has since been reworded are dropped, not
-    # reinterpreted. "2" against "what breaks if this slips" is not the same
-    # statement as "2" against "what changes if this succeeds", and carrying it
-    # over would put words in someone's mouth that they never said.
-    if int(data.get("asked_version") or 1) != ASKED_VERSION:
-        return {}
     projects = data.get("projects")
-    return projects if isinstance(projects, dict) else {}
+    if not isinstance(projects, dict):
+        return {}
+
+    # Answers to a question that has since been reworded are dropped, not
+    # reinterpreted: "2" against "what breaks if this slips" is not the same
+    # statement as "2" against "what changes if this succeeds", and carrying it
+    # over would put words in someone's mouth they never said.
+    #
+    # Scoped to `ice`, and only `ice`. Everything else here -- a description, say
+    # -- was never an answer to a worded question, so rewording one has no
+    # bearing on it. The first version of this dropped the whole file and would
+    # have destroyed a sentence someone wrote by hand for a reason unrelated to
+    # it.
+    if int(data.get("asked_version") or 1) == ASKED_VERSION:
+        return projects
+    kept = {}
+    for pid, entry in projects.items():
+        if not isinstance(entry, dict):
+            continue
+        rest = {k: v for k, v in entry.items() if k != "ice"}
+        if rest:
+            kept[pid] = rest
+    return kept
 
 
 def apply_annotations(reg: Dict[str, Any], annotations: Dict[str, Any]) -> Dict[str, Any]:

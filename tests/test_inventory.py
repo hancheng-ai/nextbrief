@@ -20,6 +20,7 @@ import unittest
 from helpers import AS_OF, TempCase, capture
 
 from nextbrief import cli, sense
+from nextbrief.annotate import ANNOTATIONS_NAME
 from nextbrief.inventory import INVENTORY_NAME, describe
 
 
@@ -173,3 +174,84 @@ class TheContextCommand(TempCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheDescribeCommand(TempCase):
+    """Descriptions had no path in.
+
+    `review` captures answers to fixed questions, but a description is free text
+    and cannot be multiple choice -- so the only way to supply one was to
+    hand-edit `registry.jsonc`, which is exactly the friction the overlay exists
+    to remove.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+
+    def run_cmd(self, *argv):
+        return capture(cli.main, ["--workspace", str(self.ws), "describe"] + list(argv))
+
+    def _inventory(self):
+        return {e["id"]: e for e in json.loads(
+            (self.ws / "state" / INVENTORY_NAME).read_text(encoding="utf-8"))["projects"]}
+
+    def test_a_description_reaches_the_inventory_after_a_re_sense(self):
+        code, _, err = self.run_cmd("orchard", "The thing that does the thing.")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+        got = self._inventory()["orchard"]["description"]
+        self.assertEqual(got["what"], "The thing that does the thing.")
+        self.assertEqual(got["kind"], "declared")
+        self.assertEqual(got["source"], "registry")
+
+    def test_the_registry_is_never_written(self):
+        before = (self.ws / "registry.jsonc").read_bytes()
+        self.assertEqual(self.run_cmd("orchard", "Something.")[0], 0)
+        self.assertEqual((self.ws / "registry.jsonc").read_bytes(), before)
+
+    def test_an_unknown_id_is_refused_rather_than_recorded(self):
+        # Recording a description nothing will ever read is worse than refusing.
+        code, _, err = self.run_cmd("ghost", "Something.")
+        self.assertNotEqual(code, 0)
+        self.assertIn("ghost", err)
+        self.assertFalse((self.ws / ANNOTATIONS_NAME).exists())
+
+    def test_no_arguments_explains_itself(self):
+        code, _, err = self.run_cmd()
+        self.assertEqual(code, 2)
+        self.assertIn("describe", err)
+
+    def test_an_empty_text_clears_it(self):
+        self.assertEqual(self.run_cmd("orchard", "Something.")[0], 0)
+        self.assertEqual(self.run_cmd("orchard")[0], 0)
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+        got = self._inventory()["orchard"]["description"]
+        self.assertNotEqual(got["what"], "Something.")
+
+    def test_a_reworded_question_does_not_destroy_a_description(self):
+        """A description was never an answer to a worded question.
+
+        The first version of the version check dropped the whole overlay on a
+        wording bump, which would have deleted a sentence someone wrote by hand
+        for a reason entirely unrelated to it.
+        """
+        from nextbrief.annotate import load_annotations
+        from nextbrief.paths import resolve_workspace
+
+        self.assertEqual(self.run_cmd("orchard", "Survives a rewording.")[0], 0)
+        # Rewrite the file as if it had been recorded under an older wording.
+        text = (self.ws / ANNOTATIONS_NAME).read_text(encoding="utf-8")
+        body = text[text.index("{"):]
+        data = json.loads(body)
+        data["asked_version"] = 1
+        data["projects"]["orchard"]["ice"] = {"impact": 2}
+        (self.ws / ANNOTATIONS_NAME).write_text(json.dumps(data), encoding="utf-8")
+
+        kept = load_annotations(resolve_workspace(str(self.ws)))
+        self.assertEqual(kept["orchard"]["description"], "Survives a rewording.")
+        self.assertNotIn("ice", kept["orchard"])

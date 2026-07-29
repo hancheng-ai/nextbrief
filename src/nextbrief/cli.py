@@ -85,6 +85,7 @@ commands:
 
   projects     one line per project: what is here, and how fresh it is
   context      what each project IS -- for other tools; --json to pipe it
+  describe     say what a project is, in one sentence
   review       answer the questions only you can answer (multiple choice)
   init [dir]   create a workspace and get to a first brief
   permissions  print, or merge in, the rules an unattended run needs
@@ -1390,6 +1391,46 @@ def cmd_context(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog])
     return EXIT_OK
 
 
+
+def cmd_describe(ws, args, cat):
+    """Say what a project is, in one sentence, without opening a JSON file.
+
+    Descriptions had no path in. `review` captures answers to fixed questions,
+    but a description is free text and cannot be multiple choice, so the only way
+    to supply one was to hand-edit `registry.jsonc` -- exactly the friction the
+    overlay exists to remove.
+
+    Written to `annotations.jsonc`, never the registry, same rule as everything
+    else this tool captures. A `description` typed into the registry by hand
+    still wins, because opening your own file is the more deliberate act.
+    """
+    pid = (getattr(args, "id", None) or "").strip()
+    text = (getattr(args, "text", None) or "").strip()
+    if not pid:
+        _err(tr(cat, "cli.describe.missing", "Which project, and what is it?"))
+        return EXIT_USAGE
+
+    # Refuse an id that is not a project rather than recording a description for
+    # something nothing will ever read. The snapshot is the list of what exists.
+    if ws.snapshot.is_file():
+        try:
+            snap = json.loads(ws.snapshot.read_text(encoding="utf-8"))
+            known = {str(p.get("id")) for p in (snap.get("projects") or [])}
+        except (OSError, ValueError):
+            known = set()
+        if known and pid not in known:
+            _err(tr(cat, "cli.describe.unknown", "No project called {id}.", id=pid))
+            return EXIT_FAIL
+
+    record_answers(ws, {pid: {"description": text}})
+    if text:
+        print(tr(cat, "cli.describe.saved", "{id}: {what}", id=pid, what=text))
+    else:
+        print(tr(cat, "cli.describe.cleared", "{id}: description removed.", id=pid))
+    print(tr(cat, "cli.describe.where", "Recorded in {path}.", path=ANNOTATIONS_NAME))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "run": cmd_run,
     "v0": cmd_v0,
@@ -1410,6 +1451,7 @@ _HANDLERS = {
     "review": cmd_review,
     "projects": cmd_projects,
     "context": cmd_context,
+    "describe": cmd_describe,
 }
 
 
@@ -1500,6 +1542,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("context", "what each project is, for other tools")
     p.add_argument("--json", action="store_true",
                    help="print state/inventory.json verbatim")
+
+    p = add("describe", "say what a project is, in one sentence")
+    p.add_argument("id", nargs="?", help="project id, as `nextbrief projects` lists it")
+    p.add_argument("text", nargs="?", default="", help="one sentence; omit to clear it")
     add("review", "answer the questions only you can answer")
 
     p = add("permissions", "print or install the pre-approval rules an agent needs")
