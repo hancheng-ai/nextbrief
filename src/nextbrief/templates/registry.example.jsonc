@@ -58,6 +58,17 @@
       // block below. A project can serve more than one, and most serve none.
       "serves": ["external-review"],
       "tier": "flagship",
+
+      // What this project IS, in one sentence -- distinct from the goal below,
+      // which is what you are trying to do about it next. Optional: if the
+      // project has a package.json, pyproject.toml or a README, the inventory
+      // reads the description out of there and cites the file. Write it here
+      // when there is no manifest to read, or when the manifest is wrong.
+      //
+      // This is what `nextbrief context` prints, and what another agent reads
+      // to learn the portfolio without walking your disk.
+      // "description": "Multi-tenant order API; the tenancy model is the open question",
+
       "goal_one_line": "Decide whether the tenant-isolation rewrite ships this quarter",
       "horizon": "quarter",
       "ice": { "impact": 5, "confidence": 3, "effort": 4 },

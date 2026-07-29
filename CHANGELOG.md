@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`state/inventory.json` and `nextbrief context`** — what each project *is*,
+  as opposed to what it did this week.
+
+  `digest.json` is an activity report: what moved, how fresh, what is due. That
+  is what the brief needs and it never says what a project is *for*. An agent
+  asked "should we build X?" needs the other question answered, and re-deriving
+  it by walking the tree is what every agent otherwise does separately, every
+  session. A separate artifact rather than a heavier digest, because the two have
+  different consumers and different cadence — activity changes daily, capability
+  monthly — and because it has to stay cheap: 4.7 KB against the digest's 31 KB
+  on a twelve-project portfolio.
+
+  **Derived where it can be, declared where it cannot, never blended.** A
+  project's own `package.json`, `pyproject.toml` or plugin manifest already
+  states what it is, and a README's first prose line usually does too. Those are
+  observations and each carries the file it came from, so a reader can check it.
+  Where nothing exists — roughly the content projects on a real portfolio —
+  nothing is invented: the entry says so, which is the one thing a person can fix
+  in ten seconds.
+
+  That labelling is the safety property, not a nicety. A reader must be able to
+  tell "orchard is a tenancy API", which its manifest says checkably, from
+  "orchard is our flagship", which is a thing a person
+  typed. `context --json` prints the file verbatim for another tool to consume.
+
+- **`registry.projects[].description`** — one sentence saying what a project is,
+  for when there is no manifest to read or the manifest is wrong. Distinct from
+  `goal_one_line`, which is what you intend to do about it next.
+
+### Fixed
+
+- **Withdrawn answers survived inside the snapshot.** `load_annotations` drops
+  answers given to a reworded question, but the snapshot is written with them
+  already merged in — so a workspace that does not re-sense kept scoring on
+  answers that had been retired, indefinitely. The snapshot now records which
+  projects got their `ice` from an answer, and stamps the wording version; a
+  stale stamp discounts those and only those. A value its owner typed into the
+  registry is never retired by us rewording a question.
+
+
 ## [0.1.0rc11] - 2026-07-29
 
 

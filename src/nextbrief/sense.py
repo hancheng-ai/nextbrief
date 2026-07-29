@@ -63,10 +63,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import __version__
-from .annotate import apply_annotations, load_annotations
+from .annotate import ASKED_VERSION, apply_annotations, load_annotations
 from .discovery import discover
 from .frontmatter import parse_frontmatter
 from .fs import write_text
+from .inventory import INVENTORY_NAME, build_inventory
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
@@ -1404,7 +1405,14 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     # after discovery so a discovered project can be annotated without first
     # being declared -- which is the whole point, since the person who has not
     # written a registry entry is exactly the person being asked.
-    reg = apply_annotations(reg, load_annotations(ws))
+    # Which projects got any part of their `ice` from an answer rather than from
+    # the registry. Without this the snapshot cannot tell the two apart, and an
+    # answer withdrawn by a reworded question survives inside it -- correctly
+    # dropped on read, and still baked into every consumer downstream.
+    answers = load_annotations(ws)
+    answered_ids = {pid for pid, a in answers.items()
+                    if isinstance(a, dict) and isinstance(a.get("ice"), dict)}
+    reg = apply_annotations(reg, answers)
 
     # Root-relative privacy globs, applied to every walk regardless of which
     # project declared them (FIX-1a: a private directory nested in another
@@ -1776,6 +1784,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             # False when the entry was synthesised by discovery rather than
             # written by a human: its tier and ICE are placeholders, not choices.
             "declared": not pr.get("discovered", False),
+            # True when this project's ice came from `review`, so a later
+            # rewording can retire it precisely instead of invalidating
+            # values their owner typed by hand.
+            "answered": pid in answered_ids,
             "tier": pr.get("tier"),
             "goal_one_line": pr.get("goal_one_line"),
             "horizon": pr.get("horizon"),
@@ -1861,6 +1873,8 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "late": (lateness is not None and lateness > cfg["schedule"]["late_warn_minutes"]),
             "generator": "nextbrief.sense",
             "generator_version": __version__,
+            # The wording the answers in this snapshot were given to.
+            "asked_version": ASKED_VERSION,
         },
         "registry_meta": reg.get("meta"),
         "projects": projects_out,
@@ -2171,6 +2185,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # what its own --check determinism test was written against.
     write_text(ws, ws.snapshot, text, skip_identical=False)
     write_text(ws, ws.digest, dtext, skip_identical=False)
+
+    # A third artifact, small and stable: what each project IS, as opposed to
+    # what it did. The digest answers "what moved" for tonight's brief; nothing
+    # answered "what exists" for anything else, so every other agent re-derived
+    # it by walking the tree. Written here because sensing already knows the
+    # project list, and rewritten every run because it costs nothing.
+    inv_root = resolve_root(ws, reg)
+    inv = build_inventory(inv_root, snap["projects"],
+                          {str(pr.get("id")): pr for pr in (reg.get("projects") or [])})
+    itext = json.dumps({"generated_at": snap["run"]["generated_at"],
+                        "root": str(inv_root), "projects": inv},
+                       ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    write_text(ws, ws.state / INVENTORY_NAME, itext, skip_identical=False)
 
     n_hot = sum(1 for p in snap["projects"] if p["evidence"]["signal"] == "hot")
     print("sense: %d projects | %d hot | %d parse failures | snapshot %.0fKB / digest %.0fKB"

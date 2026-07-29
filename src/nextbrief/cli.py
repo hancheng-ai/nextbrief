@@ -44,6 +44,7 @@ from .annotate import (
 from .frontmatter import parse_frontmatter
 from .fs import rewrite_fields, write_outside_workspace, write_text
 from .i18n import Catalog, load_catalog
+from .inventory import INVENTORY_NAME
 from .jsonc import JSONCError, load_jsonc
 from .launch import LaunchError, build_context, tr
 from .paths import ENV_OUT, ENV_WORKSPACE, Workspace, WorkspaceError, expand, resolve_workspace
@@ -83,6 +84,7 @@ commands:
   prune        list items worth revisiting, with what to do about them
 
   projects     one line per project: what is here, and how fresh it is
+  context      what each project IS -- for other tools; --json to pipe it
   review       answer the questions only you can answer (multiple choice)
   init [dir]   create a workspace and get to a first brief
   permissions  print, or merge in, the rules an unattended run needs
@@ -1326,6 +1328,68 @@ def cmd_projects(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]
     return EXIT_OK
 
 
+
+def cmd_context(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """What the portfolio *is*, for whoever needs to know without walking it.
+
+    The digest answers what moved; this answers what exists. Different question,
+    different consumer, and a tenth the size -- an artifact that costs as much to
+    read as re-deriving it would have saved nobody anything.
+
+    `--json` prints the file verbatim, because the point is that another agent
+    can consume it rather than parse a table meant for a person.
+    """
+    path = ws.state / INVENTORY_NAME
+    if not path.is_file():
+        _err(tr(cat, "cli.context.empty", "No inventory yet -- run `nextbrief sense` first."))
+        return EXIT_FAIL
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, ValueError) as exc:
+        _err("error: cannot read %s (%s)" % (path, exc))
+        return EXIT_FAIL
+
+    if getattr(args, "json", False):
+        sys.stdout.write(raw if raw.endswith("\n") else raw + "\n")
+        return EXIT_OK
+
+    projects = data.get("projects") or []
+    absent = 0
+    for e in projects:
+        d = e.get("description") or {}
+        kind, what, src = d.get("kind"), d.get("what"), d.get("source")
+        print("")
+        print("%s  (%s)" % (e.get("name") or e.get("id"), e.get("id")))
+        if what:
+            # The label is the point: a reader must be able to tell a sentence
+            # the owner typed from one lifted out of a manifest.
+            label = tr(cat, "cli.context." + str(kind), str(kind))
+            print("  %s   [%s: %s]" % (what, label, src))
+        else:
+            absent += 1
+            print("  %s" % tr(cat, "cli.context.absent", "no description anywhere"))
+        bits = []
+        if e.get("stacks"):
+            bits.append("/".join(e["stacks"]))
+        if e.get("needs"):
+            bits.append("needs " + ", ".join(e["needs"]))
+        if e.get("unlocks"):
+            bits.append("unlocks " + ", ".join(e["unlocks"]))
+        if e.get("serves"):
+            bits.append("serves " + ", ".join(e["serves"]))
+        if bits:
+            print("  " + cat.t("sep.dot").join(bits) if cat else "  " + " | ".join(bits))
+        for r in (e.get("run") or [])[:4]:
+            print("    $ %s" % r)
+
+    print("")
+    print(tr(cat, "cli.context.footer",
+             "{n} project(s); {absent} with no description.",
+             n=len(projects), absent=absent))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "run": cmd_run,
     "v0": cmd_v0,
@@ -1345,6 +1409,7 @@ _HANDLERS = {
     "permissions": cmd_permissions,
     "review": cmd_review,
     "projects": cmd_projects,
+    "context": cmd_context,
 }
 
 
@@ -1432,6 +1497,9 @@ def build_parser() -> argparse.ArgumentParser:
     add("prune", "list items worth revisiting")
 
     add("projects", "one line per project")
+    p = add("context", "what each project is, for other tools")
+    p.add_argument("--json", action="store_true",
+                   help="print state/inventory.json verbatim")
     add("review", "answer the questions only you can answer")
 
     p = add("permissions", "print or install the pre-approval rules an agent needs")

@@ -121,12 +121,20 @@ def needs_annotating(snapshot: Dict[str, Any], self_ids=None) -> List[Dict[str, 
     directory they have not touched is asking them to do filing.
     """
     self_ids = set(self_ids or ())
+    # A snapshot is a cache, and invalidation has to reach it. `load_annotations`
+    # drops answers given to an older wording, but the snapshot was written with
+    # them already merged in -- so a workspace that does not re-sense keeps
+    # scoring on withdrawn answers indefinitely. Only overlay-sourced values are
+    # discounted; a value its owner typed into the registry is never retired by
+    # us rewording a question.
+    stale = int(((snapshot.get("run") or {}).get("asked_version")) or 1) != ASKED_VERSION
     out = []
     for p in snapshot.get("projects") or []:
         if p.get("id") in self_ids or p.get("is_self"):
             continue
         if (p.get("ice") or {}).get("impact") is not None:
-            continue
+            if not (stale and p.get("answered")):
+                continue
         ev = p.get("evidence") or {}
         if ev.get("days_since") is None:
             continue
