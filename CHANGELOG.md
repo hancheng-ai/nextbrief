@@ -16,15 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on its own prefixed line, interpolated by the locale catalogue so each language
   owns its own spacing.
 
-- **Examples and docstrings that had been copied from a real workspace rather
-  than invented.** Several illustrations across the prompts, a module docstring,
-  the `describe` usage strings and one test fixture were real cases with the
-  project name changed and the specifics left in — a real `file:line`, a real
-  deployment status, a real product description. All replaced with invented ones.
-
-  The identifier scan could not have caught any of them, and now says so out
-  loud: it matches names, and every one of these had the name filed off. The
-  concreteness was the disclosure. `CONTRIBUTING.md` says this directly now.
+- **Examples replaced with invented ones** across the prompts, one module
+  docstring, the `describe` usage strings and one test fixture. `CONTRIBUTING.md`
+  gains a note on why the identifier scan cannot be the only thing standing
+  between a good example and a bad one.
 
 - **The identifier scan had been failing on its own allowlist since the Apache-2.0
   relicense**, because the Apache header writes `Copyright <year> <name>` where

@@ -99,12 +99,12 @@ one per line, and that pass reports the *file* it matched without echoing the
 matched text — a public repo has public CI logs. On a fork PR the secret is
 absent, that pass is skipped, and the job says so.
 
-And it only ever catches the names it was told about. It cannot catch a real
-example with the names filed off, which is the leak that actually happens: an
-illustration copied out of the private workspace with the project relabelled and
-the specifics — a real file:line, a real status, a real deadline — left in
-because they made the example concrete. That is what makes it worth copying and
-what makes it a disclosure. Concrete examples are good; invent the concreteness.
+And it only ever catches the names it was told about, which is a much weaker
+guarantee than a green check suggests. Relabelling a real example defeats it
+entirely: swap the project name and every specific that made the example worth
+reaching for — a file and line number, a status, a date — survives the rename and
+is still somebody's real detail. Concrete examples are much better than vague
+ones. Invent the concreteness rather than borrowing it.
 
 ---
 
