@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0rc12] - 2026-07-29
+
 ### Added
 
 - **`capability`** — what the thing built here could also serve, beyond what it
@@ -28,15 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   here — so it carries its own `declared` label and an agent can see it is reading
   somebody's optimism rather than a fact about the tree.
 
-### Changed
-
-- `describe <id>` with no text is now a usage error rather than a silent clear. A
-  forgotten argument looked identical to an intent to erase; `describe <id> ""`
-  is how you clear it. And `--capability` no longer blanks a description it did
-  not mention.
-
-### Added
-
 - **`nextbrief describe <id> "<sentence>"`** — say what a project is without
   opening a JSON file.
 
@@ -48,22 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   An id that is not a project is refused rather than recorded: a description
   nothing will ever read is worse than none.
-
-### Fixed
-
-- **A reworded question destroyed descriptions along with answers.** The version
-  check dropped the whole overlay entry, and a description was never an answer to
-  a worded question. It is now scoped to `ice` and only `ice`.
-
-- **A description in the overlay never reached the inventory.**
-  `apply_annotations` rebinds `reg` inside `build()`, so `main()` still held the
-  unmerged registry and passed *that* to the inventory. The description is now
-  carried into the snapshot alongside `goal_one_line`, which it resembles, so the
-  inventory reads one post-overlay source instead of re-deriving the merge in a
-  scope that never saw it.
-
-
-### Added
 
 - **`state/inventory.json` and `nextbrief context`** — what each project *is*,
   as opposed to what it did this week.
@@ -94,7 +71,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for when there is no manifest to read or the manifest is wrong. Distinct from
   `goal_one_line`, which is what you intend to do about it next.
 
+### Changed
+
+- `describe <id>` with no text is now a usage error rather than a silent clear. A
+  forgotten argument looked identical to an intent to erase; `describe <id> ""`
+  is how you clear it. And `--capability` no longer blanks a description it did
+  not mention.
+
 ### Fixed
+
+- **A reworded question destroyed descriptions along with answers.** The version
+  check dropped the whole overlay entry, and a description was never an answer to
+  a worded question. It is now scoped to `ice` and only `ice`.
+
+- **A description in the overlay never reached the inventory.**
+  `apply_annotations` rebinds `reg` inside `build()`, so `main()` still held the
+  unmerged registry and passed *that* to the inventory. The description is now
+  carried into the snapshot alongside `goal_one_line`, which it resembles, so the
+  inventory reads one post-overlay source instead of re-deriving the merge in a
+  scope that never saw it.
 
 - **Withdrawn answers survived inside the snapshot.** `load_annotations` drops
   answers given to a reworded question, but the snapshot is written with them
@@ -103,7 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projects got their `ice` from an answer, and stamps the wording version; a
   stale stamp discounts those and only those. A value its owner typed into the
   registry is never retired by us rewording a question.
-
 
 ## [0.1.0rc11] - 2026-07-29
 
@@ -458,7 +452,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc11...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc12...HEAD
+[0.1.0rc12]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc12
 [0.1.0rc11]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc11
 [0.1.0rc10]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc10
 [0.1.0rc9]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc9
