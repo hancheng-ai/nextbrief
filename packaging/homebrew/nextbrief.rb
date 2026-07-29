@@ -61,7 +61,7 @@ class Nextbrief < Formula
   # kind of string Homebrew's parser is entitled to read as `0.1.0-rc1`, and the
   # test block compares `version` against what the binary prints.
   version "0.1.0rc10"
-  sha256 "87c2e54aebcbbdfb2fa79f6643ab33396de0ec59772c5aac3dc2bd1eb19e76c1"
+  sha256 "20a3414fa7a52ec5fbf378aef8a8662d79180d345bbbf635d8096e0da4c91e2c"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"
 
