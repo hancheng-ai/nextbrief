@@ -592,5 +592,79 @@ class Structure(TempCase):
         self.assertEqual(sense.canonical(first), sense.canonical(second))
 
 
+class TheEnginesOwnOutput(TempCase):
+    """Declaring the workspace as a project of your own is supported. It only
+    works if the run's own products stay out of the activity it measures."""
+
+    def test_output_paths_are_hidden_from_a_project_holding_them(self):
+        ws_dir = self.workspace()
+        ws = resolve_workspace(str(ws_dir))
+        globs = sense.engine_output_globs(ws, ws_dir)
+        self.assertEqual(sorted(globs),
+                         ["BRIEF.html", "BRIEF.md", "log/**", "state/**"])
+
+    def test_an_ordinary_project_gets_no_implicit_exclusions(self):
+        # The patterns are relative to the directory being walked, so a project
+        # the engine writes nothing into must come back with an empty list --
+        # otherwise every project on the list would hide its own `state/`.
+        ws_dir = self.workspace()
+        ws = resolve_workspace(str(ws_dir))
+        self.assertEqual(sense.engine_output_globs(ws, ws_dir / "projects" / "orchard"), [])
+
+    def test_a_split_out_directory_is_hidden_from_wherever_it_lands(self):
+        # `out` is configurable, so the exclusion cannot be a fixed list of
+        # names at a fixed depth -- it has to be derived from where output goes.
+        ws_dir = self.workspace()
+        ws = resolve_workspace(str(ws_dir))
+        elsewhere = ws.__class__(root=ws.root, out=ws.root / "projects" / "orchard" / "briefs",
+                                 source="test")
+        self.assertEqual(sorted(sense.engine_output_globs(elsewhere, ws_dir / "projects" / "orchard")),
+                         ["briefs/BRIEF.html", "briefs/BRIEF.md",
+                          "briefs/log/**", "briefs/state/**"])
+
+    def test_the_brief_does_not_count_as_activity_in_the_workspace_project(self):
+        # The end-to-end version, and the one that reproduces the real bug: a
+        # hand-written `ignore_globs` listed BRIEF.md and missed BRIEF.html, so
+        # every night's render came back the next night as a day of work.
+        #
+        # The products have to be planted first. `sense` runs before `render`, so
+        # on a first run they do not exist yet and the assertion below would hold
+        # for the wrong reason -- which is exactly how the first draft of this
+        # test passed against the unfixed engine.
+        reg = base_registry()
+        # `paths` is relative to `defaults.root`, so the root has to be the
+        # workspace for a project to cover it -- which is the real shape: the
+        # workspace lives inside the directory being scanned.
+        reg["defaults"]["root"] = "."
+        reg["projects"] = [{
+            "id": "vault", "name": "the workspace itself", "paths": ["."],
+            "git": "none", "tier": "maintenance",
+        }]
+        ws_dir = self.workspace(registry=reg)
+        for name in ("BRIEF.md", "BRIEF.html"):
+            (ws_dir / name).write_text("last night's render\n", encoding="utf-8")
+        (ws_dir / "log").mkdir(exist_ok=True)
+        (ws_dir / "log" / "runs.jsonl").write_text('{"ok": true}\n', encoding="utf-8")
+        # The control below has to survive an eight-entry cap filled in path
+        # order, so it is named to sort first rather than left to luck.
+        (ws_dir / "AUDIT_NOTES.md").write_text("mine, not the engine's\n", encoding="utf-8")
+        set_tree_mtime(ws_dir)
+
+        code, _, err = capture(sense.main, ["--workspace", str(ws_dir), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+
+        snap = json.loads((ws_dir / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        fs = snap["projects"][0]["fs"]
+        touched = [p.rsplit("/", 1)[-1] for p in fs["top_changed_paths"]]
+        # A control, because the interesting assertions below are all negative:
+        # an engine that walked nothing at all, or one pointed at the wrong
+        # directory, would satisfy every one of them. Both mistakes were made
+        # while writing this test.
+        self.assertIn("AUDIT_NOTES.md", touched)
+        for product in ("BRIEF.md", "BRIEF.html", "runs.jsonl"):
+            self.assertNotIn(product, touched,
+                             "the engine's own %s was counted as project activity" % product)
+
+
 if __name__ == "__main__":
     unittest.main()

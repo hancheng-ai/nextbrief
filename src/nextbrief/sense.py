@@ -71,7 +71,8 @@ from .inventory import INVENTORY_NAME, build_inventory
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
-__all__ = ["main", "build", "build_digest", "canonical", "SenseError"]
+__all__ = ["main", "build", "build_digest", "canonical", "engine_output_globs",
+           "SenseError"]
 
 GIT_TIMEOUT = 30
 TOOL_TIMEOUT = 60
@@ -1374,6 +1375,45 @@ def resolve_root(ws: Workspace, reg: Dict[str, Any]) -> Path:
     return root
 
 
+def engine_output_globs(ws: Workspace, base: Path) -> List[str]:
+    """Globs hiding the engine's own output from the activity it measures.
+
+    Declaring the workspace as one of your own projects is supported, and mildly
+    self-referential on purpose: the registry template suggests it so that a brief
+    nobody reads is eventually reported as neglected by itself. That only works if
+    the nightly run's products are kept out of the activity count. Leave them in
+    and "the brief ran" is recorded as "the brief made progress" -- the one project
+    on the list that can never go stale, because the thing measuring it touches it
+    every night.
+
+    This used to be the reader's job, written out by hand in ``ignore_globs``. A
+    hand-kept list of somebody else's filenames goes stale in one direction only:
+    a release adds an output file, every existing list still parses, still passes,
+    still looks right, and quietly starts crediting the project with a day of work
+    it did not do. Nothing errors. The engine knows where it writes, so the engine
+    is what should say so.
+
+    Returns patterns relative to ``base``, empty when the engine writes nothing
+    inside it -- which is the normal case for every project but one.
+    """
+    out: List[str] = []
+    try:
+        anchor = base.resolve()
+    except OSError:
+        return out
+    for path, is_dir in ((ws.state, True), (ws.log, True),
+                         (ws.brief_md, False), (ws.brief_html, False)):
+        try:
+            rel = path.resolve().relative_to(anchor)
+        except (OSError, ValueError):
+            continue
+        text = str(rel).replace("\\", "/").strip("/")
+        if not text or text == ".":
+            continue
+        out.append(text + "/**" if is_dir else text)
+    return out
+
+
 def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
           as_of: dt.date, now: dt.datetime, timer: Optional[Timing] = None) -> Dict[str, Any]:
     """Sense everything the registry declares and return the snapshot structure."""
@@ -1534,7 +1574,9 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                     continue
                 # Privacy globs are rebased onto this path so the walk itself can
                 # never collect a private file name (defence 1 of 3).
-                pfilter = PathFilter(default_globs + own_globs + rebase_globs(private_globs, rel))
+                pfilter = PathFilter(default_globs + own_globs
+                                     + engine_output_globs(ws, ap)
+                                     + rebase_globs(private_globs, rel))
                 f = walk_project(ap, pfilter, as_of, windows, private=private_by_rel[rel])
                 if f is None:
                     parse_failed.append({"path": rel, "code": "walk_failed",

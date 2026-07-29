@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The engine's own source checkout is a project like any other.** It used to be
+  excluded from discovery on the theory that it is "the tool, not the work" —
+  which is exactly backwards for anyone developing it, and bought nothing anyway.
+  The engine writes only into the workspace, so its own checkout cannot feed its
+  output back to itself. What needs a fence is where output *lands*, not where the
+  tool happens to live.
+
+### Fixed
+
+- **The workspace fence tested equality, so one level of nesting walked straight
+  past it.** With the workspace at `<root>/tools/pm`, the candidate discovery sees
+  is `<root>/tools` — equal to nothing reserved, and containing every file the
+  engine writes. Adopted, it would be re-sensed each night off the previous
+  night's output and could never look stale. Containment is the property that
+  matters, so containment is now what gets tested.
+
+- **The engine's own output no longer counts as project activity.** Declaring the
+  workspace as one of your own projects is supported and mildly self-referential
+  on purpose — the registry template suggests it, so a brief nobody reads is
+  eventually reported as neglected by itself. That only works if the run's
+  products stay out of the activity it measures.
+
+  Keeping them out used to be the reader's job, spelled out by hand in
+  `ignore_globs`. A hand-kept list of somebody else's filenames goes stale in one
+  direction only: a release adds an output file, every existing list still parses,
+  still passes, still looks right, and quietly starts crediting the project with
+  work it did not do. That had already happened — a list naming `BRIEF.md` did not
+  name `BRIEF.html`, so each night's render came back the next night as a day of
+  activity. `state/`, `log/`, `BRIEF.md` and `BRIEF.html` are now derived from
+  where the workspace actually writes, wherever `out` points.
+
+
 ## [0.1.0rc12] - 2026-07-29
 
 ### Added

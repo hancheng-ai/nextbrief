@@ -237,8 +237,12 @@ directory does not produce nonsense:
 | anything in `projects`, `watch`, `infra`, `archived` | already spoken for; matched on the first path segment, so `atlas/apps/site` still claims `atlas` |
 | anything in `ignored` | the opt-out — and the reason `ignored` is now read by the sensing stage, not just by `init` |
 | dotfile directories, `node_modules`, `dist`, `Downloads`, … | build output and OS folders are not work |
-| the workspace itself | otherwise the brief reports on the thing writing it |
-| nextbrief's own checkout | it sits beside your projects more often than not, and is the one directory guaranteed to look busy while being the tool rather than the work |
+| the workspace, and any directory holding it | otherwise the brief reports on the thing writing it — and the next night it reads its own output back as activity, so the directory can never look stale. Containment, not equality: a workspace at `<root>/tools/pm` reserves `<root>/tools` too |
+
+Note what that last row does *not* cover. nextbrief's own checkout is adopted
+like anything else: if you are developing it, it is the work, and the engine
+writes nothing into it, so there is no loop to break. The exclusion is about
+where output lands, not about which directory happens to hold the tool.
 
 Whether a discovered directory is under version control is checked rather than
 assumed. `git: auto` on a directory that turns out not to be a repository is

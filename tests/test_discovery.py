@@ -204,17 +204,38 @@ class WhatIsNeverAProject(DiscoverCase):
         ws = Workspace(root=self.ws_root, out=out, source="test")
         self.assertEqual([e["id"] for e in discover(self.root, {}, ws)], ["real"])
 
-    def test_the_engines_own_checkout_is_skipped(self):
-        # A developer's checkout sits beside their projects more often than not,
-        # and it is the one directory guaranteed to look busy while being the
-        # tool rather than the work.
+    def test_a_directory_holding_the_workspace_is_not_adopted(self):
+        # The fence used to compare for equality, which left this open: the
+        # workspace one level down means the candidate is its *parent*, equal to
+        # nothing reserved and containing everything the engine writes. Adopted,
+        # it would be re-sensed every night off the previous night's output and
+        # could never look stale.
+        nested = self.root / "tools" / "pm"
+        nested.mkdir(parents=True)
+        self.dirs("real")
+        ws = Workspace(root=nested, out=nested, source="test")
+        self.assertEqual([e["id"] for e in discover(self.root, {}, ws)], ["real"])
+
+    def test_a_directory_holding_only_the_out_directory_is_not_adopted_either(self):
+        # Same rule, reached through the other half of the workspace.
+        out = self.root / "artifacts" / "briefs"
+        out.mkdir(parents=True)
+        self.dirs("real")
+        ws = Workspace(root=self.ws_root, out=out, source="test")
+        self.assertEqual([e["id"] for e in discover(self.root, {}, ws)], ["real"])
+
+    def test_the_engines_own_checkout_is_a_project_like_any_other(self):
+        # It was skipped once, on the theory that it is "the tool, not the work".
+        # For anyone developing it that is exactly backwards, and the exclusion
+        # bought nothing: the engine writes only into the workspace, so its own
+        # checkout cannot feed its own output back to itself. Only what gets
+        # written to needs a fence.
         self.dirs("nextbrief", "real")
         (self.root / "nextbrief" / "pyproject.toml").write_text(
             '[project]\nname = "nextbrief"\nversion = "0.0.0"\n', encoding="utf-8")
-        self.assertEqual(self.found({}), ["real"])
+        self.assertEqual(self.found({}), ["nextbrief", "real"])
 
-    def test_another_packages_checkout_is_not_skipped(self):
-        # The rule is "this engine", not "anything with a pyproject".
+    def test_another_packages_checkout_is_adopted_too(self):
         self.dirs("somelib")
         (self.root / "somelib" / "pyproject.toml").write_text(
             '[project]\nname = "somelib"\nversion = "1.0"\n', encoding="utf-8")

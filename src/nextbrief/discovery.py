@@ -36,7 +36,13 @@ real home directory does not produce nonsense:
   nothing at all for a daily run
 * dotfile directories and the build-output and home-folder names in
   :data:`SKIP_NAMES`
-* the workspace itself, and this package's own source checkout
+* the workspace, and any directory holding it
+
+That last one is the only exclusion that exists for the engine's benefit rather
+than yours, and it is narrower than it looks. It covers what the engine *writes*
+to, not what the engine *is*. This package's own checkout is a project like any
+other -- if you are developing it, it is the work -- and nothing is written into
+it, so nothing loops.
 """
 
 from __future__ import annotations
@@ -54,7 +60,6 @@ __all__ = [
     "SKIP_NAMES",
     "claimed_segments",
     "discover",
-    "is_engine_checkout",
 ]
 
 # Directories that are never a project of yours. Kept deliberately short: this is
@@ -154,21 +159,24 @@ def claimed_segments(reg: Dict[str, Any]) -> Set[str]:
     return claimed
 
 
-def is_engine_checkout(directory: Path) -> bool:
-    """True for this package's own source tree.
+def _holds_workspace(resolved: Path, reserved: Set[Path]) -> bool:
+    """True if `resolved` is the workspace or a directory holding it.
 
-    A developer's checkout sits in the same directory as their projects more
-    often than not, and it is the one directory guaranteed to look busy while
-    being the tool rather than the work.
+    Equality is not enough, and the gap is easy to walk into. Put the workspace
+    at ``<root>/tools/pm`` and the candidate this loop sees is ``<root>/tools``,
+    which equals no reserved path while containing every file the engine writes.
+    Adopt it and the nightly run's own output -- snapshot, log, BRIEF.md -- is
+    read back as project activity the next night, and the next: a project that is
+    never stale because the thing reporting on it keeps touching it. Containment
+    is the property that matters, so containment is what gets tested.
     """
-    pyproject = directory / "pyproject.toml"
-    if not pyproject.is_file():
-        return False
-    try:
-        head = pyproject.read_text(encoding="utf-8", errors="replace")[:2000]
-    except OSError:
-        return False
-    return re.search(r'(?m)^\s*name\s*=\s*"nextbrief"', head) is not None
+    for base in reserved:
+        try:
+            base.relative_to(resolved)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _looks_versioned(directory: Path) -> bool:
@@ -241,11 +249,10 @@ def discover(root: Path, reg: Dict[str, Any], ws: Optional[Workspace] = None) ->
         if name.startswith(".") or name in SKIP_NAMES or name in claimed:
             continue
         try:
-            if directory.resolve() in reserved:
-                continue
+            resolved = directory.resolve()
         except OSError:
             continue
-        if is_engine_checkout(directory):
+        if _holds_workspace(resolved, reserved):
             continue
 
         # Names differing only in separator or case -- `my-app`, `my_app`,
