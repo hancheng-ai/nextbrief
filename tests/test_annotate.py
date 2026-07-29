@@ -17,7 +17,6 @@ from nextbrief import annotate, cli, render, sense
 from nextbrief.annotate import (
     ANNOTATIONS_NAME,
     apply_annotations,
-    derive_effort,
     load_annotations,
     needs_annotating,
     record_answers,
@@ -42,9 +41,12 @@ class WhoGetsAsked(unittest.TestCase):
             entry("done", ice={"impact": 4, "confidence": 3, "effort": 2})])
         self.assertEqual(needs_annotating(snap), [])
 
-    def test_a_partially_answered_project_still_is(self):
+    def test_one_answer_is_the_whole_answer(self):
+        # There is one question now, so there is no half-answered state. A
+        # registry entry carrying only `impact` is complete, and asking again
+        # would be asking something already said.
         snap = make_snapshot(projects=[entry("half", ice={"impact": 4})])
-        self.assertEqual([p["id"] for p in needs_annotating(snap)], ["half"])
+        self.assertEqual(needs_annotating(snap), [])
 
     def test_a_project_with_no_evidence_at_all_is_left_alone(self):
         # Asking someone to rank a directory they have never touched is filing,
@@ -67,25 +69,84 @@ class WhoGetsAsked(unittest.TestCase):
                          ["today", "mid", "old"])
 
 
-class EffortIsMeasured(unittest.TestCase):
-    def test_bands_follow_size(self):
-        self.assertEqual(derive_effort(entry("a", files=10)), 1)
-        self.assertEqual(derive_effort(entry("a", files=150)), 2)
-        self.assertEqual(derive_effort(entry("a", files=900)), 3)
-        self.assertEqual(derive_effort(entry("a", files=4000)), 4)
-        self.assertEqual(derive_effort(entry("a", files=90000)), 5)
-
-    def test_no_question_ever_asks_for_effort(self):
-        # The axis where a human guess is worse than a count.
+class WhatIsAskedAndWhatIsNot(unittest.TestCase):
+    def test_effort_is_neither_asked_nor_derived(self):
+        """It was derived from file count and called "the axis where a
+        measurement beats a guess". True of repo SIZE; false of the work needed
+        to reach the impact, which is what ICE means. A small finished tool
+        scored lowest and a large active one scored high, so the divisor
+        penalised a project for being large and rewarded one for being done."""
         self.assertNotIn("effort", [q.field for q in annotate.QUESTIONS])
+        self.assertFalse(hasattr(annotate, "derive_effort"))
+        self.assertFalse(hasattr(annotate, "EFFORT_BANDS"))
+
+    def test_urgency_is_never_asked(self):
+        """Urgency is already known: it comes from the dates in `outcomes` and
+        `deadlines`, which the renderer turns into a boost. Asking for it again
+        is asking someone to re-derive arithmetic the engine does better."""
+        keys = " ".join(q.key for q in annotate.QUESTIONS)
+        self.assertNotIn("urgen", keys)
+        self.assertIn("importance", keys)
+
+    def test_the_question_asks_about_success_not_delay(self):
+        """The bug this replaced. "If this slipped by a month, what happens?" is
+        a delay-consequence question -- urgency wearing importance's name. It
+        scored a portfolio's centre piece at 1, because nothing happens when a
+        platform blocked on its own ecosystem slips another month."""
+        from nextbrief.i18n import load_catalog
+
+        text = load_catalog("en").t(annotate.QUESTIONS[0].key).lower()
+        self.assertIn("succeed", text)
+        self.assertNotIn("slip", text)
+
+    def test_only_one_question_is_asked(self):
+        # Two was one too many: the second measured actionability, called it
+        # confidence, and multiplied a low-importance project by five.
+        self.assertEqual(len(annotate.QUESTIONS), 1)
 
     def test_no_question_asks_for_a_number(self):
-        # Every answer is a consequence with a fixed set of choices.
         for q in annotate.QUESTIONS:
             self.assertGreaterEqual(len(q.choices), 3, q.field)
             for value, key in q.choices:
                 self.assertIsInstance(value, int)
                 self.assertTrue(key.startswith("review.a."), key)
+
+    def test_an_impact_only_answer_scores_as_itself(self):
+        """The reason nothing in score_project had to change: with confidence
+        and effort defaulting to 3, base collapses to (impact x 3) / 3."""
+        for want in (1, 2, 4, 5):
+            # tier "active" is weight 1.0, so the base is the only factor left.
+            p = make_project_entry(tier="active", ice={"impact": want})
+            p["evidence"] = dict(p["evidence"], days_since=0)
+            self.assertAlmostEqual(render.score_project(p, {}), float(want), places=6)
+
+
+class RewordingInvalidatesOldAnswers(TempCase):
+    """An answer belongs to the question that produced it."""
+
+    def setUp(self):
+        super().setUp()
+        self.ws_root = self.workspace()
+        self.ws = resolve_workspace(str(self.ws_root))
+
+    def test_an_answer_from_an_older_wording_is_dropped_not_reinterpreted(self):
+        # "2" against "what breaks if this slips" is not the same statement as
+        # "2" against "what changes if this succeeds". Carrying it over would put
+        # words in someone's mouth they never said.
+        (self.ws_root / ANNOTATIONS_NAME).write_text(
+            json.dumps({"asked_version": 1,
+                        "projects": {"orchard": {"ice": {"impact": 2}}}}),
+            encoding="utf-8")
+        self.assertEqual(load_annotations(self.ws), {})
+
+    def test_the_current_wording_is_honoured(self):
+        record_answers(self.ws, {"orchard": {"ice": {"impact": 5}}})
+        self.assertEqual(load_annotations(self.ws)["orchard"]["ice"]["impact"], 5)
+
+    def test_what_is_written_carries_its_version(self):
+        record_answers(self.ws, {"orchard": {"ice": {"impact": 5}}})
+        raw = (self.ws_root / ANNOTATIONS_NAME).read_text(encoding="utf-8")
+        self.assertIn('"asked_version"', raw)
 
 
 class Overlay(TempCase):
@@ -201,13 +262,13 @@ class TheBriefAsks(TempCase):
 
     def test_the_question_reaches_the_page_with_its_choices(self):
         text = self.render([entry("newthing", ice=None)])
-        self.assertIn("slipped by a month", text)
-        self.assertIn("it is exploration", text)
-        self.assertIn("I would drop other things to protect it", text)
+        self.assertIn("succeeded completely", text)
+        self.assertIn("a tool, or an experiment", text)
+        self.assertIn("most of the plan rests on it", text)
 
     def test_it_disappears_once_answered(self):
         text = self.render([entry("done", ice={"impact": 4, "confidence": 3, "effort": 2})])
-        self.assertNotIn("slipped by a month", text)
+        self.assertNotIn("succeeded completely", text)
 
     def test_both_renderings_ask_the_same_question(self):
         """The invariant this feature broke on arrival.
@@ -220,15 +281,15 @@ class TheBriefAsks(TempCase):
         """
         text = self.render([entry("newthing", ice=None)])
         html = (self.ws / "BRIEF.html").read_text(encoding="utf-8")
-        self.assertIn("slipped by a month", text)
-        self.assertIn("slipped by a month", html)
-        self.assertIn("it is exploration", html)
-        self.assertIn("I would drop other things to protect it", html)
+        self.assertIn("succeeded completely", text)
+        self.assertIn("succeeded completely", html)
+        self.assertIn("a tool, or an experiment", html)
+        self.assertIn("most of the plan rests on it", html)
 
     def test_neither_rendering_asks_once_it_is_answered(self):
         self.render([entry("done", ice={"impact": 4, "confidence": 3, "effort": 2})])
         html = (self.ws / "BRIEF.html").read_text(encoding="utf-8")
-        self.assertNotIn("slipped by a month", html)
+        self.assertNotIn("succeeded completely", html)
 
     def _set_cap(self, lines):
         cfg = json.loads((self.ws / "config.jsonc").read_text(encoding="utf-8").split("\n", 1)[1])
@@ -250,8 +311,8 @@ class TheBriefAsks(TempCase):
         """
         text = self.render([entry("newthing", ice=None)])
         self.assertIn("Reminders", text)
-        self.assertIn("slipped by a month", text)
-        self.assertLess(text.index("Reminders"), text.index("slipped by a month"))
+        self.assertIn("succeeded completely", text)
+        self.assertLess(text.index("Reminders"), text.index("succeeded completely"))
 
     def test_a_cut_that_reaches_the_questions_still_spares_the_warnings(self):
         # The cap is derived from this brief rather than guessed, so the test
@@ -267,7 +328,7 @@ class TheBriefAsks(TempCase):
         text = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
 
         self.assertIn("Reminders", text, "the warnings were evicted by the questions")
-        self.assertNotIn("slipped by a month", text,
+        self.assertNotIn("succeeded completely", text,
                          "the cut did not reach the questions; test is not exercising the fix")
 
     def test_the_html_says_when_the_markdown_was_cut(self):
@@ -286,7 +347,7 @@ class TheBriefAsks(TempCase):
         # It must never compete with the brief it is printed inside.
         text = self.render([entry("a", ice=None, days=1), entry("b", ice=None, days=2),
                             entry("c", ice=None, days=3), entry("d", ice=None, days=4)])
-        self.assertEqual(text.count("slipped by a month"), 2)
+        self.assertEqual(text.count("succeeded completely"), 2)
 
 
 class ReviewCommand(TempCase):

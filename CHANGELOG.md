@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Licence: Apache 2.0**, for its explicit patent grant and because that is
+  what corporate legal review is used to reading. Named the same way in
+  `LICENSE`, `pyproject.toml`, `CITATION.cff` and the Homebrew formula.
+
+  The engine stays permissively licensed on purpose. Its value is that the
+  evidence gate can be audited, and a gate nobody can read is worth nothing;
+  anything commercial belongs in modules that *consume* gated output, not in
+  restrictions on the engine that produces it.
+
+- **`review` asks about importance, and stops asking about urgency.** The first
+  version asked *"if this slipped by a month, what happens?"* — a
+  delay-consequence question, which is urgency wearing importance's name. It
+  scored a portfolio's centre piece at 1 of 5, because nothing happens when a
+  platform blocked on its own ecosystem slips another month. Everything
+  important-but-not-urgent was systematically undervalued, which is the category
+  a long-horizon plan is made of.
+
+  It now asks *"if this succeeded completely, what changes?"* — answered the same
+  way whether a project was touched today or last spring. Urgency is not asked at
+  all, because it is already known: it comes from the dates in `outcomes` and
+  `deadlines`, which the renderer already turns into a boost.
+
+- **Confidence and effort are no longer asked or derived.** The confidence
+  question measured how clearly you knew the next step — actionability, not
+  confidence — and multiplied a low-importance project by five for being
+  well-understood. Effort was derived from file count, which is repo *size*, not
+  the work needed to reach the impact; it penalised a flagship for being large
+  and rewarded a finished tool for being small. Together they ranked a mature
+  10-file utility above a flagship with a hard external deadline.
+
+  Nothing in `score_project` changed: with both defaulting to 3, the base
+  collapses to `(impact × 3) / 3 == impact`, so a one-question answer scores as
+  itself and hand-written three-axis registry entries keep working untouched.
+
+### Fixed
+
+- **`review` re-asked what you had just answered.** The overlay is applied at
+  sense time, so a snapshot written before the last `review` still showed no
+  answers — and `review` read that snapshot to decide what to ask. It now merges
+  the overlay first.
+
+- **A reworded question invalidates its old answers.** `annotations.jsonc` carries
+  `asked_version`; answers recorded under an earlier wording are dropped and asked
+  again rather than silently reinterpreted. "2" against *what breaks if this
+  slips* is not the same statement as "2" against *what changes if this succeeds*.
+
+
 ### Added
 
 - **`nextbrief projects`** — one line per project, straight from the snapshot:

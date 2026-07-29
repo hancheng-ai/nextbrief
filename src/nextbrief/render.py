@@ -1121,7 +1121,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         L.append("## " + cat.t("brief.section.questions"))
         for p_ in asking:
             L.append("- **%s** — %s" % (p_.get("name") or p_.get("id"),
-                                        cat.t("review.q.impact")))
+                                        cat.t(QUESTIONS[0].key)))
             for _value, key in QUESTIONS[0].choices:
                 L.append("  - " + cat.t(key))
         L.append("")

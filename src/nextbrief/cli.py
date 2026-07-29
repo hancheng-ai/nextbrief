@@ -38,7 +38,6 @@ from . import __version__, resources
 from .annotate import (
     ANNOTATIONS_NAME,
     QUESTIONS,
-    derive_effort,
     needs_annotating,
     record_answers,
 )
@@ -1203,9 +1202,17 @@ def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
         _err("error: cannot read %s (%s)" % (snap_path, exc))
         return EXIT_FAIL
 
+    # The overlay is applied at sense time, so a snapshot written before the last
+    # `review` still shows no answers. Reading it raw meant re-asking what had
+    # just been answered, every time, until the next sense.
+    from .annotate import apply_annotations, load_annotations
     from .render import self_project_ids
 
-    targets = needs_annotating(snap, self_project_ids(snap, None, ws))
+    answered = load_annotations(ws)
+    merged = dict(snap)
+    merged["projects"] = apply_annotations(
+        {"projects": snap.get("projects") or []}, answered)["projects"]
+    targets = needs_annotating(merged, self_project_ids(snap, None, ws))
     if not targets:
         print(tr(cat, "review.nothing", "Nothing to ask about -- every active project has an answer."))
         return EXIT_OK
@@ -1221,10 +1228,7 @@ def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
         pid = str(proj.get("id"))
         print("")
         print("== %s ==" % (proj.get("name") or pid))
-        ice: Dict[str, Any] = {"effort": derive_effort(proj)}
-        print("   " + tr(cat, "review.effort_derived",
-                         "Effort is measured, not asked: {n} files.",
-                         n=(proj.get("fs") or {}).get("total_files") or 0))
+        ice: Dict[str, Any] = {}
         for q in QUESTIONS:
             if (proj.get("ice") or {}).get(q.field) is not None:
                 continue
@@ -1236,10 +1240,8 @@ def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
             if picked is None:
                 continue
             ice[q.field] = q.choices[picked - 1][0]
-        # Only record a project the user actually answered something for. An
-        # entry holding nothing but a derived effort is the tool writing its own
-        # measurement back as though it were an answer.
-        if len(ice) > 1:
+        # Only record a project the user actually answered something for.
+        if ice:
             answers[pid] = {"ice": ice}
 
     n = record_answers(ws, answers)

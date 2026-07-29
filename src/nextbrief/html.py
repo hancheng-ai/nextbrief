@@ -426,7 +426,7 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
         A("<h2>%s</h2><div class=card>" % e(cat.t("brief.section.questions")))
         for p_ in asking:
             A("<p><b>%s</b> &mdash; %s</p><ul class=plain>"
-              % (e(p_.get("name") or p_.get("id")), e(cat.t("review.q.impact"))))
+              % (e(p_.get("name") or p_.get("id")), e(cat.t(QUESTIONS[0].key))))
             for _value, key in QUESTIONS[0].choices:
                 A("<li>%s</li>" % e(cat.t(key)))
             A("</ul>")

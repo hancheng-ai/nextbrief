@@ -35,7 +35,7 @@ question stays visibly unanswered and never quietly becomes data.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence
 
 from .fs import write_text
 from .jsonc import JSONCError, load_jsonc
@@ -43,10 +43,9 @@ from .paths import Workspace
 
 __all__ = [
     "ANNOTATIONS_NAME",
-    "EFFORT_BANDS",
+    "ASKED_VERSION",
     "QUESTIONS",
     "apply_annotations",
-    "derive_effort",
     "load_annotations",
     "needs_annotating",
     "pending_count",
@@ -66,49 +65,50 @@ class Question:
         self.choices = choices      # ((stored_value, locale_key), ...)
 
 
-# Both questions are about consequences, not magnitudes. The numbers exist only
-# because `score_project` multiplies them; they are never shown to anyone.
+# Importance is asked. Urgency is not, because urgency is already known: it comes
+# from the dates in `outcomes` and `deadlines`, which a human wrote and the
+# renderer already turns into a boost. Asking for it again would be asking
+# someone to re-derive arithmetic the engine does better.
+#
+# The distinction is the whole point, and getting it wrong is not academic. The
+# first version of this asked "if this slipped by a month, what happens?" -- a
+# delay-consequence question, which is urgency wearing importance's name. It
+# scored a portfolio's centre piece at 1 out of 5, because nothing happens if a
+# platform blocked on its own ecosystem slips another month. Everything
+# important-but-not-urgent was systematically undervalued, which is the exact
+# category a long-horizon plan is made of.
+#
+# So the question asks what changes on SUCCESS, not what breaks on delay. A
+# project answers it the same way whether it was touched today or last spring.
 QUESTIONS: Sequence[Question] = (
-    Question("impact", "review.q.impact", (
-        (1, "review.a.impact.nothing"),
-        (2, "review.a.impact.annoyed"),
-        (4, "review.a.impact.blocks"),
-        (5, "review.a.impact.protect"),
-    )),
-    Question("confidence", "review.q.confidence", (
-        (1, "review.a.confidence.unknown"),
-        (3, "review.a.confidence.roughly"),
-        (5, "review.a.confidence.exactly"),
+    Question("impact", "review.q.importance", (
+        (1, "review.a.importance.itself"),
+        (2, "review.a.importance.easier"),
+        (4, "review.a.importance.unlocks"),
+        (5, "review.a.importance.rests_on"),
     )),
 )
 
-# Effort, derived. Deliberately coarse: this is a size band, and pretending to
-# more precision than "how much is there" supports would be false comfort. The
-# thresholds are documented rather than tuned, so that a project moving band is
-# a fact about the project and not about someone's calibration drifting.
-EFFORT_BANDS: Sequence[Tuple[int, int]] = (
-    (50, 1),
-    (200, 2),
-    (1000, 3),
-    (5000, 4),
-)
+# Bump when a question's WORDING changes enough that old answers no longer mean
+# the same thing. Answers recorded under an older version are ignored and asked
+# again, rather than being silently reinterpreted -- someone who answered "2" to
+# "what breaks if this slips" did not say the same thing as someone answering
+# "2" to "what changes if this succeeds".
+ASKED_VERSION = 2
 
-
-def derive_effort(project: Dict[str, Any]) -> int:
-    """Effort band from what is actually on disk.
-
-    Uses the file count the sensing stage already computed, which has the
-    project's own ignore globs applied -- so vendored and generated trees do not
-    inflate it, provided they are declared. That caveat is real: an undeclared
-    build directory makes a project look enormous, and the fix is a glob, not a
-    different formula here.
-    """
-    total = ((project.get("fs") or {}).get("total_files")) or 0
-    for ceiling, band in EFFORT_BANDS:
-        if total < ceiling:
-            return band
-    return 5
-
+# Effort is asked by nobody and derived by nothing.
+#
+# It was derived from file count, described as "the axis where a human guess is
+# worse than a measurement". That was true of repo SIZE, and repo size is not
+# what ICE means by effort -- which is the work required to reach the impact. A
+# small finished tool scores lowest on it and a large active one scores high, so
+# dividing by it penalised a project for being large and rewarded one for being
+# done. Asking instead is no better: "how long to a usable next milestone" is
+# unanswerable for open-ended creative work.
+#
+# So it is neither asked nor derived, and `score_project`'s existing default of 3
+# makes the base collapse to (impact x 3) / 3 == impact. Hand-written three-axis
+# entries in a registry keep working exactly as they did.
 
 def needs_annotating(snapshot: Dict[str, Any], self_ids=None) -> List[Dict[str, Any]]:
     """Projects with something to show for themselves and nothing said about them.
@@ -125,8 +125,7 @@ def needs_annotating(snapshot: Dict[str, Any], self_ids=None) -> List[Dict[str, 
     for p in snapshot.get("projects") or []:
         if p.get("id") in self_ids or p.get("is_self"):
             continue
-        ice = p.get("ice") or {}
-        if ice.get("impact") is not None and ice.get("confidence") is not None:
+        if (p.get("ice") or {}).get("impact") is not None:
             continue
         ev = p.get("evidence") or {}
         if ev.get("days_since") is None:
@@ -155,7 +154,15 @@ def load_annotations(ws: Workspace) -> Dict[str, Any]:
         data = load_jsonc(str(path))
     except (JSONCError, OSError, ValueError):
         return {}
-    projects = data.get("projects") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return {}
+    # Answers to a question that has since been reworded are dropped, not
+    # reinterpreted. "2" against "what breaks if this slips" is not the same
+    # statement as "2" against "what changes if this succeeds", and carrying it
+    # over would put words in someone's mouth that they never said.
+    if int(data.get("asked_version") or 1) != ASKED_VERSION:
+        return {}
+    projects = data.get("projects")
     return projects if isinstance(projects, dict) else {}
 
 
@@ -220,7 +227,8 @@ def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]]) -> int:
                 entry[key] = value
         current[pid] = entry
 
-    body = json.dumps({"projects": current}, ensure_ascii=False, indent=2, sort_keys=True)
+    body = json.dumps({"asked_version": ASKED_VERSION, "projects": current},
+                      ensure_ascii=False, indent=2, sort_keys=True)
     header = (
         "// Written by `nextbrief review`, from questions you answered.\n"
         "//\n"
@@ -229,7 +237,9 @@ def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]]) -> int:
         "// that wrong on the one file whose loss costs most. Anything you type\n"
         "// into the registry overrides what is here.\n"
         "//\n"
-        "// Safe to delete. You will simply be asked again.\n"
+        "// Safe to delete. You will simply be asked again -- and that also happens\n"
+        "// on its own if a question is ever reworded enough to change what an\n"
+        "// answer meant.\n"
     )
     write_text(ws, ws.root / ANNOTATIONS_NAME, header + body + "\n")
     return len(answers)
