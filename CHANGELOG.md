@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0rc11] - 2026-07-29
+
+
 ### Added
 
 - **`needs`** — a project may declare that it is waiting on other projects, and
@@ -33,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A project with unmet `needs` is classified as **waiting on other work**, not
   neglected or stalled — for the case `blocked_by: decision` does not already
   cover, which is waiting on *work* rather than on a judgement of your own.
+
+- **`nextbrief projects`** — one line per project, straight from the snapshot:
+  signal, days since evidence, what that evidence was, tier, and a marker for
+  anything discovery adopted that the registry never named.
+
+  `ls` lists backlog items and nothing listed projects, so the only way to see
+  the portfolio was to render a whole brief and read the table inside it. That
+  was tolerable while the registry *was* the project list. It stopped being
+  tolerable when discovery began adopting directories on its own: the set can now
+  change without anyone editing anything, and "what is the tool actually
+  watching?" had no cheap answer. No model, no render, no writes.
 
 ### Changed
 
@@ -70,6 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapses to `(impact × 3) / 3 == impact`, so a one-question answer scores as
   itself and hand-written three-axis registry entries keep working untouched.
 
+- **`--help` prints one command list instead of two.** argparse generated its own
+  list of every subcommand and printed it above the hand-written one — the same
+  twenty commands twice, in two orders and two levels of detail. The written list
+  wins: it groups by what you are trying to do, which the alphabetical machine
+  version cannot. It also moved from the epilog into the description, so the
+  reader meets the commands before the flags.
+
 ### Fixed
 
 - **`review` re-asked what you had just answered.** The overlay is applied at
@@ -81,30 +102,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `asked_version`; answers recorded under an earlier wording are dropped and asked
   again rather than silently reinterpreted. "2" against *what breaks if this
   slips* is not the same statement as "2" against *what changes if this succeeds*.
-
-
-### Added
-
-- **`nextbrief projects`** — one line per project, straight from the snapshot:
-  signal, days since evidence, what that evidence was, tier, and a marker for
-  anything discovery adopted that the registry never named.
-
-  `ls` lists backlog items and nothing listed projects, so the only way to see
-  the portfolio was to render a whole brief and read the table inside it. That
-  was tolerable while the registry *was* the project list. It stopped being
-  tolerable when discovery began adopting directories on its own: the set can now
-  change without anyone editing anything, and "what is the tool actually
-  watching?" had no cheap answer. No model, no render, no writes.
-
-### Changed
-
-- **`--help` prints one command list instead of two.** argparse generated its own
-  list of every subcommand and printed it above the hand-written one — the same
-  twenty commands twice, in two orders and two levels of detail. The written list
-  wins: it groups by what you are trying to do, which the alphabetical machine
-  version cannot. It also moved from the epilog into the description, so the
-  reader meets the commands before the flags.
-
 
 ## [0.1.0rc10] - 2026-07-29
 
@@ -363,7 +360,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc10...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc11...HEAD
+[0.1.0rc11]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc11
 [0.1.0rc10]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc10
 [0.1.0rc9]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc9
 [0.1.0rc8]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc8
