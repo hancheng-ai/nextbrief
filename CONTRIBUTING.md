@@ -90,6 +90,22 @@ Write fictional examples. `Fernwood` and `atlas-api` do the job as well as
 anything real, and a fixture you invented is one you can edit freely when the
 parser changes.
 
+Two things about that CI check are worth knowing before you rely on it.
+
+It cannot list every name it should catch, because a denylist kept in the repo
+publishes exactly what it is protecting. Only names already public are spelled
+out in `ci.yml`; the rest come from a `PRIVATE_IDENTIFIERS` repository secret,
+one per line, and that pass reports the *file* it matched without echoing the
+matched text — a public repo has public CI logs. On a fork PR the secret is
+absent, that pass is skipped, and the job says so.
+
+And it only ever catches the names it was told about. It cannot catch a real
+example with the names filed off, which is the leak that actually happens: an
+illustration copied out of the private workspace with the project relabelled and
+the specifics — a real file:line, a real status, a real deadline — left in
+because they made the example concrete. That is what makes it worth copying and
+what makes it a disclosure. Concrete examples are good; invent the concreteness.
+
 ---
 
 ## The design contract

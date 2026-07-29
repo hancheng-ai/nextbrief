@@ -1370,6 +1370,22 @@ def cmd_context(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog])
         else:
             absent += 1
             print("  %s" % tr(cat, "cli.context.absent", "no description anywhere"))
+        # A second statement, kept visibly separate rather than folded into the
+        # description, because it answers a different question and carries a
+        # different warrant. The description may have been lifted out of a
+        # manifest; this is always somebody's judgement about what the thing
+        # built here could become, and a reader deciding whether to reuse it
+        # rather than rebuild it needs to know which of the two they are reading.
+        # No `[declared: registry]` tag: `capability` has exactly one provenance,
+        # so a label distinguishing it from nothing is noise.
+        # The text is interpolated by the catalogue rather than concatenated here,
+        # so each language owns its own spacing: a space after the full-width
+        # colon Chinese uses is a typographic error, and an English colon without
+        # one is too.
+        cap = (e.get("capability") or {}).get("what")
+        if cap:
+            print("  %s" % tr(cat, "cli.context.capability",
+                              "could also serve: {what}", what=cap))
         bits = []
         if e.get("stacks"):
             bits.append("/".join(e["stacks"]))

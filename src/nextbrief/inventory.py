@@ -21,9 +21,9 @@ projects, nothing is invented: the entry says the description is *declared* and
 names the registry, or says there is none.
 
 That distinction is the whole safety property. An agent reading this must be able
-to tell "orchard is a tenancy API" — which its `package.json` says,
-checkably — from "orchard is our flagship" — which is a thing a person
-typed. Blend them and the second reads as a finding.
+to tell "orchard is a tenancy API" — which its `package.json` says, checkably —
+from "orchard is our flagship" — which is a thing a person typed. Blend them and
+the second reads as a finding.
 """
 
 from __future__ import annotations
@@ -187,8 +187,8 @@ def capability(declared: Optional[str]) -> Dict[str, Any]:
 
     Always declared, never derived, and there is no fallback -- because unlike a
     description this cannot be observed. A manifest says what a package is; no
-    file on disk says "the scheduling core in here would serve a domain it
-    was never written for". That is a judgement about potential, and the most
+    file on disk says "the scheduling core in here would serve a domain it was
+    never written for". That is a judgement about potential, and the most
     speculative thing in this artifact.
 
     Which is exactly why it is a separate field carrying its own label. An agent

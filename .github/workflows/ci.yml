@@ -380,7 +380,17 @@ jobs:
       #
       # This file is excluded from its own scan: it necessarily spells out every
       # string it is looking for.
+      #
+      # Which is the flaw in the literal list below, and the reason it stops
+      # where it does. A denylist of private names has to contain the private
+      # names, so every name added here is published by the guard meant to keep
+      # it unpublished -- the file is excluded from the scan, not from the
+      # repository. The seven below predate that realisation. The rest live in a
+      # repository secret, `PRIVATE_IDENTIFIERS`, read at the bottom of this
+      # step, so the list can grow without the repo learning anything.
       - name: Scan tracked files for private-workspace identifiers
+        env:
+          PRIVATE_IDENTIFIERS: ${{ secrets.PRIVATE_IDENTIFIERS }}
         run: |
           # errexit is deliberately OFF. GitHub runs `run:` steps under
           # `bash -e {0}`, and this whole check is built on git grep, which exits
@@ -434,12 +444,52 @@ jobs:
             -e 'hancheng-ai/homebrew-tap' \
             -e 'name = "Hancheng Wang", email = "wanghancheng\.ai@gmail\.com"' \
             -e 'Copyright \(c\) [0-9]{4} Hancheng Wang' \
+            -e '^LICENSE:[0-9]+: *Copyright [0-9]{4} Hancheng Wang$' \
             -e '^CITATION\.cff:[0-9]+: *(- )?(given-names: Hancheng|family-names: Wang|email: wanghancheng\.ai@gmail\.com)' \
             "$tmp/hits-raw.txt" > "$tmp/hits-owner.txt" || true
           if [ -s "$tmp/hits-owner.txt" ]; then
             echo "::error::maintainer identifier outside package metadata"
             cat "$tmp/hits-owner.txt"
             status=1
+          fi
+
+          # Pass 3 -- the extended list, supplied out of band so that naming a
+          # private project here does not require publishing its name. One
+          # identifier per line in the secret.
+          #
+          # Matches print path and line number ONLY, never the matched text: a
+          # public repository has public CI logs, and echoing the hit would put
+          # the private string in them, which is the failure this pass exists to
+          # prevent. `git grep -l` is the whole reason it can report usefully
+          # while staying quiet about what it found.
+          #
+          # Unset -- a fork PR, or a clone that never configured it -- and this
+          # pass is skipped with a note. That is fail-open, and it is confined to
+          # this pass on purpose: the passes above are unconditional, so the
+          # guard never degrades to nothing. A skipped pass says so out loud,
+          # because a guard that silently checks less than you think is worse
+          # than one that is plainly absent.
+          if [ -n "${PRIVATE_IDENTIFIERS:-}" ]; then
+            n=0
+            while IFS= read -r pat; do
+              [ -z "$pat" ] && continue
+              n=$((n + 1))
+              git grep -lIEi -e "$pat" -- . "$scan" > "$tmp/hits-extra.txt"
+              rc=$?
+              if [ "$rc" -eq 0 ]; then
+                echo "::error::a private identifier from the out-of-band list appears in:"
+                # Path only. The pattern and the matched line both stay unlogged.
+                sed 's/^/  /' "$tmp/hits-extra.txt"
+                status=1
+              elif [ "$rc" -ne 1 ]; then
+                echo "::error::the out-of-band identifier scan failed (git grep exit $rc)"
+                status=1
+              fi
+            done <<< "$(printf '%s\n' "$PRIVATE_IDENTIFIERS")"
+            echo "checked $n out-of-band identifier(s)"
+          else
+            echo "note: PRIVATE_IDENTIFIERS is not set -- the out-of-band list was"
+            echo "      NOT checked. Passes 1 and 2 ran normally."
           fi
 
           if [ "$status" -eq 0 ]; then

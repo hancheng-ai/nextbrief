@@ -125,7 +125,7 @@ class WhatIsAlreadyClaimed(DiscoverCase):
         self.assertEqual(self.found(reg), ["undeclared"])
 
     def test_a_nested_declaration_claims_its_top_directory(self):
-        # `atlas/apps/site` must claim `novel`, or discovery adopts the parent of
+        # `atlas/apps/site` must claim `atlas`, or discovery adopts the parent of
         # a tree that is already sensed and every file in it is counted twice.
         self.dirs("atlas", "other")
         reg = {"projects": [{"id": "site", "paths": ["atlas/apps/site"]}]}

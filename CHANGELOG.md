@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nextbrief context` never printed `capability`.** The field reached the
+  snapshot, the inventory and `context --json`, and stopped one layer short of
+  the listing a person actually reads — so for one release it was recorded,
+  stored, shipped, and invisible unless you opened the JSON yourself. Now printed
+  on its own prefixed line, interpolated by the locale catalogue so each language
+  owns its own spacing.
+
+- **Examples and docstrings that had been copied from a real workspace rather
+  than invented.** Several illustrations across the prompts, a module docstring,
+  the `describe` usage strings and one test fixture were real cases with the
+  project name changed and the specifics left in — a real `file:line`, a real
+  deployment status, a real product description. All replaced with invented ones.
+
+  The identifier scan could not have caught any of them, and now says so out
+  loud: it matches names, and every one of these had the name filed off. The
+  concreteness was the disclosure. `CONTRIBUTING.md` says this directly now.
+
+- **The identifier scan had been failing on its own allowlist since the Apache-2.0
+  relicense**, because the Apache header writes `Copyright <year> <name>` where
+  the allowlist expected `Copyright (c) <year> <name>`. A guard that is always red
+  is decoration: a real hit would have been indistinguishable from the standing
+  failure, and for several releases it was.
+
+### Changed
+
+- The identifier scan takes an extended name list from a `PRIVATE_IDENTIFIERS`
+  repository secret instead of the workflow file. A denylist in the repo
+  publishes the names it exists to protect; the seven already in `ci.yml` are the
+  ones that were public before this was noticed. Matches from the secret report
+  the file and not the matched text, because a public repository has public CI
+  logs. Absent the secret that pass is skipped and announces the skip.
+
+
 ## [0.1.0rc13] - 2026-07-29
 
 ### Changed
@@ -54,10 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not cover the question an agent weighing "build this, or reuse something?"
   actually has, which is what capability was built and where else it applies. A
   tool built for one customer is also a rules engine whose customer is a
-  configuration; a single generated report is also a pipeline that could
-  produce a hundred more.
-  Collapse those into "what it is" and the reuse question becomes unanswerable
-  from the artifact.
+  configuration; a single report is also a pipeline that could produce a hundred
+  more. Collapse those into "what it is" and the reuse question becomes
+  unanswerable from the artifact.
 
   **Always declared, never derived, and with no fallback.** A manifest states what
   a package is; no file on disk states that something generalises beyond its
@@ -99,8 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   That labelling is the safety property, not a nicety. A reader must be able to
   tell "orchard is a tenancy API", which its manifest says checkably, from
-  "orchard is our flagship", which is a thing a person
-  typed. `context --json` prints the file verbatim for another tool to consume.
+  "orchard is our flagship", which is a thing a person typed. `context --json`
+  prints the file verbatim for another tool to consume.
 
 - **`registry.projects[].description`** — one sentence saying what a project is,
   for when there is no manifest to read or the manifest is wrong. Distinct from
@@ -377,7 +411,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Never adopted: anything already in `projects` / `watch` / `infra` / `archived`
   (matched on the first path segment, so `atlas/apps/site` still claims
-  `novel`); anything in `ignored`; dotfile directories and build/OS folders; the
+  `atlas`); anything in `ignored`; dotfile directories and build/OS folders; the
   workspace itself; and nextbrief's own source checkout.
 
 ### Fixed

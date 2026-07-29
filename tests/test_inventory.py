@@ -171,9 +171,47 @@ class TheContextCommand(TempCase):
         self.assertEqual(self.run_cmd()[0], 0)
         self.assertEqual(tree_state(self.ws), before)
 
+    def test_capability_is_shown_and_not_folded_into_the_description(self):
+        """`capability` reached the inventory and the JSON before it reached the
+        listing a person actually reads, so for one release it was recorded,
+        stored, shipped -- and invisible unless you opened the file yourself.
 
-if __name__ == "__main__":
-    unittest.main()
+        The two have to be separately legible: a description may have been lifted
+        out of a manifest, while a capability is always somebody's judgement about
+        what the thing built here could become. A reader deciding whether to reuse
+        something rather than rebuild it is asking the second question.
+        """
+        self.assertEqual(capture(cli.main, [
+            "--workspace", str(self.ws), "describe", "orchard",
+            "A tenancy API.", "--capability", "A general multi-tenant store.",
+        ])[0], 0)
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+
+        code, out, err = self.run_cmd()
+        self.assertEqual(code, 0, err)
+        self.assertIn("A tenancy API.", out)
+        self.assertIn("A general multi-tenant store.", out)
+        # On separate lines, each prefixed -- not run together as one sentence.
+        lines = [ln.strip() for ln in out.splitlines()]
+        desc = [ln for ln in lines if "A tenancy API." in ln]
+        cap = [ln for ln in lines if "A general multi-tenant store." in ln]
+        self.assertEqual(len(desc), 1)
+        self.assertEqual(len(cap), 1)
+        self.assertNotEqual(desc[0], cap[0])
+        self.assertNotEqual(cap[0], "A general multi-tenant store.",
+                            "the capability needs a prefix, or it reads as a second description")
+
+    def test_a_project_with_no_capability_prints_no_placeholder_for_it(self):
+        # Unlike a description, absence here is the normal case: there is no
+        # fallback and most projects will never have one. Announcing it on every
+        # line would bury the projects that do.
+        self.assertEqual(capture(sense.main,
+                                 ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
+        code, out, err = self.run_cmd()
+        self.assertEqual(code, 0, err)
+        for locale_text in ("could also serve", "还能用来"):
+            self.assertNotIn(locale_text, out)
 
 
 class TheDescribeCommand(TempCase):
@@ -291,3 +329,7 @@ class TheDescribeCommand(TempCase):
         self.assertEqual(capability(None)["kind"], "absent")
         self.assertEqual(capability("Could do more.")["kind"], "declared")
         self.assertEqual(capability("Could do more.")["source"], "registry")
+
+
+if __name__ == "__main__":
+    unittest.main()
