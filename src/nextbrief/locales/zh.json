@@ -158,6 +158,7 @@
   "html.source.declared": "（源文档自称 {date} 更新）",
   "html.sub": "{status} · 本次 {time} 生成",
   "html.theme_toggle": "切换深浅色",
+  "html.truncated_elsewhere": "Markdown 版被截到 {max} 行；有 {lines} 行只在这里看得到。",
   "html.waiting.item": "`{id}` {title}",
   "init.added": "新增：{files}",
   "init.cand.git": "git",

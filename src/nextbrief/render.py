@@ -1089,31 +1089,41 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     if notes.get("deferred"):
         rem.append(cat.t("reminder.deferred", count=notes["deferred"],
                          path="log/deferred.jsonl"))
-    notes["reminders"] = rem   # the HTML reuses this list, so the two cannot drift
-
-    # ---- the one thing only a person can answer -------------------------
-    #
-    # Not a claim, so gate 1 has nothing to check: every word here is either a
-    # fixed string from the catalogue or a fact about the registry's own
-    # contents, which the reader can verify by opening it. That is also why this
-    # can be asked daily without becoming noise -- it disappears the moment it
-    # is answered, and answering it is one command.
+    # The unanswered count is a reminder, so it is added before the reminders
+    # block renders -- not after, which is where it used to be.
     own = self_project_ids(snap, reg)
     asking = question_targets(snap, own, limit=caps.get("max_questions", 2))
     if asking:
-        L.append("## " + cat.t("brief.section.questions"))
-        for p in asking:
-            L.append("- **%s** — %s" % (p.get("name") or p.get("id"),
-                                        cat.t("review.q.impact")))
-            for _value, key in QUESTIONS[0].choices:
-                L.append("  - " + cat.t(key))
-        L.append("")
         rem.append(cat.t("review.pending", n=pending_count(snap, own)))
+
+    notes["reminders"] = rem   # the HTML reuses this list, so the two cannot drift
 
     if rem:
         L.append("## " + cat.t("brief.section.reminders"))
         for r in rem[:8]:
             L.append("- " + r)
+        L.append("")
+
+    # ---- the one thing only a person can answer -------------------------
+    #
+    # LAST on purpose. Gate 4 below keeps the first `brief_max_lines` and drops
+    # the tail, so whatever sits at the bottom is what a full brief loses. When
+    # this section was placed above the reminders it pushed them off the page --
+    # and the reminders are the brief's only warnings: which projects have no git
+    # and are unrecoverable if deleted, which status documents contradict each
+    # other. A question that waits a night costs nothing. A warning that
+    # disappears is the failure this engine exists to prevent.
+    #
+    # Not a claim, so gate 1 has nothing to check: every word is either a fixed
+    # string from the catalogue or a fact about the registry's own contents,
+    # which the reader can verify by opening it.
+    if asking:
+        L.append("## " + cat.t("brief.section.questions"))
+        for p_ in asking:
+            L.append("- **%s** — %s" % (p_.get("name") or p_.get("id"),
+                                        cat.t("review.q.impact")))
+            for _value, key in QUESTIONS[0].choices:
+                L.append("  - " + cat.t(key))
         L.append("")
 
     L.append("---")

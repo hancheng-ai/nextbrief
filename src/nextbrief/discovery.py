@@ -248,11 +248,19 @@ def discover(root: Path, reg: Dict[str, Any], ws: Optional[Workspace] = None) ->
         if is_engine_checkout(directory):
             continue
 
-        pid = _slug(name)
-        if pid in taken:
-            pid = "%s-%s" % (pid, _slug(str(directory.parent.name)) or "dir")
-        if pid in taken:
-            continue
+        # Names differing only in separator or case -- `my-app`, `my_app`,
+        # `my.app` -- all slug to one id. The first attempt at this appended the
+        # root's name and gave up if that collided too, silently dropping the
+        # directory: no error, no parse_failed entry, nothing to notice. That is
+        # verbatim the failure this module was written to eliminate, reproduced
+        # inside it. A counter is ugly and cannot lose anything, which is the
+        # correct trade for a portfolio that must be complete.
+        base = _slug(name)
+        pid = base
+        suffix = 2
+        while pid in taken:
+            pid = "%s-%d" % (base, suffix)
+            suffix += 1
         taken.add(pid)
 
         out.append({

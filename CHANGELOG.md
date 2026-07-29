@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The question section evicted the brief's warnings.** Gate 4 keeps the first
+  `brief_max_lines` and drops the tail, and `0.1.0rc9` placed the questions above
+  the reminders — so on a full brief the reminders and the provenance footer fell
+  off the page. Measured on a real workspace: 58 lines and 0 truncated before,
+  59 and 15 after, with both sections gone. The lost lines are the brief's only
+  warnings: which projects have no version control and are unrecoverable if
+  deleted, which status documents contradict each other. Worse, the nightly could
+  not answer the question that displaced them — `review` refuses a non-TTY — so it
+  recurred every night at the same cost.
+
+  The questions now render last. A question that waits a night costs nothing; a
+  warning that disappears is the failure this engine exists to prevent.
+
+- **`BRIEF.md` is line-capped and `BRIEF.html` is not**, so the two diverge the
+  moment the cap bites. The HTML now says so, naming how many lines only it
+  carries. Neither rendering decides anything the other does not, but silence
+  about the difference is its own kind of disagreement.
+
+- **Discovery silently dropped directories whose names collapse to one id.**
+  `My App`, `my-app`, `my.app` and `my_app` in one root yielded two projects; the
+  other two vanished with no error, no `parse_failed` entry and no count — which
+  is verbatim the failure this module was written to eliminate, reproduced inside
+  it. Colliding ids are now numbered rather than discarded.
+
+- `docs/ARCHITECTURE.md` is now checked by `test_docs_consistency`, which is why
+  it was able to ship a release describing behaviour that release had removed.
+
 - **A registry path written as `./x` claimed nothing.** `claimed_segments`
   stripped slashes and split, which turns `"./handoff-inbox"` into a segment of
   `"."`. Consequences, both silent: an `ignored` entry stopped ignoring — and

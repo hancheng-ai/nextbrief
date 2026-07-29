@@ -402,6 +402,19 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
                                               dep=p.get("external_dependency", ""))))
         A("</ul></div>")
 
+    # ---------- what the Markdown could not fit ----------
+    # BRIEF.md is line-capped for a terminal; this is not. So the moment the cap
+    # bites, the two artifacts carry different content -- and the sections that
+    # die are the last ones, which are the warnings. Neither rendering decides
+    # anything the other does not, but silence about the difference is its own
+    # kind of disagreement, so the reader is told which document is the complete
+    # one.
+    cut = (meta or {}).get("truncated_lines") or 0
+    if cut:
+        A("<div class=card><p>%s</p></div>"
+          % e(cat.t("html.truncated_elsewhere",
+                    max=caps.get("brief_max_lines", 0), lines=cut)))
+
     # ---------- the one thing only a person can answer ----------
     # Mirrors BRIEF.md exactly. `question_targets` is the same function the
     # renderer calls, given the same snapshot, so the two artifacts cannot ask

@@ -230,6 +230,58 @@ class TheBriefAsks(TempCase):
         html = (self.ws / "BRIEF.html").read_text(encoding="utf-8")
         self.assertNotIn("slipped by a month", html)
 
+    def _set_cap(self, lines):
+        cfg = json.loads((self.ws / "config.jsonc").read_text(encoding="utf-8").split("\n", 1)[1])
+        cfg["caps"]["brief_max_lines"] = lines
+        (self.ws / "config.jsonc").write_text(
+            "// fixture\n" + json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+    def test_the_warnings_come_before_the_questions(self):
+        """The ordering that 0.1.0rc9 got backwards.
+
+        Gate 4 keeps the first `brief_max_lines` and drops the tail, so whatever
+        sits lowest is what a full brief loses. With the questions placed above
+        the reminders they pushed them off the page entirely -- verified on a
+        real workspace: 58 lines and 0 truncated before, 59 and 15 after, with
+        the reminders and the provenance footer both gone.
+
+        A question that waits a night costs nothing. A warning that disappears
+        is the failure this engine exists to prevent.
+        """
+        text = self.render([entry("newthing", ice=None)])
+        self.assertIn("Reminders", text)
+        self.assertIn("slipped by a month", text)
+        self.assertLess(text.index("Reminders"), text.index("slipped by a month"))
+
+    def test_a_cut_that_reaches_the_questions_still_spares_the_warnings(self):
+        # The cap is derived from this brief rather than guessed, so the test
+        # stays honest if the fixture's line count ever moves.
+        full = self.render([entry("newthing", ice=None)])
+        lines = full.splitlines()
+        q = next(i for i, ln in enumerate(lines) if "Only you can answer" in ln)
+        self._set_cap(q + 3)
+
+        write_snapshot(self.ws, make_snapshot(projects=[entry("newthing", ice=None)]))
+        code, _, err = capture(render.main, ["--workspace", str(self.ws), "--no-notify"])
+        self.assertEqual(code, 0, err)
+        text = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+
+        self.assertIn("Reminders", text, "the warnings were evicted by the questions")
+        self.assertNotIn("slipped by a month", text,
+                         "the cut did not reach the questions; test is not exercising the fix")
+
+    def test_the_html_says_when_the_markdown_was_cut(self):
+        # BRIEF.md is line-capped and BRIEF.html is not, so the moment the cap
+        # bites they carry different content. Silence about that is its own kind
+        # of disagreement.
+        full = self.render([entry("newthing", ice=None)])
+        self._set_cap(max(8, len(full.splitlines()) - 4))
+        write_snapshot(self.ws, make_snapshot(projects=[entry("newthing", ice=None)]))
+        self.assertEqual(capture(render.main,
+                                 ["--workspace", str(self.ws), "--no-notify"])[0], 0)
+        html = (self.ws / "BRIEF.html").read_text(encoding="utf-8")
+        self.assertIn("only here", html)
+
     def test_the_section_is_capped(self):
         # It must never compete with the brief it is printed inside.
         text = self.render([entry("a", ice=None, days=1), entry("b", ice=None, days=2),

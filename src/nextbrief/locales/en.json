@@ -158,6 +158,7 @@
   "html.source.declared": "(the source document claims {date})",
   "html.sub": "{status} · generated {time}",
   "html.theme_toggle": "Switch light/dark",
+  "html.truncated_elsewhere": "The Markdown brief was cut to {max} lines; {lines} line(s) are only here.",
   "html.waiting.item": "`{id}` {title}",
   "init.added": "Added: {files}",
   "init.cand.git": "git",

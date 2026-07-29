@@ -25,6 +25,7 @@ README_ZH = REPO_ROOT / "README.zh.md"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
 FORMULA = REPO_ROOT / "packaging" / "homebrew" / "nextbrief.rb"
+ARCHITECTURE = REPO_ROOT / "docs" / "ARCHITECTURE.md"
 
 TAG = "v%s" % __version__
 
@@ -147,3 +148,62 @@ class HomebrewFormula(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Architecture(unittest.TestCase):
+    """The design document, checked against the code it describes.
+
+    This file was unguarded until a release shipped with it asserting that a
+    discovered project "carries neutral placeholders instead of judgements" --
+    the exact behaviour that release had been cut to remove -- while
+    contradicting itself a hundred lines further down. Nothing noticed, because
+    every other doc here is checked and this one was not.
+    """
+
+    def _text(self):
+        return ARCHITECTURE.read_text(encoding="utf-8")
+
+    def test_every_command_it_names_exists(self):
+        from nextbrief.cli import build_parser
+
+        real = set()
+        for action in build_parser()._subparsers._group_actions:
+            real |= set(action.choices)
+        named = set(re.findall(r"`nextbrief ([a-z0-9-]+)", self._text()))
+        self.assertTrue(named, "the architecture doc names no command at all")
+        self.assertEqual(sorted(named - real), [],
+                         "named in ARCHITECTURE.md but not a real command")
+
+    def test_it_does_not_claim_discovery_invents_a_tier(self):
+        """Tied to the code, not to a phrase.
+
+        While `DISCOVERED_TIER` is None the doc must not describe a discovered
+        project as carrying a placeholder, neutral or otherwise. If someone
+        deliberately reintroduces a default tier, this assertion stops applying
+        on its own rather than having to be remembered.
+        """
+        from nextbrief import discovery
+
+        if discovery.DISCOVERED_TIER is not None:
+            self.skipTest("a default tier exists again; the prose may describe it")
+        text = self._text().lower()
+        for phrase in ("neutral placeholder", "placeholder tier",
+                       "carries neutral", "neutral values instead"):
+            self.assertNotIn(phrase, text,
+                             "ARCHITECTURE.md still describes a tier discovery "
+                             "no longer invents (%r)" % phrase)
+
+    def test_the_registry_keys_it_documents_are_real(self):
+        # Keys named in prose that `check_shapes` has never heard of are the
+        # other direction of the same drift.
+        documented = set(re.findall(r"`(outcomes|serves|ignored|watch|infra|archived|"
+                                    r"annotations\.jsonc|declared)`", self._text()))
+        self.assertTrue(documented, "the doc names no registry vocabulary")
+        # `ignored` is consumed by discovery, the rest by sense -- so look at the
+        # whole engine rather than guessing which module owns a key.
+        src = "".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((REPO_ROOT / "src" / "nextbrief").glob("*.py")))
+        for key in documented - {"annotations.jsonc"}:
+            self.assertIn('"%s"' % key, src,
+                          "ARCHITECTURE.md documents %r but no module reads it" % key)

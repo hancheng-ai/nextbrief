@@ -225,6 +225,30 @@ class WhatIsNeverAProject(DiscoverCase):
         self.dirs("real")
         self.assertEqual(self.found({}), ["real"])
 
+    def test_names_that_collapse_to_one_slug_are_all_kept(self):
+        """The module's own failure mode, reproduced inside it.
+
+        `My App`, `my-app`, `my.app` and `my_app` all slug to "my-app". The
+        first attempt appended the root's name and gave up if that collided too,
+        dropping the directory with no error, no parse_failed entry and no
+        count -- which is verbatim what this module was written to eliminate.
+        Names differing only in separator or case are ordinary.
+        """
+        self.dirs("My App", "my-app", "my.app", "my_app")
+        found = discover(self.root, {}, self.ws)
+        self.assertEqual(len(found), 4, "a directory was dropped: %s" % [e["id"] for e in found])
+        self.assertEqual(len({e["id"] for e in found}), 4, "ids collided")
+        self.assertEqual({e["name"] for e in found},
+                         {"My App", "my-app", "my.app", "my_app"})
+
+    def test_disambiguated_ids_are_deterministic(self):
+        # annotations.jsonc is keyed by id, so an id that moves between runs
+        # silently orphans the answers recorded against it.
+        self.dirs("My App", "my-app")
+        first = [e["id"] for e in discover(self.root, {}, self.ws)]
+        second = [e["id"] for e in discover(self.root, {}, self.ws)]
+        self.assertEqual(first, second)
+
     def test_an_id_collision_does_not_shadow_a_declared_project(self):
         self.dirs("Thing")
         reg = {"projects": [{"id": "thing", "paths": ["elsewhere"]}]}
