@@ -36,9 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an attestation while CI was red — and for several releases it did.
 
 - The identifier list moves out of `.github/workflows/ci.yml` entirely. A
-  denylist kept in the repository publishes the names it protects; it now comes
-  from a `PRIVATE_IDENTIFIERS` secret in CI, or `~/.config/nextbrief/` locally,
-  and a match reports the file without ever echoing what matched.
+  denylist kept in the repository publishes the names it protects, which is a
+  guard defeating itself; it now comes from a `PRIVATE_IDENTIFIERS` secret in
+  CI, or `~/.config/nextbrief/` locally, and a match reports the file without
+  ever echoing what matched.
 
 
 ### Fixed
