@@ -32,9 +32,8 @@ jobs:
       # tree at that moment is published in four places at once, and a package
       # index version number can never be reused after deletion.
       #
-      # CI runs this too. It runs here as well because CI failing does not stop
-      # a release -- the two workflows are independent, and for several releases
-      # this one published while that one was red.
+      # CI runs this too. It runs here as well because the two workflows are
+      # independent: a red CI run does not stop a tag from publishing.
       - name: Privacy scan
         env:
           NEXTBRIEF_PRIVATE_IDENTIFIERS: ${{ secrets.PRIVATE_IDENTIFIERS }}

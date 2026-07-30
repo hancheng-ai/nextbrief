@@ -375,9 +375,8 @@ jobs:
           # history publishes the dirty history.
           fetch-depth: 0
 
-      # nextbrief was extracted from a private single-user workspace. Content
-      # from that workspace must never reappear -- not in code, not in a doc,
-      # not in a test fixture, not in an example.
+      # Content copied out of a private directory must never appear here -- not
+      # in code, not in a doc, not in a test fixture, not in an example.
       #
       # The implementation lives in scripts/privacy-scan.py rather than here, so
       # that the pre-push hook and this job run the same code. Two copies of a
