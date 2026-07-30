@@ -1215,7 +1215,13 @@ def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
     merged = dict(snap)
     merged["projects"] = apply_annotations(
         {"projects": snap.get("projects") or []}, answered)["projects"]
-    targets = needs_annotating(merged, self_project_ids(snap, None, ws))
+    # `--all` restates everything rather than only what has expired. The routine
+    # path is the expiry: an answer older than RESTATE_AFTER_DAYS comes back on
+    # its own, so a judgement that drifted is not left standing because nobody
+    # remembered to correct it. This flag is for the day you change your mind.
+    restate = 0 if getattr(args, "all", False) else None
+    targets = needs_annotating(merged, self_project_ids(snap, None, ws),
+                               restate_after=restate)
     if not targets:
         print(tr(cat, "review.nothing", "Nothing to ask about -- every active project has an answer."))
         return EXIT_OK
@@ -1580,7 +1586,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("text", nargs="?", default=None, help="one sentence; empty string clears it")
     p.add_argument("--capability", metavar="TEXT",
                    help="what the thing built here could also serve, beyond its current use")
-    add("review", "answer the questions only you can answer")
+    p = add("review", "answer the questions only you can answer")
+    p.add_argument("--all", action="store_true",
+                   help="restate every answer, not only the ones that have expired")
 
     p = add("permissions", "print or install the pre-approval rules an agent needs")
     p.add_argument("--merge-into", metavar="FILE",

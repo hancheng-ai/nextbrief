@@ -639,3 +639,19 @@ class WhatIsNotRanked(TempCase):
         md, _ = render.render_brief(snap, {}, [], {}, {}, load_catalog("en"),
                                     {"conflicts": []})
         self.assertIn("handover", md)
+
+    def test_a_hand_edited_impact_degrades_instead_of_raising(self):
+        """`registry.jsonc` invites hand-editing and `check_shapes` never sees
+        `ice`, so a string reaches the scorer. Raising there costs the whole
+        brief on the unattended path, which is the opposite of fail-open."""
+        for bad in ("high", float("nan"), float("inf"), True, []):
+            p = make_project_entry(pid="x", tier="active", ice={"impact": bad})
+            self.assertFalse(render.is_judged(p), bad)
+            self.assertEqual(render.score_project(p, {}), 0.0)
+
+    def test_nan_never_reaches_the_sort_key(self):
+        """NaN compares false against everything, so one of them makes the
+        ordering depend on where the comparison started -- and this package
+        guarantees byte-identical output for identical input."""
+        self.assertIsNone(render.declared_impact(
+            make_project_entry(pid="x", ice={"impact": float("nan")})))

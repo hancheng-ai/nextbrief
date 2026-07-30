@@ -54,7 +54,8 @@ from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
 __all__ = [
-    "main", "classify", "render_brief", "score_project", "evidence_phrase",
+    "main", "classify", "render_brief", "score_project", "declared_impact",
+    "evidence_phrase",
     "check_evidence", "gate_maps", "gated_text", "md_cell", "non_goal_flag",
     "enforce_write_permissions", "should_notify", "write_day_log", "append_jsonl",
     "read_prev_run",
@@ -595,6 +596,35 @@ def _dated_commitments(p, outcomes=None):
     return out
 
 
+def declared_impact(p):
+    """The declared importance as a finite number, or None if there is not one.
+
+    `registry.jsonc` is hand-edited and `check_shapes` never sees `ice`, so
+    ``"impact": "high"`` reaches the scorer intact. Raising there is the wrong
+    answer twice over: the module contract is fail open -- one malformed file
+    must not cost the whole brief -- and on the unattended path an exception is a
+    stack trace and no brief at all.
+
+    NaN is excluded for a different reason. It compares false against everything,
+    so a single NaN score makes the sort key non-total and the resulting order
+    depends on where the comparison happened to start. This package guarantees
+    byte-identical output for identical input; one NaN quietly withdraws that.
+
+    Booleans are excluded because ``True`` is an ``int`` in Python and would
+    otherwise score as impact 1, which is a typo scoring as a judgement.
+    """
+    value = (p.get("ice") or {}).get("impact")
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
 def is_judged(p) -> bool:
     """Has a human said how much this project matters?
 
@@ -614,15 +644,10 @@ def is_judged(p) -> bool:
     means nobody was ever asked. The snapshot already distinguishes declared from
     observed from absent; collapsing the third into the second is the error.
 
-    Only `impact` is tested, and the distinction is easy to get wrong -- the old
-    ``{"impact": 3, "confidence": 3, "effort": 3}`` fallback fused two unrelated
-    things. A default *impact* invented the judgement. Default *confidence* and
-    *effort* are deliberate: `review` asks about importance alone, and neutral 3s
-    make the base collapse to ``(impact x 3) / 3 == impact``, which is what lets
-    a one-question review produce a usable score. Removing those breaks the
-    review flow; removing the impact default is the entire fix.
+    Only `impact` is tested, because it is the only axis the score reads. The
+    other two parse from a registry and are ignored -- see `score_project`.
     """
-    return (p.get("ice") or {}).get("impact") is not None
+    return declared_impact(p) is not None
 
 
 def score_project(p, cfg, outcomes=None):
@@ -632,13 +657,21 @@ def score_project(p, cfg, outcomes=None):
     every term below multiplies a human's stated importance, and there is no
     number that stands in for one that was never given.
     """
-    ice = p.get("ice") or {}
-    # Neutral, not invented: these two axes are deliberately never asked, and 3s
-    # collapse the base to the impact the human actually gave.
-    imp = ice.get("impact") or 0
-    conf = ice.get("confidence", 3) or 3
-    eff = max(1, ice.get("effort", 3) or 3)
-    base = (imp * conf) / float(eff)
+    # The base is the declared importance and nothing else.
+    #
+    # It used to be ``(impact x confidence) / effort``, with 3s standing in for
+    # the two axes `review` does not ask about. That kept hand-written
+    # three-axis registries scoring exactly as before -- and produced two
+    # incompatible regimes in one list. A reviewed project scored its impact; a
+    # hand-written one scored impact x confidence / effort, so a flagship rated 5
+    # and divided by effort 5 ranked below an active project rated 4 and divided
+    # by 2. The larger project lost for being large, which is the precise failure
+    # `annotate.py` cites as the reason effort stopped being asked at all.
+    #
+    # Both axes remain readable in a registry and are ignored here. Keeping them
+    # live to honour old files is what made the ordering incoherent, and an
+    # ordering that mixes two definitions is not an ordering.
+    base = declared_impact(p) or 0.0
 
     days = (p.get("evidence") or {}).get("days_since")
     sc = scoring_of(cfg)
@@ -1038,7 +1071,15 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         for p in stalled:
             g = (p.get("git") or [{}])[0]
             if g.get("uncommitted"):
-                L.append("- " + cat.t("brief.stalled.uncommitted", name=p.get("name", ""),
+                # A dormant project reaches this section by a different route --
+                # uncommitted work in a parked repository is worth saying, and it
+                # is the one thing that overrides "parked". So it must not be
+                # told to park itself: the generic remedy ends "or move the tier
+                # to dormant so it stops showing up", which for this project is
+                # advice to do what it has already done, and does not work.
+                key = ("brief.stalled.uncommitted_dormant"
+                       if p.get("tier") == "dormant" else "brief.stalled.uncommitted")
+                L.append("- " + cat.t(key, name=p.get("name", ""),
                                       count=g["uncommitted"]))
             else:
                 dep = p.get("external_dependency")

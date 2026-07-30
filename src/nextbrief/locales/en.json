@@ -51,6 +51,7 @@
   "brief.signal.unrated": "not rated",
   "brief.stalled.generic": "**{name}** — {extra}Give it a concrete next step, or archive it on purpose.",
   "brief.stalled.uncommitted": "**{name}** — {count} uncommitted change(s) left sitting there. Either commit them and name a next step, or move the tier to dormant so it stops showing up.",
+  "brief.stalled.uncommitted_dormant": "**{name}** — parked, but {count} uncommitted change(s) are sitting in it. Commit them: work that exists only in a working tree of a repository nobody opens is the easiest kind to lose.",
   "brief.stalled.waiting_on": "Waiting on {dep}. ",
   "brief.table.evidence": "Evidence",
   "brief.table.next": "Next",

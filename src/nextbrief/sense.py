@@ -1830,6 +1830,9 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             # rewording can retire it precisely instead of invalidating
             # values their owner typed by hand.
             "answered": pid in answered_ids,
+            # When it was answered, so `review` can tell a live judgement from
+            # one given half a year ago and never revisited.
+            "asked_on": pr.get("asked_on"),
             "tier": pr.get("tier"),
             "goal_one_line": pr.get("goal_one_line"),
             # A declaration, like the goal beside it. Carried here so the

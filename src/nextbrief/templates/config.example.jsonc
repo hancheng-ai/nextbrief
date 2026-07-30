@@ -45,8 +45,13 @@
   },
 
   "scoring": {
-    // score = (impact*confidence/effort) * (floor + (1-floor)*0.5^(days/half_life))
+    // score = impact * (floor + (1-floor)*0.5^(days/half_life))
     //         * deadline_boost * tier_weight
+    //
+    // `impact` is the only part of `ice` the score reads. `confidence` and
+    // `effort` still parse and are ignored: keeping them live meant a registry
+    // that declared all three scored by a different rule than one answered
+    // through `review`, and an ordering with two definitions is not an ordering.
     "half_life_days": 21,
     "decay_floor": 0.3,           // the floor exists because pure decay buries exactly the work you are avoiding
     "tier_weight": {

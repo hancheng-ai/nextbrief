@@ -34,6 +34,7 @@ question stays visibly unanswered and never quietly becomes data.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from typing import Any, Dict, List, Sequence
 
@@ -47,6 +48,7 @@ __all__ = [
     "QUESTIONS",
     "apply_annotations",
     "load_annotations",
+    "RESTATE_AFTER_DAYS",
     "needs_annotating",
     "pending_count",
     "question_targets",
@@ -96,6 +98,20 @@ QUESTIONS: Sequence[Question] = (
 # "2" to "what changes if this succeeds".
 ASKED_VERSION = 2
 
+# How long an answer is taken at face value before `review` asks again.
+#
+# Importance drifts. A project that mattered most six months ago may be finished,
+# abandoned, or overtaken, and nothing in the engine can observe that -- the one
+# thing it is not allowed to do is guess. The alternative to re-asking is a
+# command for correcting an answer, which assumes the reader remembers a number
+# they set half a year ago and thinks to revisit it. Making the revisit periodic
+# rather than manual is what turns a stale judgement back into a live one.
+#
+# An answer with no date is treated as stale rather than fresh: undated means
+# unknown age, and pretending otherwise is the same defaulting mistake as reading
+# an absent impact as 3.
+RESTATE_AFTER_DAYS = 180
+
 # Effort is asked by nobody and derived by nothing.
 #
 # It was derived from file count, described as "the axis where a human guess is
@@ -106,11 +122,44 @@ ASKED_VERSION = 2
 # done. Asking instead is no better: "how long to a usable next milestone" is
 # unanswerable for open-ended creative work.
 #
-# So it is neither asked nor derived, and `score_project`'s existing default of 3
-# makes the base collapse to (impact x 3) / 3 == impact. Hand-written three-axis
-# entries in a registry keep working exactly as they did.
+# So it is neither asked nor derived, and the score does not read it. Nor does it
+# read `confidence`. Both still parse from a registry, so no existing file breaks
+# -- they simply stop changing the answer.
+#
+# That last part was once the opposite: the two were defaulted to 3 so that a
+# hand-written three-axis entry kept scoring exactly as before. It was meant as
+# courtesy to existing files and it produced two rules in one ordered list, where
+# a project rated 5 and divided by effort 5 ranked below one rated 4 and divided
+# by 2 -- the large-project penalty this very comment exists to condemn, still
+# operating, one layer down from where it was removed.
 
-def needs_annotating(snapshot: Dict[str, Any], self_ids=None) -> List[Dict[str, Any]]:
+def _answer_expired(p, as_of=None, restate_after=None) -> bool:
+    """Is this project's answer old enough to be worth restating?
+
+    Only overlay answers expire. A value its owner typed into `registry.jsonc` is
+    a standing declaration and is never retired by us -- the same rule that keeps
+    a reworded question from discarding hand-written entries.
+    """
+    if not p.get("answered"):
+        return False
+    days = RESTATE_AFTER_DAYS if restate_after is None else restate_after
+    if days is None:
+        return False         # expiry switched off entirely
+    if days <= 0:
+        return True          # restate everything -- what `review --all` passes
+    stamped = p.get("asked_on")
+    if not stamped:
+        return True          # undated is unknown age, not fresh
+    try:
+        then = dt.date.fromisoformat(str(stamped))
+    except (TypeError, ValueError):
+        return True          # unparseable is also unknown age
+    today = as_of or dt.date.today()
+    return (today - then).days >= days
+
+
+def needs_annotating(snapshot: Dict[str, Any], self_ids=None, as_of=None,
+                     restate_after=None) -> List[Dict[str, Any]]:
     """Projects with something to show for themselves and nothing said about them.
 
     Ordered by evidence recency so that the first question asked is about the
@@ -133,7 +182,7 @@ def needs_annotating(snapshot: Dict[str, Any], self_ids=None) -> List[Dict[str, 
         if p.get("id") in self_ids or p.get("is_self"):
             continue
         if (p.get("ice") or {}).get("impact") is not None:
-            if not (stale and p.get("answered")):
+            if not (stale and p.get("answered")) and not _answer_expired(p, as_of, restate_after):
                 continue
         ev = p.get("evidence") or {}
         if ev.get("days_since") is None:
@@ -231,7 +280,8 @@ def apply_annotations(reg: Dict[str, Any], annotations: Dict[str, Any]) -> Dict[
     return out
 
 
-def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]]) -> int:
+def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]],
+                   asked_on=None) -> int:
     """Merge answers into the overlay and write it. Returns projects touched.
 
     Written as JSONC with a header explaining where the file came from, because
@@ -249,6 +299,10 @@ def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]]) -> int:
                 entry["ice"] = ice
             else:
                 entry[key] = value
+        # Stamped so it can go stale. Without a date every answer is permanent,
+        # and a permanent answer to "how much does this matter" is wrong more
+        # often than it is right.
+        entry["asked_on"] = (asked_on or dt.date.today()).isoformat()
         current[pid] = entry
 
     body = json.dumps({"asked_version": ASKED_VERSION, "projects": current},

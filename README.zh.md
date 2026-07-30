@@ -186,9 +186,9 @@ formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`]
 | Project | Signal | Evidence | Next |
 |---|---|---|---|
 | Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page a new con |
+| Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 4 files/7d · 7 active days/30d | **Go get the evidence that answers it** (below) |
 | Lantern Site | 🌤 warm | 2 commits/30d · last commit 2026-03-06 · 5 active days/30d |  |
 | Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 1 files/7d · 3 active days/30d | **stalled: no next step** |
-| Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 4 files/7d · 7 active days/30d | **Go get the evidence that answers it** (below) |
 | Kiln | 🔥 hot | 1 commits/30d · last commit 2026-03-14 · 1 files/7d · 1 active days/30d | → OPERATIONS_LOG.md |
 | Quarry | ❄️ dormant | last commit 2025-12-05 · **2 uncommitted** | **stalled: no next step** |
 
@@ -200,7 +200,7 @@ formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`]
 
 ## Stalled (no next step) — the column GTD cares about most
 - **Beacon Portal** — Give it a concrete next step, or archive it on purpose.
-- **Quarry** — 2 uncommitted change(s) left sitting there. Either commit them and name a next step, or move the tier to dormant so it stops showing up.
+- **Quarry** — parked, but 2 uncommitted change(s) are sitting in it. Commit them: work that exists only in a working tree of a repository nobody opens is the easiest kind to lose.
 
 ## Waiting on people / approvals
 - `NA-0002` Publish the March essay once the draft arrives — waiting on external-party

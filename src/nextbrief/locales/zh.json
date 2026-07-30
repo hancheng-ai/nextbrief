@@ -51,6 +51,7 @@
   "brief.signal.unrated": "未评级",
   "brief.stalled.generic": "**{name}** —— {extra}给它一个具体的下一步，或明确归档。",
   "brief.stalled.uncommitted": "**{name}** —— {count} 个未提交改动放着。要么提交并定一个下一步，要么把 tier 改成 dormant 让它别再出现。",
+  "brief.stalled.uncommitted_dormant": "**{name}** —— 已归档，但还有 {count} 处改动没提交。提交掉：只存在于一个没人再打开的工作区里的改动，是最容易丢的那种。",
   "brief.stalled.waiting_on": "等 {dep}。",
   "brief.table.evidence": "证据",
   "brief.table.next": "下一步",

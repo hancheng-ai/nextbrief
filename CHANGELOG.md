@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One scoring rule instead of two.** The base is now the declared `impact`
+  alone. `confidence` and `effort` still parse from a registry and are ignored.
+
+  They used to default to 3 so that a hand-written three-axis entry scored
+  exactly as before — courtesy to existing files that produced two rules in one
+  ordered list. A project rated 5 and divided by effort 5 ranked below one rated
+  4 and divided by 2: the penalty-for-being-large that `annotate.py` cites as the
+  reason effort stopped being asked, still operating one layer below where it was
+  removed. An ordering with two definitions is not an ordering.
+
+- **`review` restates answers that have gone stale.** Each answer is stamped with
+  the date it was given, and one older than `RESTATE_AFTER_DAYS` (180) is asked
+  again. `review --all` restates everything.
+
+  Importance drifts and the engine cannot observe that. The alternative — a
+  command for editing an answer — assumes you remember a number you set half a
+  year ago and think to revisit it. An answer with no stamp is treated as unknown
+  age rather than fresh, which is the same rule the rest of the engine applies to
+  every other absence.
+
+### Fixed
+
+- **A malformed `impact` no longer takes the brief down with it.** `registry.jsonc`
+  invites hand-editing and `check_shapes` only validates that `ice` is a dict, so
+  `"impact": "high"` reached the scorer intact. It now reads as no answer at all.
+  `NaN` and infinities are excluded too: `NaN` compares false against everything,
+  so one of them makes the sort key non-total and quietly withdraws the
+  byte-identical-output guarantee.
+
+- **A parked project is no longer told to park itself.** A `dormant` project with
+  uncommitted changes is reported — work living only in a working tree nobody
+  opens is the easiest kind to lose — but it was given the generic remedy, which
+  ends "or move the tier to dormant so it stops showing up". Advice to do what it
+  had already done, and which would not have worked. The README shipped a worked
+  example of it failing.
+
+
 ### Fixed
 
 - **The renderer no longer invents the importance the sensing stage refuses to

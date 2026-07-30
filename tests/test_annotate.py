@@ -8,6 +8,7 @@ have walked back, one release earlier, in this same codebase.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import unittest
 
@@ -382,3 +383,69 @@ class ReviewCommand(TempCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnswersExpire(TempCase):
+    """Importance drifts, and nothing in the engine can observe that.
+
+    The alternative to re-asking is a command for correcting an answer, which
+    assumes the reader remembers a number they set half a year ago and thinks to
+    revisit it. Periodic beats manual for the same reason the whole tool exists.
+    """
+
+    def _project(self, **over):
+        p = make_project_entry(pid="thing", tier="active", ice={"impact": 4})
+        p["answered"] = True
+        p["evidence"] = dict(p["evidence"], days_since=1)
+        p.update(over)
+        return p
+
+    def _asked(self, snap, **kw):
+        return [p["id"] for p in annotate.needs_annotating(snap, **kw)]
+
+    def test_a_fresh_answer_is_not_re_asked(self):
+        p = self._project(asked_on="2026-03-01")
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
+
+    def test_an_answer_past_the_window_comes_back(self):
+        p = self._project(asked_on="2025-06-01")
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), ["thing"])
+
+    def test_an_undated_answer_is_treated_as_unknown_age(self):
+        """Undated means nobody knows when it was said. Reading that as fresh is
+        the same defaulting mistake as reading an absent impact as the midpoint.
+        """
+        p = self._project()
+        p.pop("asked_on", None)
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), ["thing"])
+
+    def test_a_hand_written_registry_answer_never_expires(self):
+        """`answered` marks an overlay value. A declaration typed into the
+        registry is standing, and is not ours to retire."""
+        p = self._project(asked_on=None)
+        p["answered"] = False
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
+
+    def test_restate_after_zero_asks_everything(self):
+        """What `review --all` passes."""
+        p = self._project(asked_on="2026-03-16")
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(
+            self._asked(snap, as_of=dt.date(2026, 3, 16), restate_after=0), ["thing"])
+
+    def test_recording_stamps_the_date(self):
+        ws_dir = self.workspace()
+        ws = resolve_workspace(str(ws_dir))
+        annotate.record_answers(ws, {"orchard": {"ice": {"impact": 4}}},
+                                asked_on=dt.date(2026, 3, 16))
+        got = annotate.load_annotations(ws)
+        self.assertEqual(got["orchard"]["asked_on"], "2026-03-16")
