@@ -90,14 +90,24 @@ Write fictional examples. `Fernwood` and `atlas-api` do the job as well as
 anything real, and a fixture you invented is one you can edit freely when the
 parser changes.
 
-Two things about that CI check are worth knowing before you rely on it.
+Three things about that check are worth knowing before you rely on it.
 
-It cannot list every name it should catch, because a denylist kept in the repo
-publishes exactly what it is protecting. Only names already public are spelled
-out in `ci.yml`; the rest come from a `PRIVATE_IDENTIFIERS` repository secret,
-one per line, and that pass reports the *file* it matched without echoing the
-matched text — a public repo has public CI logs. On a fork PR the secret is
-absent, that pass is skipped, and the job says so.
+**It runs before the push, not only after.** `scripts/privacy-scan.py` is the
+implementation; `.githooks/pre-push` runs it on the commits a push would add, and
+CI and the release gate run it over everything. Turn the hook on once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+The ordering is the point. CI runs after the objects are on a public server, and
+a force-push does not retract them.
+
+**It holds no list of names.** A denylist kept here would publish exactly what it
+protects, so the identifiers come from a `PRIVATE_IDENTIFIERS` repository secret
+in CI, or `~/.config/nextbrief/private-identifiers` locally — one per line. A
+match reports the *file* and never the matched text, because a public repository
+has public CI logs. Where no list is configured that pass is skipped and says so.
 
 And it only ever catches the names it was told about, which is a much weaker
 guarantee than a green check suggests. Relabelling a real example defeats it
