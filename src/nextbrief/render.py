@@ -52,6 +52,7 @@ from .fs import append_jsonl, append_text, rewrite_fields, write_text
 from .i18n import Catalog, load_catalog
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
+from .sense import status_of
 
 __all__ = [
     "main", "classify", "render_brief", "score_project", "declared_impact",
@@ -84,6 +85,14 @@ CAP_DEFAULTS = {
 LIMIT_DEFAULTS = {"max_open_items_total": 40, "max_open_per_project": 5}
 SCORING_DEFAULTS = {
     "half_life_days": 21, "decay_floor": 0.3, "deadline_boost_max": 3.0,
+    # Phase, not importance. Importance is `ice.impact` and is the base; this
+    # says how much a project's phase should damp it. `done` is 0.0 rather than a
+    # small number: a finished project should leave the ranking, not linger at
+    # the bottom of it.
+    "status_weight": {"active": 1.0, "maintenance": 0.6, "frozen": 0.3, "done": 0.0},
+    # Read only when `status_weight` is absent, so a config written before the
+    # split keeps working. `flagship` has no entry here because it was never a
+    # phase -- it moved to `positioning`.
     "tier_weight": {"flagship": 1.3, "active": 1.0, "maintenance": 0.6, "dormant": 0.4},
 }
 
@@ -701,10 +710,19 @@ def score_project(p, cfg, outcomes=None):
             frac = (d["lead_days"] - d["days_until"]) / float(d["lead_days"])
             boost = max(boost, 1.0 + sc["deadline_boost_max"] * max(0.0, frac))
 
-    # No `or "active"`. A project with no declared tier does not reach here --
-    # `is_judged` filtered it out -- so a missing key here is a registry that
-    # names a tier the config has no weight for, which is genuinely 1.0.
-    tw = (sc.get("tier_weight") or {}).get(p.get("tier"), 1.0)
+    # An undeclared status weighs 1.0 rather than nothing: `review` has simply
+    # not asked yet, and a project should not be demoted for a question nobody
+    # put to its owner. What an undeclared status does withhold is a *verdict* --
+    # see `classify` -- because saying "you have neglected this" requires knowing
+    # it was supposed to be moving.
+    # Through `status_of`, so that a snapshot written before the split still
+    # renders. `render` re-reads an existing snapshot.json without re-sensing --
+    # without the fallback an upgrade would silently stop producing verdicts on
+    # every workspace that had not re-sensed yet, which is the quietest possible
+    # regression.
+    weights = sc.get("status_weight") or {}
+    phase = status_of(p)
+    tw = weights.get(phase, 1.0) if phase else 1.0
     return base * decay_term * boost * tw
 
 
@@ -769,13 +787,17 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
             waiting_on_work.append(p)
             continue
         ev = p.get("evidence") or {}
-        if p.get("tier") in ("flagship", "active"):
+        # Only an *active* project can be neglected or stalled. Maintenance is
+        # the declaration that it is meant to be quiet, and being told that a
+        # thing doing exactly what you asked of it has gone quiet is the kind of
+        # warning that teaches people to stop reading warnings.
+        if status_of(p) == "active":
             if bootstrapped and not has_next and not by_proj.get(pid):
                 stalled.append(p)
             d = ev.get("days_since")
             if d is not None and d > (p.get("neglect_days") or 30):
                 neglected.append(p)
-        elif p.get("tier") == "dormant" and bootstrapped:
+        elif status_of(p) == "frozen" and bootstrapped:
             g = (p.get("git") or [{}])[0]
             if g.get("uncommitted"):
                 stalled.append(p)
@@ -1078,7 +1100,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                 # to dormant so it stops showing up", which for this project is
                 # advice to do what it has already done, and does not work.
                 key = ("brief.stalled.uncommitted_dormant"
-                       if p.get("tier") == "dormant" else "brief.stalled.uncommitted")
+                       if status_of(p) == "frozen" else "brief.stalled.uncommitted")
                 L.append("- " + cat.t(key, name=p.get("name", ""),
                                       count=g["uncommitted"]))
             else:

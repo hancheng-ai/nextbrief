@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`status`** — a project's phase: `active`, `maintenance`, `frozen`, `done`.
+
+  `tier` said two things at once and could answer only one of them at a time.
+  `flagship` was a claim about a project's place in the portfolio; `dormant` was
+  a claim about its phase. Both can be true of one project — a flagship that is
+  frozen is an ordinary thing to own — and the single field made you choose which
+  to record.
+
+  Phase is what the engine reasons with: which verdicts may fire, and how much
+  the score is damped. The portfolio claim moves to `positioning`, which is prose
+  for a reader rather than an input to arithmetic.
+
+  Only an **active** project can be reported *neglected* or *stalled*.
+  `maintenance` is the declaration that a project is meant to be quiet, and
+  warning about something doing exactly what was asked of it is how a warnings
+  column stops being read. `done` weighs 0 and leaves the ranking rather than
+  lingering at the bottom of it.
+
+  This also keeps *hot* and *phase* apart, which `tier` could not. Activity is
+  observed from commits; phase is declared. A project can be busy and finished
+  evolving at the same time, and the brief can now say so.
+
+  Old registries keep working: `tier` migrates (`flagship`/`active` → `active`,
+  `maintenance` → `maintenance`, `dormant` → `frozen`), and the read goes through
+  that migration everywhere — including `render`, which re-reads an existing
+  `snapshot.json` without re-sensing. Without that an upgrade would have silently
+  stopped producing verdicts on any workspace that had not re-sensed yet.
+
+  An undeclared status still weighs 1.0 — `review` has not asked yet, and a
+  project should not be demoted for a question nobody put to its owner. What it
+  withholds is a *verdict*: saying "you have neglected this" requires knowing it
+  was supposed to be moving.
+
+
 ### Changed
 
 - **One scoring rule instead of two.** The base is now the declared `impact`

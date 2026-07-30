@@ -655,3 +655,40 @@ class WhatIsNotRanked(TempCase):
         guarantees byte-identical output for identical input."""
         self.assertIsNone(render.declared_impact(
             make_project_entry(pid="x", ice={"impact": float("nan")})))
+
+    def test_an_old_snapshot_still_produces_verdicts(self):
+        """`render` re-reads an existing snapshot without re-sensing. A snapshot
+        written before `status` existed carries only `tier`, and without the
+        migration every verdict would silently stop firing on any workspace that
+        had not re-sensed yet."""
+        old = make_project_entry(pid="old", tier="active", ice={"impact": 4})
+        old.pop("status", None)
+        old["evidence"] = dict(old["evidence"], days_since=99)
+        meta = render.classify(make_snapshot([old]), [], {})
+        self.assertEqual([p["id"] for p in meta["neglected"]], ["old"])
+
+    def test_maintenance_is_never_reported_neglected(self):
+        """It is the declaration that a project is meant to be quiet. Warning
+        about a thing doing exactly what was asked of it is how a warning column
+        stops being read."""
+        quiet = make_project_entry(pid="quiet", ice={"impact": 4})
+        quiet["status"] = "maintenance"
+        quiet["evidence"] = dict(quiet["evidence"], days_since=200)
+        meta = render.classify(make_snapshot([quiet]), [], {})
+        self.assertEqual(meta["neglected"], [])
+
+    def test_hot_and_maintenance_are_independent(self):
+        """Activity is observed, phase is declared. A busy project can be one
+        that has finished evolving, and the brief has to be able to say so."""
+        busy = make_project_entry(pid="busy", ice={"impact": 4})
+        busy["status"] = "maintenance"
+        busy["evidence"] = dict(busy["evidence"], days_since=0, signal="hot")
+        meta = render.classify(make_snapshot([busy]), [], {})
+        self.assertEqual(meta["neglected"], [])
+        self.assertEqual(busy["evidence"]["signal"], "hot")
+
+    def test_a_done_project_leaves_the_ranking(self):
+        done = make_project_entry(pid="done", ice={"impact": 5})
+        done["status"] = "done"
+        done["evidence"] = dict(done["evidence"], days_since=0)
+        self.assertEqual(render.score_project(done, {}), 0.0)

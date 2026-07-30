@@ -72,6 +72,7 @@ from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
 __all__ = ["main", "build", "build_digest", "canonical", "engine_output_globs",
+           "status_of", "STATUSES",
            "SenseError"]
 
 GIT_TIMEOUT = 30
@@ -1414,6 +1415,39 @@ def engine_output_globs(ws: Workspace, base: Path) -> List[str]:
     return out
 
 
+# `tier` said two things at once and could only answer one of them at a time.
+# `flagship` was a claim about a project's place in the portfolio; `dormant` was a
+# claim about its phase. A project can be both -- a flagship that is frozen is an
+# ordinary thing to own -- and the single field forced a choice between saying so
+# and saying anything else.
+#
+# The phase half is `status`, and it is the half the engine reasons with: which
+# verdicts may fire, and how much weight the score carries. The portfolio half
+# moved to `positioning`, which is prose for a reader rather than an input to
+# arithmetic.
+STATUSES = ("active", "maintenance", "frozen", "done")
+
+# Old registries keep working. `flagship` carries no phase information at all, so
+# it migrates to the only phase that lets a project still be reported on; the
+# flagship claim itself belongs in `positioning` now and is not invented here.
+TIER_TO_STATUS = {"flagship": "active", "active": "active",
+                  "maintenance": "maintenance", "dormant": "frozen"}
+
+
+def status_of(pr: Dict[str, Any]):
+    """The declared phase, or None when nobody has said.
+
+    None is a real answer and is left alone: `review` asks for this, and until it
+    has been asked the honest state is that nothing is known. Defaulting it to
+    "active" would put every unreviewed project back in range of the neglected
+    and stalled verdicts on a phase the engine made up.
+    """
+    declared = pr.get("status")
+    if isinstance(declared, str) and declared in STATUSES:
+        return declared
+    return TIER_TO_STATUS.get(pr.get("tier"))
+
+
 def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
           as_of: dt.date, now: dt.datetime, timer: Optional[Timing] = None) -> Dict[str, Any]:
     """Sense everything the registry declares and return the snapshot structure."""
@@ -1834,6 +1868,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             # one given half a year ago and never revisited.
             "asked_on": pr.get("asked_on"),
             "tier": pr.get("tier"),
+            "status": status_of(pr),
+            # Prose about where this sits in the portfolio. Never derived: no
+            # file on disk says a project is the flagship.
+            "positioning": pr.get("positioning"),
             "goal_one_line": pr.get("goal_one_line"),
             # A declaration, like the goal beside it. Carried here so the
             # inventory reads the post-overlay value from one place -- the
