@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`tier` is gone from everything except the migration that reads it.** The
+  shipped registry template, the config template, the example workspace, the
+  `projects` table, `ARCHITECTURE.md` and every docstring that argued from it now
+  say `status` and `positioning`. `status_weight` replaces `tier_weight`, with
+  `frozen` and `done` where `dormant` and `flagship` were.
+
+  A registry that still declares `tier` keeps working — it migrates on read —
+  but nothing in the package teaches it any more. The remedy the brief prints
+  when a project stalls now names a field `review` can actually write, which the
+  old one did not.
+
+  Note `automation.tier` on a backlog item (`hook`/`skill`/`explore`) is a
+  different field and is untouched.
+
 ### Added
 
 - **Two ways to answer `review` besides the terminal.**

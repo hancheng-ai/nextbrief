@@ -205,16 +205,16 @@ a project. A directory added tomorrow is sensed tomorrow, with no edit to the
 registry.
 
 That inverts what the registry is for. It is not the list of what exists — it is
-the list of what you have said something *about*. An entry buys a tier, a goal,
-a deadline, a privacy rule. Without one, a directory is still sensed and still
-ranked; it simply asserts **nothing** about itself — no tier, no ICE, no goal —
-and the snapshot marks it `declared: false` so nothing downstream has to guess
-which is which.
+the list of what you have said something *about*. An entry buys a phase, a
+position in the portfolio, a goal, a deadline, a privacy rule. Without one, a
+directory is still sensed and still ranked; it simply asserts **nothing** about
+itself — no status, no positioning, no ICE, no goal — and the snapshot marks it
+`declared: false` so nothing downstream has to guess which is which.
 
-Not neutral values: *no* values. An earlier version synthesised `tier: "active"`
-and ICE 3/3/3 on the theory that a midpoint is the least opinionated guess, and
-that turned out to be the opposite of harmless — `tier` in `("flagship",
-"active")` is the entry condition for the *neglected* and *stalled* verdicts, so
+Not neutral values: *no* values. An earlier version synthesised a phase and ICE
+3/3/3 on the theory that a midpoint is the least opinionated guess, and that
+turned out to be the opposite of harmless — `status == "active"` is the entry
+condition for the *neglected* and *stalled* verdicts, so
 a directory somebody made once and abandoned began, on day 31, announcing that it
 had been neglected. Nobody had ever said it mattered; the engine said it, then
 reported its own invention back as a finding. See
@@ -278,7 +278,7 @@ would be a number nothing can cite, which is the precise failure the evidence ga
 exists to prevent, and the gate could not catch it: a sort weight never appears on
 the page as a claim, so nothing ever asks it for a source. A compounding outcome
 therefore groups its contributors and tells stage 2 they serve one aim; ranking
-still comes from `tier` and `ice`, which a human wrote.
+still comes from `status` and `ice.impact`, which a human wrote.
 
 Contributors inherit a dated outcome's urgency through `max`, exactly as they would
 their own deadline — so a shared commitment is declared once and cited once, without
@@ -328,8 +328,8 @@ produces nothing, and this command is named inside the brief.
 The rule the whole design turns on: **a proposal awaiting an answer is not an
 assertion.** Suggested answers can be pre-selected as aggressively as is useful,
 provided an unanswered question stays visibly unanswered and never quietly
-becomes data. That is exactly the line discovery crossed with its synthesised
-`tier: "active"`, and had to be walked back across.
+becomes data. That is exactly the line discovery crossed when it synthesised a phase, and had
+to be walked back across.
 
 ---
 

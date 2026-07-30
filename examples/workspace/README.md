@@ -27,7 +27,7 @@ date; without it, everything reads as cold and the deadlines have all passed.
 | `beacon-portal` | subdirectory of the above | a project inside another project's repo, so git log filters by pathspec |
 | `lantern-site` | spans two repositories | a nested repo (`atelier/sites/lantern`) plus a path in the outer repo |
 | `tidepool-docs` | plain directory, no VCS | `git: "none"`, file-timestamp evidence only, hand-written deadlines |
-| `kiln` | git repo, maintenance tier | `privacy.never_read`, `has_own_daily_entry`, `hard_rules` |
+| `kiln` | git repo, maintenance phase | `privacy.never_read`, `has_own_daily_entry`, `hard_rules` |
 | `quarry` | git repo, dormant | uncommitted changes with no next step; a sprint doc that says "Done" |
 
 Plus `sandbox` and `archive/talks` under `watch`, `homelab-config` under `infra`,

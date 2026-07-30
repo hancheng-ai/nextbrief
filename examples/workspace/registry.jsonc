@@ -37,7 +37,8 @@
       "name": "Orchard API",
       "paths": ["orchard-api"],
       "git": "auto",
-      "tier": "flagship",
+      "status": "active",
+      "positioning": "flagship",
       "goal_one_line": "Decide whether the tenant-isolation rewrite ships this quarter",
       "horizon": "quarter",
       "ice": { "impact": 5, "confidence": 3, "effort": 4 },
@@ -92,7 +93,7 @@
       // git log filter by pathspec instead of reporting repo-wide churn as progress.
       "paths": ["orchard-api/apps/beacon-portal"],
       "git": "auto",
-      "tier": "active",
+      "status": "active",
       "goal_one_line": "Ship the read-only status page tenants keep asking support for",
       "horizon": "month",
       "ice": { "impact": 3, "confidence": 4, "effort": 2 },
@@ -112,7 +113,7 @@
       // repo would attribute the wrong commits to it.
       "paths": ["atelier/sites/lantern", "atelier/packages/lantern-theme"],
       "git": "auto",
-      "tier": "active",
+      "status": "active",
       "goal_one_line": "Keep publishing; the writing is the point, the site is scaffolding",
       "horizon": "quarter",
       "ice": { "impact": 4, "confidence": 4, "effort": 2 },
@@ -130,7 +131,7 @@
       "name": "Tidepool Docs",
       "paths": ["tidepool-docs"],
       "git": "none",               // a declaration, not a discovery: "this has no version control" is itself a fact worth stating
-      "tier": "active",
+      "status": "active",
       "goal_one_line": "Get the handbook to a state a new contributor can follow unaided",
       "horizon": "month",
       "ice": { "impact": 3, "confidence": 4, "effort": 3 },
@@ -159,7 +160,7 @@
       "name": "Kiln",
       "paths": ["kiln"],
       "git": "auto",
-      "tier": "maintenance",
+      "status": "maintenance",
       "goal_one_line": "Keep the batch runner alive; no new features",
       "horizon": "someday",
       "ice": { "impact": 2, "confidence": 4, "effort": 2 },
@@ -187,7 +188,7 @@
       // Rules stated where the tool reads, not in a prompt, so they survive prompt rewrites.
       "hard_rules": [
         "Never open anything under fixtures/private/, not even to count lines.",
-        "Do not propose new features for a project in maintenance tier."
+        "Do not propose new features for a project in the maintenance phase."
       ],
 
       "ignore_globs": ["fixtures/generated/**", "**/*.log"],
@@ -199,7 +200,7 @@
       "name": "Quarry",
       "paths": ["quarry"],
       "git": "auto",
-      "tier": "dormant",
+      "status": "frozen",
       "goal_one_line": "(undecided) -- either commit the pending work and pick a next step, or archive it explicitly",
       "horizon": "someday",
       "ice": { "impact": 2, "confidence": 2, "effort": 3 },

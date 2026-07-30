@@ -1858,7 +1858,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "paths": paths,
             "is_self": bool(self_id) and pid == self_id,
             # False when the entry was synthesised by discovery rather than
-            # written by a human: its tier and ICE are placeholders, not choices.
+            # written by a human: its status and ICE are placeholders, not choices.
             "declared": not pr.get("discovered", False),
             # True when this project's ice came from `review`, so a later
             # rewording can retire it precisely instead of invalidating
@@ -2052,7 +2052,7 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         g0 = (p.get("git") or [{}])[0]
         projs.append({
             "id": p["id"], "name": p["name"], "status": p["status"],
-            # Whether a human wrote this entry. Without it a null tier and a
+            # Whether a human wrote this entry. Without it a null status and a
             # stated one are indistinguishable to stage 2, which is exactly the
             # confusion that makes a model fill the gap with something plausible.
             "declared": p.get("declared", True),

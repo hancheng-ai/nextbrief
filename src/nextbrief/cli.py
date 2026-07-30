@@ -1448,7 +1448,7 @@ def cmd_projects(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]
             str(ev.get("signal") or "?"),
             "-" if days is None else str(days),
             str(ev.get("best_kind") or "-"),
-            str(p.get("tier") or "-"),
+            str(p.get("status") or "-"),
             str(p.get("name") or p.get("id") or ""),
             bool(p.get("declared", True)),
         ))
@@ -1457,7 +1457,7 @@ def cmd_projects(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]
         return EXIT_OK
 
     heads = tuple(tr(cat, "cli.projects.head." + k, k)
-                  for k in ("id", "signal", "days", "evidence", "tier", "name"))
+                  for k in ("id", "signal", "days", "evidence", "status", "name"))
     widths = [max(_width(r[i]) for r in rows + [heads]) for i in range(6)]
     print("  ".join(_pad(h, w) for h, w in zip(heads, widths)))
     print("-" * (sum(widths) + 12))

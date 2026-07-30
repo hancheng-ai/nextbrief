@@ -113,7 +113,7 @@ def scoring_of(cfg) -> Dict[str, Any]:
     """Shipped defaults with the workspace's ``scoring`` block laid over them.
 
     Nested tables merge key by key rather than being replaced wholesale. A config
-    that names one tier -- ``"tier_weight": {"flagship": 1.5}`` -- means "that one
+    that names one phase -- ``"status_weight": {"frozen": 0.5}`` -- means "that one
     is heavier", not "the other three cease to exist"; under a flat update they
     silently fell back to the 1.0 default and every non-flagship project quietly
     changed weight. The failure is invisible in the config file, which still reads
@@ -637,15 +637,15 @@ def declared_impact(p):
 def is_judged(p) -> bool:
     """Has a human said how much this project matters?
 
-    `ice` and `tier` are judgements, and the sensing stage refuses to invent
+    `ice` and `status` are judgements, and the sensing stage refuses to invent
     either: a discovered project carries ``None`` for both, on the stated grounds
     that a synthesised midpoint is an assertion rather than a neutral guess.
 
     This function exists so the renderer keeps that promise. It used to break it
-    twice in twenty lines -- absent `ice` was read as {3,3,3} and absent `tier`
+    twice in twenty lines -- absent `ice` was read as {3,3,3} and absent phase
     as "active" -- which meant an unreviewed project was ranked on numbers
     nobody had supplied, while `classify` two functions down read the same absent
-    tier honestly and declined to reach a verdict. One missing field, two
+    phase honestly and declined to reach a verdict. One missing field, two
     readings, one file.
 
     Note which kind of absence this is. `days_since` missing means the engine
@@ -1096,8 +1096,8 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                 # A dormant project reaches this section by a different route --
                 # uncommitted work in a parked repository is worth saying, and it
                 # is the one thing that overrides "parked". So it must not be
-                # told to park itself: the generic remedy ends "or move the tier
-                # to dormant so it stops showing up", which for this project is
+                # told to park itself: the generic remedy ends "or set its
+                # status to frozen", which for this project is
                 # advice to do what it has already done, and does not work.
                 key = ("brief.stalled.uncommitted_dormant"
                        if status_of(p) == "frozen" else "brief.stalled.uncommitted")

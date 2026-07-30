@@ -662,7 +662,7 @@ w "$T/_site/index.html" <<'EOF'
 EOF
 
 # ==========================================================================
-# kiln -- maintenance tier, publishes its own daily entry point, and owns a
+# kiln -- maintenance phase, publishes its own daily entry point, and owns a
 # subtree that must be counted but never read.
 # ==========================================================================
 K="$ROOT/kiln"

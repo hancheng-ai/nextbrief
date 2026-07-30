@@ -367,7 +367,7 @@ def _registry_is_clean(text: str, entries: Sequence[Dict[str, Any]]) -> bool:
 def render_registry(template_text: str, root: str, entries: Sequence[Dict[str, Any]]) -> str:
     """Fill the template in, editing the text rather than round-tripping the data.
 
-    The template's comments are the documentation -- they explain what a tier is,
+    The template's comments are the documentation -- they explain what a status is,
     why the file is a single document, what ``git: auto`` means -- and a
     ``json.dumps`` round trip would delete every one of them on the way to the
     first brief. So the substitutions are textual, and then the result is parsed

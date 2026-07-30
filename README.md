@@ -485,7 +485,7 @@ inside the package, and the package writes nowhere but the workspace.**
 
 ```
 registry.jsonc        what each project is, who owns it, which documents to read.  Edited monthly.
-config.jsonc          thresholds, weights, caps, model tiers.                      Edited rarely.
+config.jsonc          thresholds, weights, caps, model choice.                      Edited rarely.
 backlog/*.md          one file per item, with frontmatter.                          Edited daily.
 prompts/daily.*.md    the stage-2 prompt. Yours wins over the packaged one.
 BRIEF.md · BRIEF.html the current state, overwritten every run.

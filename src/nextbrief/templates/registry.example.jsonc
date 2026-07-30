@@ -26,7 +26,7 @@
     // Everything in here is a project. A directory you add tomorrow is sensed
     // tomorrow, with no edit to this file -- the `projects` array below is not
     // the list of what exists, it is the list of what you have said something
-    // *about*. An entry here buys a tier, a goal, a deadline, a privacy rule;
+    // *about*. An entry buys a phase, a goal, a deadline, a privacy rule;
     // without one a directory is still sensed, just unprioritised.
     //
     // So this must be a directory you keep work in, not a home directory or a
@@ -57,7 +57,20 @@
       // Which outcomes this project contributes to. Ids from the `outcomes`
       // block below. A project can serve more than one, and most serve none.
       "serves": ["external-review"],
-      "tier": "flagship",
+
+      // Phase and place, asked separately because they are separate. A flagship
+      // can be frozen and a side experiment can be the thing you touch daily;
+      // one field could only ever record whichever you thought of first.
+      //
+      //   status       active | maintenance | frozen | done
+      //   positioning  experiment | supporting | platform | flagship
+      //
+      // `status` is what the engine reasons with: only an `active` project can
+      // be reported neglected or stalled, and `done` leaves the ranking. Both
+      // are what `nextbrief review` asks for, so you can leave them out here and
+      // answer them there.
+      "status": "active",
+      "positioning": "flagship",
 
       // What this project IS, in one sentence -- distinct from the goal below,
       // which is what you are trying to do about it next. Optional: if the
@@ -137,7 +150,7 @@
       // makes git log filter by pathspec instead of reporting repo-wide churn.
       "paths": ["orchard-api/apps/beacon-portal"],
       "git": "auto",
-      "tier": "active",
+      "status": "active",
       "goal_one_line": "Ship the read-only status page tenants keep asking support for",
       "horizon": "month",
       "ice": { "impact": 3, "confidence": 4, "effort": 2 },
@@ -157,7 +170,7 @@
       // one repo would attribute the wrong commits to it.
       "paths": ["atelier/sites/lantern", "atelier/packages/lantern-theme"],
       "git": "auto",
-      "tier": "active",
+      "status": "active",
       "goal_one_line": "Keep publishing; the writing is the point, the site is scaffolding",
       "horizon": "quarter",
       "ice": { "impact": 4, "confidence": 4, "effort": 2 },
@@ -175,7 +188,7 @@
       "name": "Tidepool Docs",
       "paths": ["tidepool-docs"],
       "git": "none",               // a declaration, not a discovery: "this has no version control" is itself worth stating
-      "tier": "active",
+      "status": "active",
       "goal_one_line": "Get the handbook to a state a new contributor can follow unaided",
       "horizon": "month",
       "ice": { "impact": 3, "confidence": 4, "effort": 3 },
@@ -203,7 +216,7 @@
       "name": "Kiln",
       "paths": ["kiln"],
       "git": "auto",
-      "tier": "maintenance",
+      "status": "maintenance",
       "goal_one_line": "Keep the batch runner alive; no new features",
       "horizon": "someday",
       "ice": { "impact": 2, "confidence": 4, "effort": 2 },
@@ -232,7 +245,7 @@
       // Putting them here rather than in a prompt means they survive prompt rewrites.
       "hard_rules": [
         "Never open anything under fixtures/private/, including to count lines.",
-        "Do not propose new features for a project in maintenance tier."
+        "Do not propose new features for a project in the maintenance phase."
       ],
 
       "ignore_globs": ["fixtures/generated/**", "**/*.log"],
@@ -244,7 +257,7 @@
       "name": "Quarry",
       "paths": ["quarry"],
       "git": "auto",
-      "tier": "dormant",
+      "status": "frozen",
       "goal_one_line": "(undecided) -- either commit the pending work and pick a next step, or archive it explicitly",
       "horizon": "someday",
       "ice": { "impact": 2, "confidence": 2, "effort": 3 },
@@ -288,7 +301,7 @@
   // constant meaning "long-term work counts extra" would be a number nothing can
   // cite — exactly what the evidence gate exists to keep off the page. It groups
   // contributors and tells the model they serve one aim; ranking still comes from
-  // `tier` and `ice`.
+  // `status` and `ice.impact`.
   "outcomes": [
     {
       "id": "external-review",

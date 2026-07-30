@@ -2,7 +2,7 @@
 
 ``defaults.root`` is a directory you keep ongoing work in, not a window onto the
 disk. Read that way, the registry stops being the list of what *exists* and
-becomes the list of what you have said something *about* -- a tier, a goal, a
+becomes the list of what you have said something *about* -- a phase, a goal, a
 deadline, a privacy rule. Anything sitting in the root is a project by virtue of
 being there.
 
@@ -15,14 +15,14 @@ error, no empty section, no dropped-claim count -- nothing to notice. A portfoli
 with a hole in it is indistinguishable from a calm week.
 
 So discovery adopts rather than offers. What it will not do is invent the human
-half. A discovered project states **no** tier, **no** ICE and no goal -- not
+half. A discovered project states **no** status, **no** ICE and no goal -- not
 neutral values, no values, because those are judgements and the engine does not
 have them. It carries ``declared: false`` into the snapshot so anything downstream
 can tell an absence from a choice.
 
 The distinction is not pedantry. A synthesised midpoint is an assertion, and the
-renderer reads assertions: ``tier`` in ``("flagship", "active")`` is the entry
-condition for the *neglected* and *stalled* verdicts, so a placeholder tier makes
+renderer reads assertions: ``status == "active"`` is the entry condition for the
+*neglected* and *stalled* verdicts, so a placeholder phase makes
 the engine invent an importance and then, a month later, report the consequences
 of its own invention back to the user as a finding.
 
@@ -90,15 +90,15 @@ DOC_PATTERNS: Sequence[Tuple[str, str]] = (
 
 # Deliberately absent, not neutral.
 #
-# An earlier version of this module synthesised `tier: "active"` and ICE 3/3/3 on
+# An earlier version of this module synthesised a phase and ICE 3/3/3 on
 # the theory that a midpoint is the least opinionated guess. It is not a guess at
-# all -- it is an assertion, and the renderer reads it as one. `tier in
-# ("flagship", "active")` is the entry condition for the *neglected* and *stalled*
+# all -- it is an assertion, and the renderer reads it as one. `status ==
+# "active"` is the entry condition for the *neglected* and *stalled*
 # branches, so a directory somebody made once and abandoned began, on day 31,
 # telling its owner it had been neglected. Nobody ever said it mattered. The
 # engine said it, then reported it back as news.
 #
-# So a discovered project states no tier and no ICE. Every consumer already
+# So a discovered project states no status and no ICE. Every consumer already
 # tolerates the absence: the score falls back to the same numbers it used before,
 # and the nag branches simply do not apply. `declared: false` in the snapshot is
 # what says the silence is deliberate.
