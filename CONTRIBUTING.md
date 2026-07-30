@@ -81,10 +81,10 @@ installed. That is what those directories are for.
 
 ### No personal data, ever
 
-nextbrief was extracted from one person's private workspace. Real project names,
-hostnames, absolute home paths and prose from that workspace must never appear
-in this repository -- not in code, not in docs, not in a fixture, not in a test
-that reproduces a bug. CI greps every tracked file and fails the build on a hit.
+Real project names, hostnames, absolute home paths and prose copied out of a
+private directory must never appear in this repository -- not in code, not in
+docs, not in a fixture, not in a test that reproduces a bug. A push that would
+add any is refused before it leaves your machine.
 
 Write fictional examples. `Fernwood` and `atlas-api` do the job as well as
 anything real, and a fixture you invented is one you can edit freely when the

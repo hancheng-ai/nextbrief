@@ -9,68 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`scripts/privacy-scan.py`, and a `pre-push` hook that runs it.** The check
-  that content from a private workspace never reaches this repository now runs
-  *before* a push rather than after it.
+- **`scripts/privacy-scan.py`, and a `pre-push` hook that runs it.** A push that
+  would publish content copied out of a private directory is refused before the
+  objects leave the machine.
 
-  That ordering is the whole point. CI runs after the objects are already on a
-  public server, and a force-push does not retract them: unreferenced commits
-  stay retrievable by SHA and the events feed lists those SHAs. CI is a detector;
-  the fence has to be local. Activate it once per clone with
-  `git config core.hooksPath .githooks`.
+  The ordering is the point. CI runs after the objects are already on a public
+  server, and a force-push does not retract them: unreferenced commits stay
+  retrievable by SHA and the events feed lists those SHAs. CI is a detector; the
+  fence has to be local. Activate it once per clone with
+  `git config core.hooksPath .githooks` — repo-local rather than global, so it
+  governs this repository and nothing else on the machine.
 
   It scans commits, not the working tree, because a push publishes history and a
   clean tip says nothing about what is behind it. Three passes: credential and
-  home-path shapes (built in, generic); an identifier list supplied out of band;
-  and, when a private workspace is reachable, lines that appear in both — the
-  only pass that can catch an example lifted from real notes and relabelled,
-  where there is no name left to match. Each pass announces itself when it
-  cannot run, because a guard that silently checks less than you think is worse
+  home-path shapes, built in and generic; a list of identifiers supplied out of
+  band, since a denylist kept in a repository publishes exactly what it protects;
+  and, where a private directory is configured, lines appearing in both — the
+  only pass that can catch a borrowed example whose names have been changed,
+  because there is nothing left for a name to match. Each pass announces itself
+  when it cannot run: a check that silently covers less than you think is worse
   than one that is plainly absent.
+
+- **`nextbrief describe <id> --capability "<text>"`** — what the thing built here
+  could also serve, as against what it currently does. Always declared, never
+  derived: a manifest says what a package is, and no file says that something
+  generalises beyond its current use.
 
 ### Changed
 
-- CI and the release gate both call that one script instead of carrying their
-  own copies of the rule. The release gate did not check for private content at
-  all, which meant a tag could publish to a package index, a public release and
-  an attestation while CI was red — and for several releases it did.
+- CI and the release gate call that one script rather than carrying their own
+  copies of the rule. The release gate previously checked tests, lint and version
+  literals, and nothing about repository content.
 
-- The identifier list moves out of `.github/workflows/ci.yml` entirely. A
-  denylist kept in the repository publishes the names it protects, which is a
-  guard defeating itself; it now comes from a `PRIVATE_IDENTIFIERS` secret in
-  CI, or `~/.config/nextbrief/` locally, and a match reports the file without
-  ever echoing what matched.
-
+- The `--help` command list leads with the commands rather than argparse's
+  positional-arguments block.
 
 ### Fixed
 
 - **`nextbrief context` never printed `capability`.** The field reached the
   snapshot, the inventory and `context --json`, and stopped one layer short of
-  the listing a person actually reads — so for one release it was recorded,
-  stored, shipped, and invisible unless you opened the JSON yourself. Now printed
-  on its own prefixed line, interpolated by the locale catalogue so each language
-  owns its own spacing.
+  the listing a person actually reads. Now printed on its own prefixed line,
+  interpolated by the locale catalogue so each language owns its own spacing.
 
-- **Examples replaced with invented ones** across the prompts, one module
-  docstring, the `describe` usage strings and one test fixture. `CONTRIBUTING.md`
-  gains a note on why the identifier scan cannot be the only thing standing
-  between a good example and a bad one.
+- **`describe <id>` with no text is a usage error** rather than a silent clear.
+  A forgotten argument looked identical to an intent to erase; `describe <id> ""`
+  is how you clear it.
 
-- **The identifier scan had been failing on its own allowlist since the Apache-2.0
-  relicense**, because the Apache header writes `Copyright <year> <name>` where
-  the allowlist expected `Copyright (c) <year> <name>`. A guard that is always red
-  is decoration: a real hit would have been indistinguishable from the standing
-  failure, and for several releases it was.
-
-### Changed
-
-- The identifier scan takes an extended name list from a `PRIVATE_IDENTIFIERS`
-  repository secret instead of the workflow file. A denylist in the repo
-  publishes the names it exists to protect; the seven already in `ci.yml` are the
-  ones that were public before this was noticed. Matches from the secret report
-  the file and not the matched text, because a public repository has public CI
-  logs. Absent the secret that pass is skipped and announces the skip.
-
+- Examples and fixtures across the prompts, one module docstring and the
+  `describe` usage strings replaced with invented ones.
 
 ## [0.1.0rc13] - 2026-07-29
 

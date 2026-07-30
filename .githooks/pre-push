@@ -1,5 +1,5 @@
 #!/bin/sh
-# Refuse a push that would publish content from a private workspace.
+# Refuse a push that would publish content copied out of a private directory.
 #
 # Activate once per clone:
 #
@@ -7,7 +7,11 @@
 #
 # Hooks are not cloned, so this lives in the repository and `core.hooksPath`
 # points at it. That makes the check reviewable in a pull request like any other
-# code, instead of being a thing each person is trusted to have set up.
+# code, instead of something each person is trusted to have set up.
+#
+# Repo-local rather than global on purpose. A global hooks path would apply this
+# to every repository on the machine, including ones that legitimately push
+# private content to a private remote.
 #
 # This runs BEFORE the objects leave the machine, which is the whole point. CI
 # runs after: by the time a CI job goes red, the data is on a public server, and
@@ -29,13 +33,13 @@ if [ ! -f "$scan" ]; then
     exit 1
 fi
 
-# The private workspace, when one is configured, turns on the overlap pass -- the
-# only pass that catches a real example with the names changed.
+# A private directory, when one is configured, turns on the overlap pass -- the
+# only pass that catches a borrowed example whose names have been changed.
 #
 # Its location is deliberately NOT written here. A guard that hardcodes the path
-# it is guarding publishes that path, which is the failure this whole file
-# exists to prevent, committed inside the fence itself. So the location is read
-# from the environment, or from a file outside the repository:
+# it is guarding publishes that path, which is the failure this file exists to
+# prevent, committed inside the fence itself. So it is read from the
+# environment, or from a file outside the repository:
 #
 #     echo /path/to/your/workspace > ~/.config/nextbrief/private-workspace
 #
