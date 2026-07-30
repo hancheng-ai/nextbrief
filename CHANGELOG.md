@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The renderer no longer invents the importance the sensing stage refuses to
+  invent.** Discovery states `tier: null` and `ice: null` for a project nobody
+  has judged, on the stated grounds that a synthesised midpoint is an assertion
+  rather than a neutral guess. `score_project` then read a missing `impact` as
+  `3` and a missing `tier` as `"active"` — so an unreviewed project was ranked
+  on numbers nobody supplied, while `classify` twenty lines away read the same
+  missing tier honestly and declined to reach a verdict. One absent field, two
+  readings, one file.
+
+  Projects with no declared importance are now **listed but not ranked**. They
+  keep their row, their evidence and their deadlines — a date is a fact, not a
+  judgement, so the most overdue thing you own can still be something nobody has
+  rated — and the ordering claim is restricted to projects a human has actually
+  judged. A reminder names them and the command that fixes it.
+
+  Note what is *not* removed: `confidence` and `effort` keep their neutral
+  default of 3. Those axes are deliberately never asked, and the 3s are what
+  collapse the base to `(impact × 3) / 3 == impact`, which is what lets a
+  one-question review produce a usable score. Only the invented `impact` was the
+  defect.
+
+
 ## [0.1.0rc14] - 2026-07-30
 
 ### Added

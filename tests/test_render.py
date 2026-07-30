@@ -576,3 +576,66 @@ class Notification(RenderCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhatIsNotRanked(TempCase):
+    """A score multiplies a human's stated importance. Where none was stated
+    there is no number that stands in for it, so the project is not ranked --
+    but it is still listed, because vanishing from the page is the failure this
+    whole split exists to avoid.
+    """
+
+    def test_a_project_with_no_impact_is_not_ranked(self):
+        judged = make_project_entry(pid="judged", tier="active", ice={"impact": 4})
+        blank = make_project_entry(pid="blank", tier=None, ice=None)
+        meta = render.classify(make_snapshot([judged, blank]), [], {})
+        self.assertEqual([p["id"] for p in meta["ranked"]], ["judged"])
+        self.assertEqual([p["id"] for p in meta["unjudged"]], ["blank"])
+
+    def test_it_is_still_on_the_page(self):
+        """Ranking it would assert an importance nobody gave. Dropping it would
+        hide a project, which is worse than either."""
+        judged = make_project_entry(pid="judged", tier="active", ice={"impact": 4})
+        blank = make_project_entry(pid="blank", tier=None, ice=None)
+        snap = make_snapshot([judged, blank])
+        md, _ = render.render_brief(snap, {}, [], {}, {}, load_catalog("en"),
+                                    {"conflicts": []})
+        self.assertIn("Blank", md)
+        self.assertIn("Judged", md)
+
+    def test_an_impact_only_answer_is_judged(self):
+        """`review` asks importance and nothing else. Requiring confidence or
+        effort as well would leave every reviewed project permanently unranked."""
+        p = make_project_entry(pid="reviewed", tier=None, ice={"impact": 3})
+        self.assertTrue(render.is_judged(p))
+
+    def test_a_declared_tier_is_not_required(self):
+        self.assertTrue(render.is_judged(
+            make_project_entry(pid="x", tier=None, ice={"impact": 1})))
+
+    def test_scoring_no_longer_invents_an_impact(self):
+        """The whole point. Absent impact must not read as the midpoint."""
+        blank = make_project_entry(pid="blank", tier="active", ice=None)
+        blank["evidence"] = dict(blank["evidence"], days_since=0)
+        self.assertEqual(render.score_project(blank, {}), 0.0)
+
+    def test_an_unrated_project_says_so_rather_than_showing_a_signal(self):
+        blank = make_project_entry(pid="blank", tier=None, ice=None)
+        snap = make_snapshot([make_project_entry(pid="judged", tier="active",
+                                                ice={"impact": 4}), blank])
+        md, _ = render.render_brief(snap, {}, [], {}, {}, load_catalog("en"),
+                                    {"conflicts": []})
+        row = [ln for ln in md.splitlines() if ln.startswith("| ") and "Blank" in ln]
+        self.assertTrue(row, "the unrated project has no table row")
+        self.assertIn("not rated", row[0])
+
+    def test_a_deadline_still_counts_on_an_unrated_project(self):
+        """A date is a fact, not a judgement: the most overdue thing you own can
+        be something nobody has rated."""
+        blank = make_project_entry(pid="blank", tier=None, ice=None)
+        blank["deadlines"] = [{"label": "handover", "date": "2026-03-01",
+                               "days_until": -15, "overdue": True}]
+        snap = make_snapshot([blank])
+        md, _ = render.render_brief(snap, {}, [], {}, {}, load_catalog("en"),
+                                    {"conflicts": []})
+        self.assertIn("handover", md)

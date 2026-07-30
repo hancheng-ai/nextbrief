@@ -595,9 +595,47 @@ def _dated_commitments(p, outcomes=None):
     return out
 
 
+def is_judged(p) -> bool:
+    """Has a human said how much this project matters?
+
+    `ice` and `tier` are judgements, and the sensing stage refuses to invent
+    either: a discovered project carries ``None`` for both, on the stated grounds
+    that a synthesised midpoint is an assertion rather than a neutral guess.
+
+    This function exists so the renderer keeps that promise. It used to break it
+    twice in twenty lines -- absent `ice` was read as {3,3,3} and absent `tier`
+    as "active" -- which meant an unreviewed project was ranked on numbers
+    nobody had supplied, while `classify` two functions down read the same absent
+    tier honestly and declined to reach a verdict. One missing field, two
+    readings, one file.
+
+    Note which kind of absence this is. `days_since` missing means the engine
+    looked and found nothing, and scoring that low is honest. `impact` missing
+    means nobody was ever asked. The snapshot already distinguishes declared from
+    observed from absent; collapsing the third into the second is the error.
+
+    Only `impact` is tested, and the distinction is easy to get wrong -- the old
+    ``{"impact": 3, "confidence": 3, "effort": 3}`` fallback fused two unrelated
+    things. A default *impact* invented the judgement. Default *confidence* and
+    *effort* are deliberate: `review` asks about importance alone, and neutral 3s
+    make the base collapse to ``(impact x 3) / 3 == impact``, which is what lets
+    a one-question review produce a usable score. Removing those breaks the
+    review flow; removing the impact default is the entire fix.
+    """
+    return (p.get("ice") or {}).get("impact") is not None
+
+
 def score_project(p, cfg, outcomes=None):
-    ice = p.get("ice") or {"impact": 3, "confidence": 3, "effort": 3}
-    imp = ice.get("impact", 3) or 3
+    """Rank a project that has been judged. Callers must check `is_judged` first.
+
+    Scoring an unjudged project is meaningless rather than merely imprecise:
+    every term below multiplies a human's stated importance, and there is no
+    number that stands in for one that was never given.
+    """
+    ice = p.get("ice") or {}
+    # Neutral, not invented: these two axes are deliberately never asked, and 3s
+    # collapse the base to the impact the human actually gave.
+    imp = ice.get("impact") or 0
     conf = ice.get("confidence", 3) or 3
     eff = max(1, ice.get("effort", 3) or 3)
     base = (imp * conf) / float(eff)
@@ -630,7 +668,10 @@ def score_project(p, cfg, outcomes=None):
             frac = (d["lead_days"] - d["days_until"]) / float(d["lead_days"])
             boost = max(boost, 1.0 + sc["deadline_boost_max"] * max(0.0, frac))
 
-    tw = (sc.get("tier_weight") or {}).get(p.get("tier") or "active", 1.0)
+    # No `or "active"`. A project with no declared tier does not reach here --
+    # `is_judged` filtered it out -- so a missing key here is a registry that
+    # names a tier the config has no weight for, which is genuinely 1.0.
+    tw = (sc.get("tier_weight") or {}).get(p.get("tier"), 1.0)
     return base * decay_term * boost * tw
 
 
@@ -648,8 +689,17 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     projects = snap.get("projects") or []
     self_ids = self_project_ids(snap, reg, ws)
     outcomes = {o["id"]: o for o in (snap.get("outcomes") or []) if o.get("id")}
-    ranked = sorted(projects,
+    # Two lists, because they answer different questions. `ranked` means "things
+    # you have judged, in the order they earned"; `unjudged` means "things nobody
+    # has been asked about". Merging them would require a score for the second
+    # kind, and a low position is itself a claim -- less important than everything
+    # above it -- about a project no one ever rated.
+    judged = [p for p in projects if is_judged(p)]
+    unjudged = [p for p in projects if not is_judged(p)]
+    ranked = sorted(judged,
                     key=lambda p: (-score_project(p, cfg, outcomes), str(p.get("id"))))
+    unjudged.sort(key=lambda p: str(p.get("id")))
+
 
     open_items = [b for b in backlog
                   if str(b.get("status", "open")).lower() in OPEN_STATUSES]
@@ -699,6 +749,7 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
 
     return {
         "ranked": ranked,
+        "unjudged": unjudged,
         "decision_pending": decision_pending,
         "waiting_on_work": waiting_on_work,
         "stalled": stalled,
@@ -815,6 +866,11 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     L: List[str] = []
 
     ranked = meta["ranked"]
+    # Ranked first, then the unrated in id order. Excluding a project from the
+    # *ordering* is honest -- nobody said what it is worth. Excluding it from the
+    # *page* would be the bug this whole split exists to avoid, so the table and
+    # the deadline sweep both walk the concatenation.
+    listed = ranked + meta.get("unjudged", [])
     self_ids = meta["self_ids"]
     by_proj = meta["by_project"]
     open_items = meta["open"]
@@ -881,7 +937,9 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         # v0: with no model in the loop, deterministic rules still answer
         # "what is most time-critical", which is the part that does not need one.
         urgent = []
-        for p in ranked:
+        # A deadline is a fact, not a judgement: an unrated project can still be
+        # the most overdue thing you own.
+        for p in listed:
             if p.get("id") in self_ids:
                 continue
             for d in p.get("deadlines") or []:
@@ -911,13 +969,16 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                                         cat.t("brief.table.evidence"), cat.t("brief.table.next")))
     L.append("|---|---|---|---|")
     prose = {c.get("project"): c for c in ((brief or {}).get("project_lines") or [])}
-    for p in ranked:
+    unrated_ids = {p.get("id") for p in meta.get("unjudged", [])}
+    for p in listed:
         pid = p.get("id")
         if pid in self_ids:
             continue
         ev = p.get("evidence") or {}
         sig = cat.t(SIGNAL_KEYS.get(ev.get("signal"), "signal.unknown"))
-        if pid in dec_ids:
+        if pid in unrated_ids:
+            sig = cat.t("brief.signal.unrated")
+        elif pid in dec_ids:
             sig = cat.t("brief.signal.decision_pending")
         elif pid in neg_ids:
             sig = cat.t("brief.signal.neglected", days=ev.get("days_since"))
@@ -1106,6 +1167,14 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     asking = question_targets(snap, own, limit=caps.get("max_questions", 2))
     if asking:
         rem.append(cat.t("review.pending", n=pending_count(snap, own)))
+
+    # Both absences get said out loud rather than defaulted. Neither is a
+    # verdict about the project; each is a statement about what the engine was
+    # never told, which is the only thing it can honestly report.
+    unjudged = [p for p in meta.get("unjudged", []) if p.get("id") not in own]
+    if unjudged:
+        rem.append(cat.t("reminder.unrated", count=len(unjudged),
+                         names=", ".join(str(p.get("id")) for p in unjudged[:4])))
 
     notes["reminders"] = rem   # the HTML reuses this list, so the two cannot drift
 

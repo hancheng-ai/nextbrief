@@ -322,12 +322,18 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
       "<th>%s</th><th>%s</th><th>%s</th><th>%s</th></tr></thead><tbody>"
       % (e(cat.t("brief.table.project")), e(cat.t("brief.table.signal")),
          e(cat.t("brief.table.evidence")), e(cat.t("brief.table.next"))))
-    for p in meta["ranked"]:
+    # Ranked first, then the unrated -- same order as the Markdown table, and
+    # for the same reason: the ordering claim is restricted to judged projects,
+    # the page is not.
+    unrated_ids = {p.get("id") for p in meta.get("unjudged", [])}
+    for p in meta["ranked"] + meta.get("unjudged", []):
         pid = p.get("id")
         if pid in self_ids:
             continue
         ev = p.get("evidence") or {}
-        if pid in dec_ids:
+        if pid in unrated_ids:
+            sig, cls = cat.t("html.signal.unrated"), "dormant"
+        elif pid in dec_ids:
             sig, cls = cat.t("html.signal.decision_pending"), "dec"
         elif pid in neg_ids:
             sig, cls = cat.t("html.signal.neglected", days=ev.get("days_since")), "dormant"
