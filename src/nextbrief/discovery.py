@@ -55,7 +55,7 @@ from .paths import Workspace
 
 __all__ = [
     "DISCOVERED_ICE",
-    "DISCOVERED_TIER",
+    "DISCOVERED_STATUS",
     "DOC_PATTERNS",
     "SKIP_NAMES",
     "claimed_segments",
@@ -102,7 +102,7 @@ DOC_PATTERNS: Sequence[Tuple[str, str]] = (
 # tolerates the absence: the score falls back to the same numbers it used before,
 # and the nag branches simply do not apply. `declared: false` in the snapshot is
 # what says the silence is deliberate.
-DISCOVERED_TIER = None
+DISCOVERED_STATUS = None
 DISCOVERED_ICE = None
 
 _SLUG = re.compile(r"[^a-z0-9]+")
@@ -279,7 +279,7 @@ def discover(root: Path, reg: Dict[str, Any], ws: Optional[Workspace] = None) ->
             # does not, which is a statement worth making and costs a spurious
             # parse failure if left to `auto` to discover the hard way.
             "git": "auto" if _looks_versioned(directory) else "none",
-            "tier": DISCOVERED_TIER,
+            "status": DISCOVERED_STATUS,
             "ice": DISCOVERED_ICE,
             "goal_one_line": None,
             "status_docs": _status_docs(directory, name),

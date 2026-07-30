@@ -49,6 +49,8 @@ __all__ = [
     "apply_annotations",
     "load_annotations",
     "RESTATE_AFTER_DAYS",
+    "current_answer",
+    "store_answer",
     "needs_annotating",
     "pending_count",
     "question_targets",
@@ -59,12 +61,19 @@ ANNOTATIONS_NAME = "annotations.jsonc"
 
 
 class Question:
-    """One multiple-choice question and what each answer stores."""
+    """One question and where its answer is stored.
 
-    def __init__(self, field, key, choices):
-        self.field = field          # the `ice` axis this answer sets
+    ``target`` is "ice" for an axis of the ICE triple and "project" for a
+    top-level registry field. ``kind`` is "choice" or "date"; a date is free text
+    because there is no useful multiple choice over calendars.
+    """
+
+    def __init__(self, field, key, choices=(), kind="choice", target="ice"):
+        self.field = field          # the field this answer sets
         self.key = key              # locale key for the question text
         self.choices = choices      # ((stored_value, locale_key), ...)
+        self.kind = kind
+        self.target = target
 
 
 # Importance is asked. Urgency is not, because urgency is already known: it comes
@@ -83,12 +92,41 @@ class Question:
 # So the question asks what changes on SUCCESS, not what breaks on delay. A
 # project answers it the same way whether it was touched today or last spring.
 QUESTIONS: Sequence[Question] = (
+    # 1. Importance, as consequence. What changes if this succeeds.
     Question("impact", "review.q.importance", (
         (1, "review.a.importance.itself"),
         (2, "review.a.importance.easier"),
         (4, "review.a.importance.unlocks"),
         (5, "review.a.importance.rests_on"),
     )),
+
+    # 2. Positioning: the same question pointed forwards. Impact asks what this
+    # changes now; positioning asks what it is meant to become. They come apart
+    # exactly where it matters -- something can be small today and be the thing
+    # everything else is planned around, and a portfolio that cannot say that
+    # cannot tell an early flagship from a side project.
+    Question("positioning", "review.q.positioning", (
+        ("experiment", "review.a.positioning.experiment"),
+        ("supporting", "review.a.positioning.supporting"),
+        ("platform", "review.a.positioning.platform"),
+        ("flagship", "review.a.positioning.flagship"),
+    ), target="project"),
+
+    # 3. Phase. Orthogonal to both of the above and to observed activity: a busy
+    # project can be one that has finished evolving, and only its owner knows
+    # which. This is the field the *neglected* and *stalled* verdicts read.
+    Question("status", "review.q.status", (
+        ("active", "review.a.status.active"),
+        ("maintenance", "review.a.status.maintenance"),
+        ("frozen", "review.a.status.frozen"),
+        ("done", "review.a.status.done"),
+    ), target="project"),
+
+    # 4. Urgency, as a date rather than a feeling. A stored "urgency: 4" is wrong
+    # within a week; a date stays true and recomputes its own urgency every
+    # morning. Blank is a real answer -- most projects have no date, and that is
+    # not the same as not mattering.
+    Question("deadline", "review.q.deadline", kind="date", target="project"),
 )
 
 # Bump when a question's WORDING changes enough that old answers no longer mean
@@ -96,7 +134,7 @@ QUESTIONS: Sequence[Question] = (
 # again, rather than being silently reinterpreted -- someone who answered "2" to
 # "what breaks if this slips" did not say the same thing as someone answering
 # "2" to "what changes if this succeeds".
-ASKED_VERSION = 2
+ASKED_VERSION = 3
 
 # How long an answer is taken at face value before `review` asks again.
 #
@@ -132,6 +170,40 @@ RESTATE_AFTER_DAYS = 180
 # a project rated 5 and divided by effort 5 ranked below one rated 4 and divided
 # by 2 -- the large-project penalty this very comment exists to condemn, still
 # operating, one layer down from where it was removed.
+
+def current_answer(project: Dict[str, Any], q: Question):
+    """What this project already says for `q`, or None.
+
+    One function rather than a conditional at every call site: the three targets
+    read from three different shapes, and a caller that forgets which is which
+    re-asks a question that has an answer, or skips one that does not.
+    """
+    if q.target == "ice":
+        return (project.get("ice") or {}).get(q.field)
+    if q.kind == "date":
+        dated = project.get("deadlines") or []
+        return (dated[0] or {}).get("date") if dated else None
+    return project.get(q.field)
+
+
+def store_answer(into: Dict[str, Any], q: Question, value, cat=None) -> None:
+    """Put `value` where `q` says it belongs, in an overlay-shaped dict."""
+    if q.target == "ice":
+        into.setdefault("ice", {})[q.field] = value
+    elif q.kind == "date":
+        label = "from review"
+        if cat is not None:
+            try:
+                label = cat.t("review.deadline.label")
+            except Exception:
+                pass
+        # A list, because that is the shape the registry uses and the renderer
+        # reads. One entry: `review` asks for the date that matters, not for a
+        # schedule.
+        into["deadlines"] = [{"label": label, "date": value}]
+    else:
+        into[q.field] = value
+
 
 def _answer_expired(p, as_of=None, restate_after=None) -> bool:
     """Is this project's answer old enough to be worth restating?

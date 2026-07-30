@@ -100,17 +100,35 @@ class WhatIsAskedAndWhatIsNot(unittest.TestCase):
         self.assertIn("succeed", text)
         self.assertNotIn("slip", text)
 
-    def test_only_one_question_is_asked(self):
-        # Two was one too many: the second measured actionability, called it
-        # confidence, and multiplied a low-importance project by five.
-        self.assertEqual(len(annotate.QUESTIONS), 1)
+    def test_each_question_asks_a_different_thing(self):
+        """Four, and no two of them are the same question in other words.
 
-    def test_no_question_asks_for_a_number(self):
+        Two was once one too many, when the second measured actionability,
+        called it confidence, and multiplied a low-importance project by five.
+        These four are separable by counter-example: a project can be small today
+        and be the flagship (impact vs positioning), busy and finished evolving
+        (activity vs status), and important with no date at all (impact vs
+        deadline).
+        """
+        fields = [q.field for q in annotate.QUESTIONS]
+        self.assertEqual(fields, ["impact", "positioning", "status", "deadline"])
+        self.assertEqual(len(set(fields)), len(fields))
+
+    def test_no_question_asks_for_a_number_on_an_undefined_scale(self):
+        """A choice names its meaning; "rate this 1-5" does not. The one
+        exception is the date, which is a fact rather than a rating."""
         for q in annotate.QUESTIONS:
+            if q.kind == "date":
+                self.assertEqual(q.choices, ())
+                continue
             self.assertGreaterEqual(len(q.choices), 3, q.field)
-            for value, key in q.choices:
-                self.assertIsInstance(value, int)
+            for _value, key in q.choices:
                 self.assertTrue(key.startswith("review.a."), key)
+
+    def test_every_question_declares_where_its_answer_goes(self):
+        for q in annotate.QUESTIONS:
+            self.assertIn(q.target, ("ice", "project"), q.field)
+            self.assertIn(q.kind, ("choice", "date"), q.field)
 
     def test_an_impact_only_answer_scores_as_itself(self):
         """The reason nothing in score_project had to change: with confidence

@@ -2051,7 +2051,7 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
 
         g0 = (p.get("git") or [{}])[0]
         projs.append({
-            "id": p["id"], "name": p["name"], "tier": p["tier"],
+            "id": p["id"], "name": p["name"], "status": p["status"],
             # Whether a human wrote this entry. Without it a null tier and a
             # stated one are indistinguishable to stage 2, which is exactly the
             # confusion that makes a model fill the gap with something plausible.

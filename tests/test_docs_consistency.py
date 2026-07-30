@@ -174,17 +174,17 @@ class Architecture(unittest.TestCase):
         self.assertEqual(sorted(named - real), [],
                          "named in ARCHITECTURE.md but not a real command")
 
-    def test_it_does_not_claim_discovery_invents_a_tier(self):
+    def test_it_does_not_claim_discovery_invents_a_status(self):
         """Tied to the code, not to a phrase.
 
-        While `DISCOVERED_TIER` is None the doc must not describe a discovered
+        While `DISCOVERED_STATUS` is None the doc must not describe a discovered
         project as carrying a placeholder, neutral or otherwise. If someone
         deliberately reintroduces a default tier, this assertion stops applying
         on its own rather than having to be remembered.
         """
         from nextbrief import discovery
 
-        if discovery.DISCOVERED_TIER is not None:
+        if discovery.DISCOVERED_STATUS is not None:
             self.skipTest("a default tier exists again; the prose may describe it")
         text = self._text().lower()
         for phrase in ("neutral placeholder", "placeholder tier",

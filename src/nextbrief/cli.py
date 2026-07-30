@@ -38,8 +38,10 @@ from . import __version__, resources
 from .annotate import (
     ANNOTATIONS_NAME,
     QUESTIONS,
+    current_answer,
     needs_annotating,
     record_answers,
+    store_answer,
 )
 from .frontmatter import parse_frontmatter
 from .fs import rewrite_fields, write_outside_workspace, write_text
@@ -1179,6 +1181,22 @@ def cmd_permissions(ws: Workspace, args: argparse.Namespace, cat: Optional[Catal
 
 
 
+def _looks_like_date(text: str) -> bool:
+    """A date the renderer can actually use.
+
+    Validated at the point of entry rather than trusted, because a deadline is
+    the one answer that changes ranking on its own: the boost keys on days
+    remaining, and a string that never parses is a deadline that silently never
+    fires. Refusing it here costs one retype; accepting it costs a date nobody
+    is warned about.
+    """
+    try:
+        dt.date.fromisoformat(text.strip())
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
     """Ask, in one sitting, the questions only a person can answer.
 
@@ -1237,21 +1255,32 @@ def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
         pid = str(proj.get("id"))
         print("")
         print("== %s ==" % (proj.get("name") or pid))
-        ice: Dict[str, Any] = {}
+        got: Dict[str, Any] = {}
         for q in QUESTIONS:
-            if (proj.get("ice") or {}).get(q.field) is not None:
+            if current_answer(proj, q) is not None:
                 continue
             print("")
             print("   " + tr(cat, q.key, q.key))
-            for i, (_v, key) in enumerate(q.choices, 1):
-                print("     %d) %s" % (i, tr(cat, key, key)))
-            picked = _ask_choice(len(q.choices), tr(cat, "review.skip", "Enter to skip"))
-            if picked is None:
-                continue
-            ice[q.field] = q.choices[picked - 1][0]
+            if q.kind == "date":
+                typed = input("     > ").strip()
+                if not typed:
+                    continue
+                if not _looks_like_date(typed):
+                    print("     " + tr(cat, "review.bad_date",
+                                       "Not a date I can read -- skipping."))
+                    continue
+                value = typed
+            else:
+                for i, (_v, key) in enumerate(q.choices, 1):
+                    print("     %d) %s" % (i, tr(cat, key, key)))
+                picked = _ask_choice(len(q.choices), tr(cat, "review.skip", "Enter to skip"))
+                if picked is None:
+                    continue
+                value = q.choices[picked - 1][0]
+            store_answer(got, q, value, cat)
         # Only record a project the user actually answered something for.
-        if ice:
-            answers[pid] = {"ice": ice}
+        if got:
+            answers[pid] = got
 
     n = record_answers(ws, answers)
     if n:

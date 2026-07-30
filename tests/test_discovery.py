@@ -57,17 +57,17 @@ class Adoption(DiscoverCase):
         self.assertEqual(entry["name"], "newthing")
         self.assertTrue(entry["discovered"])
 
-    def test_no_tier_and_no_ice_are_stated_rather_than_guessed_at(self):
+    def test_no_status_and_no_ice_are_stated_rather_than_guessed_at(self):
         # A synthesised midpoint is not a neutral guess, it is an assertion, and
         # `tier in ("flagship", "active")` is the entry condition for the
         # neglected and stalled verdicts. A placeholder tier would have the engine
         # invent an importance and then report the consequences back as a finding.
         self.dirs("newthing")
         entry = discover(self.root, {}, self.ws)[0]
-        self.assertIsNone(entry["tier"])
+        self.assertIsNone(entry["status"])
         self.assertIsNone(entry["ice"])
         self.assertIsNone(entry["goal_one_line"])
-        self.assertIsNone(discovery.DISCOVERED_TIER)
+        self.assertIsNone(discovery.DISCOVERED_STATUS)
         self.assertIsNone(discovery.DISCOVERED_ICE)
 
     def test_version_control_is_checked_rather_than_assumed(self):

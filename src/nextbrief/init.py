@@ -98,7 +98,7 @@ EMPTY_PROJECTS = """\
     //     "name": "My Project",
     //     "paths": ["my-project"],
     //     "git": "auto",
-    //     "tier": "active",
+    //     "status": "active",
     //     "horizon": "month",
     //     "goal_one_line": "in one sentence, what does done look like?",
     //     "ice": { "impact": 3, "confidence": 3, "effort": 3 }
@@ -214,17 +214,6 @@ def _age_days(iso_date: Optional[str]) -> Optional[int]:
         return None
 
 
-def _tier(cand: Candidate) -> str:
-    age = _age_days(cand.last_activity)
-    if age is None:
-        return "maintenance"
-    if age <= ACTIVE_DAYS:
-        return "active"
-    if age <= MAINTENANCE_DAYS:
-        return "maintenance"
-    return "dormant"
-
-
 def _slug(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug or "project"
@@ -254,7 +243,6 @@ def draft_entry(cand: Candidate, used_ids: set) -> Dict[str, Any]:
         # stating, because "this project has no version control" is itself a fact
         # the brief should be able to report.
         "git": "auto" if cand.is_git else "none",
-        "tier": _tier(cand),
         "goal_one_line": "TODO: in one sentence, what does done look like?",
         "horizon": "month",
         "ice": {"impact": 3, "confidence": 3, "effort": 3},

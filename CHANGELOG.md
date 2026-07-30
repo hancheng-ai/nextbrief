@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`review` asks four questions instead of one**, and no two of them are the
+  same question in other words:
+
+  | | asks | lands in |
+  |---|---|---|
+  | impact | what changes if this succeeds | `ice.impact` — the score base |
+  | positioning | what it is meant to *become* | `positioning` |
+  | status | what phase it is in | `status` — which verdicts may fire |
+  | urgency | a date, if one matters | `deadlines` |
+
+  They are separable by counter-example, which is the test for whether a question
+  earns its place: a project can be small today and be the thing everything else
+  is planned around (impact vs positioning), busy and finished evolving (activity
+  vs status), and important with no date at all (impact vs urgency).
+
+  Urgency is asked as a **date, not a rating**. A stored "urgency: 4" is wrong
+  within a week; a date stays true and recomputes its own urgency every morning.
+  It is validated on entry, because a deadline that never parses is a deadline
+  that silently never fires.
+
+  `ASKED_VERSION` moves to 3, so answers given to the one-question version are
+  asked again rather than reinterpreted.
+
+- **`init` no longer guesses a phase from file age.** It used to write
+  `active`/`maintenance`/`dormant` based on how recently a directory had been
+  touched, which is the conflation `status` exists to end: age tells you whether
+  something is *hot*, not whether its owner considers it finished. A busy project
+  can be one that has stopped evolving. `init` now writes no phase and `review`
+  asks.
+
+### Added
+
 - **`status`** — a project's phase: `active`, `maintenance`, `frozen`, `done`.
 
   `tier` said two things at once and could answer only one of them at a time.
