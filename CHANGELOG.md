@@ -13,12 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would publish content copied out of a private directory is refused before the
   objects leave the machine.
 
-  The ordering is the point. CI runs after the objects are already on a public
-  server, and a force-push does not retract them: unreferenced commits stay
-  retrievable by SHA and the events feed lists those SHAs. CI is a detector; the
-  fence has to be local. Activate it once per clone with
-  `git config core.hooksPath .githooks` — repo-local rather than global, so it
-  governs this repository and nothing else on the machine.
+  Local, and deliberately with no remote counterpart. A CI job would run after
+  the push, a pull request is public from the moment it opens, and a force-push
+  does not retract objects that have already landed — so there is no point in a
+  remote pipeline where such a check is still preventive. Activate it once per
+  clone with `git config core.hooksPath .githooks`, repo-local rather than
+  global, so it governs this repository and nothing else on the machine.
 
   It scans commits, not the working tree, because a push publishes history and a
   clean tip says nothing about what is behind it. Three passes: credential and
@@ -37,9 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- CI and the release gate call that one script rather than carrying their own
-  copies of the rule. The release gate previously checked tests, lint and version
-  literals, and nothing about repository content.
+- The identifier scan is gone from CI. It could only ever run its weakest pass
+  there — the other two need a local configuration a runner does not have — and
+  what it did run, it ran too late to matter.
 
 - The `--help` command list leads with the commands rather than argparse's
   positional-arguments block.

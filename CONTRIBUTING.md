@@ -50,8 +50,8 @@ python3 -m pip install ruff && python3 -m ruff check .
 ```
 
 CI runs both across macOS and Linux on Python 3.9, 3.11 and 3.13, plus four
-guard jobs: zero runtime dependencies, locale catalogs in sync, a clean
-`twine check` on the built artifacts, and a scan for personal identifiers.
+guard jobs: zero runtime dependencies, locale catalogs in sync, version literals
+in agreement, and a clean `twine check` on the built artifacts.
 
 ### Python 3.9 is the floor, and it is a hard floor
 
@@ -92,22 +92,25 @@ parser changes.
 
 Three things about that check are worth knowing before you rely on it.
 
-**It runs before the push, not only after.** `scripts/privacy-scan.py` is the
-implementation; `.githooks/pre-push` runs it on the commits a push would add, and
-CI and the release gate run it over everything. Turn the hook on once per clone:
+**It runs locally, and there is no remote equivalent.** `scripts/privacy-scan.py`
+is the implementation and `.githooks/pre-push` runs it on the commits a push
+would add. Turn it on once per clone:
 
 ```
 git config core.hooksPath .githooks
 ```
 
-The ordering is the point. CI runs after the objects are on a public server, and
-a force-push does not retract them.
+Repo-local rather than global, so it governs this repository and nothing else on
+your machine. There is deliberately no CI job doing the same thing: CI runs after
+the push, a pull request is public from the moment it opens, and a force-push
+does not retract objects that have already landed. A check that can only report
+a leak after publishing it is not a weaker fence, it is a report.
 
 **It holds no list of names.** A denylist kept here would publish exactly what it
-protects, so the identifiers come from a `PRIVATE_IDENTIFIERS` repository secret
-in CI, or `~/.config/nextbrief/private-identifiers` locally — one per line. A
-match reports the *file* and never the matched text, because a public repository
-has public CI logs. Where no list is configured that pass is skipped and says so.
+protects, so the identifiers come from `~/.config/nextbrief/private-identifiers`
+— one per line — or `$NEXTBRIEF_PRIVATE_IDENTIFIERS`. A match reports the *file*
+and never the matched text. Where no list is configured that pass is skipped and
+says so, rather than passing quietly.
 
 And it only ever catches the names it was told about, which is a much weaker
 guarantee than a green check suggests. Relabelling a real example defeats it

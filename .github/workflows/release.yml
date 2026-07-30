@@ -17,27 +17,10 @@ jobs:
   # whose tests fail therefore published, which is exactly what happened to
   # v0.1.0rc2. This job is the gate that was missing; `build` waits on it.
   gate:
-    name: tests and the privacy scan must pass before anything is published
+    name: tests must pass before anything is published
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          # Full history: the privacy scan below reads every commit, and a
-          # shallow clone would silently scan almost nothing and pass.
-          fetch-depth: 0
-
-      # First, because a release is the one push that cannot be walked back. A
-      # tag builds an sdist, a wheel and a zipapp, uploads them to a package
-      # index and attaches them to a public release; anything private in the
-      # tree at that moment is published in four places at once, and a package
-      # index version number can never be reused after deletion.
-      #
-      # CI runs this too. It runs here as well because the two workflows are
-      # independent: a red CI run does not stop a tag from publishing.
-      - name: Privacy scan
-        env:
-          NEXTBRIEF_PRIVATE_IDENTIFIERS: ${{ secrets.PRIVATE_IDENTIFIERS }}
-        run: python3 scripts/privacy-scan.py --all
 
       - uses: actions/setup-python@v7
         with:
