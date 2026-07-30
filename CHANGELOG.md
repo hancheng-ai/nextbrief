@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/privacy-scan.py`, and a `pre-push` hook that runs it.** The check
+  that content from a private workspace never reaches this repository now runs
+  *before* a push rather than after it.
+
+  That ordering is the whole point. CI runs after the objects are already on a
+  public server, and a force-push does not retract them: unreferenced commits
+  stay retrievable by SHA and the events feed lists those SHAs. CI is a detector;
+  the fence has to be local. Activate it once per clone with
+  `git config core.hooksPath .githooks`.
+
+  It scans commits, not the working tree, because a push publishes history and a
+  clean tip says nothing about what is behind it. Three passes: credential and
+  home-path shapes (built in, generic); an identifier list supplied out of band;
+  and, when a private workspace is reachable, lines that appear in both — the
+  only pass that can catch an example lifted from real notes and relabelled,
+  where there is no name left to match. Each pass announces itself when it
+  cannot run, because a guard that silently checks less than you think is worse
+  than one that is plainly absent.
+
+### Changed
+
+- CI and the release gate both call that one script instead of carrying their
+  own copies of the rule. The release gate did not check for private content at
+  all, which meant a tag could publish to a package index, a public release and
+  an attestation while CI was red — and for several releases it did.
+
+- The identifier list moves out of `.github/workflows/ci.yml` entirely. A
+  denylist kept in the repository publishes the names it protects; it now comes
+  from a `PRIVATE_IDENTIFIERS` secret in CI, or `~/.config/nextbrief/` locally,
+  and a match reports the file without ever echoing what matched.
+
+
 ### Fixed
 
 - **`nextbrief context` never printed `capability`.** The field reached the
