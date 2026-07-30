@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Two ways to answer `review` besides the terminal.**
+
+  `nextbrief review` now opens the whole review as one file in `$EDITOR` — every
+  project, every question, whatever is already known left visible while the rest
+  is filled in. Save and close to record, like `git commit`.
+
+  `nextbrief review --web` serves the same review as a browser form instead.
+  This costs a socket, not a dependency: `webbrowser` already opens `BRIEF.html`
+  and `http.server` is standard library. It binds 127.0.0.1 on a port the OS
+  picks, the URL carries a one-shot token so another tab cannot post to it by
+  guessing, and it stops after one answer. A test asserts the module imports
+  nothing outside the standard library, because this is the file most likely to
+  tempt someone away from the zero-dependency rule.
+
+  `nextbrief review --prompt` keeps the original question-at-a-time loop, and it
+  is still what runs where there is no `$EDITOR`.
+
+  A prompt loop was the wrong shape for four heterogeneous questions across a
+  dozen projects: fixed order, one project visible at a time, no way back, and a
+  free-text date made as awkward as a menu.
+
+  All three go through one coercion function. Two validators would eventually
+  disagree, and the disagreement would show up as an answer that records from one
+  input and vanishes from another. A hand-edited line that will not parse costs
+  that line and nothing else — the file is edited by a person, and one mistyped
+  date should not discard eleven other projects' answers.
+
+### Added
+
 - **`review` asks four questions instead of one**, and no two of them are the
   same question in other words:
 

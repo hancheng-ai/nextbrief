@@ -38,9 +38,12 @@ from . import __version__, resources
 from .annotate import (
     ANNOTATIONS_NAME,
     QUESTIONS,
+    coerce_answer,
     current_answer,
     needs_annotating,
+    parse_review_form,
     record_answers,
+    render_review_form,
     store_answer,
 )
 from .frontmatter import parse_frontmatter
@@ -1181,6 +1184,66 @@ def cmd_permissions(ws: Workspace, args: argparse.Namespace, cat: Optional[Catal
 
 
 
+def _editor_command() -> Optional[List[str]]:
+    """The editor to open, or None if the environment names none.
+
+    `$VISUAL` before `$EDITOR`, which is the convention every other tool that
+    does this follows. No fallback to a guessed binary: opening something the
+    reader did not choose, in a terminal, is how people end up trapped in an
+    editor they cannot exit.
+    """
+    for name in ("VISUAL", "EDITOR"):
+        raw = os.environ.get(name)
+        if raw and raw.strip():
+            try:
+                parts = shlex.split(raw)
+            except ValueError:
+                parts = [raw]
+            if parts:
+                return parts
+    return None
+
+
+def _edit_text(seed: str, suffix: str = ".txt") -> Optional[str]:
+    """Open `seed` in the reader's editor and return what came back.
+
+    None when there is no editor, the editor failed, or the text came back
+    unchanged -- all three mean "no answers", and none of them is an error worth
+    a stack trace.
+
+    The scratch file is a real temporary file rather than something inside the
+    workspace: it is not the reader's data and it should not survive a crash as
+    though it were.
+    """
+    command = _editor_command()
+    if command is None:
+        return None
+    import tempfile
+
+    handle, path = tempfile.mkstemp(prefix="nextbrief-review-", suffix=suffix)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(seed)
+        try:
+            proc = subprocess.run(command + [path])
+        except OSError as exc:
+            _err("could not start %s: %s" % (command[0], exc))
+            return None
+        if proc.returncode != 0:
+            return None
+        try:
+            with open(path, encoding="utf-8") as fh:
+                edited = fh.read()
+        except OSError:
+            return None
+        return None if edited == seed else edited
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _looks_like_date(text: str) -> bool:
     """A date the renderer can actually use.
 
@@ -1243,6 +1306,55 @@ def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
     if not targets:
         print(tr(cat, "review.nothing", "Nothing to ask about -- every active project has an answer."))
         return EXIT_OK
+
+    # The form comes first, and the prompt loop is the fallback rather than the
+    # other way round. Four heterogeneous questions across a dozen projects is
+    # what a prompt loop handles worst: fixed order, one project visible at a
+    # time, no way back, and a free-text date made as awkward as a menu.
+    if getattr(args, "web", False):
+        from .webform import collect
+
+        raw = collect(targets, cat)
+        if raw is None:
+            print(tr(cat, "review.nothing_filled",
+                     "Nothing filled in, so nothing was recorded."))
+            return EXIT_OK
+        # Through the same coercion the editor form uses, so two input paths
+        # cannot disagree about what a valid answer is.
+        by_field = {q.field: q for q in QUESTIONS}
+        answers: Dict[str, Any] = {}
+        for pid, fields in raw.items():
+            got: Dict[str, Any] = {}
+            for field, value in fields.items():
+                q = by_field.get(field)
+                if q is None:
+                    continue
+                parsed = coerce_answer(q, value)
+                if parsed is not None:
+                    store_answer(got, q, parsed, cat)
+            if got:
+                answers[pid] = got
+        n = record_answers(ws, answers)
+        print(tr(cat, "review.saved", "Recorded {n} project(s) in {path}.",
+                 n=n, path=ANNOTATIONS_NAME) if n
+              else tr(cat, "review.nothing_filled",
+                      "Nothing filled in, so nothing was recorded."))
+        return EXIT_OK
+
+    if not getattr(args, "prompt", False):
+        seed = render_review_form(targets, cat)
+        edited = _edit_text(seed)
+        if edited is not None:
+            answers = parse_review_form(edited, known={str(p.get("id")) for p in targets})
+            n = record_answers(ws, answers)
+            print(tr(cat, "review.saved", "Recorded {n} project(s) in {path}.",
+                     n=n, path=ANNOTATIONS_NAME) if n
+                  else tr(cat, "review.nothing_filled",
+                          "Nothing filled in, so nothing was recorded."))
+            return EXIT_OK
+        if _editor_command() is None and sys.stdin.isatty():
+            print(tr(cat, "review.no_editor",
+                     "No $EDITOR set, so asking here instead."))
 
     if not sys.stdin.isatty():
         print(tr(cat, "review.not_a_tty",
@@ -1618,6 +1730,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("review", "answer the questions only you can answer")
     p.add_argument("--all", action="store_true",
                    help="restate every answer, not only the ones that have expired")
+    p.add_argument("--prompt", action="store_true",
+                   help="ask in the terminal instead of opening an editor")
+    p.add_argument("--web", action="store_true",
+                   help="answer in a browser form instead (loopback only)")
 
     p = add("permissions", "print or install the pre-approval rules an agent needs")
     p.add_argument("--merge-into", metavar="FILE",

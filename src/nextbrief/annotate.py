@@ -49,12 +49,15 @@ __all__ = [
     "apply_annotations",
     "load_annotations",
     "RESTATE_AFTER_DAYS",
+    "coerce_answer",
     "current_answer",
     "store_answer",
     "needs_annotating",
     "pending_count",
     "question_targets",
     "record_answers",
+    "render_review_form",
+    "parse_review_form",
 ]
 
 ANNOTATIONS_NAME = "annotations.jsonc"
@@ -350,6 +353,106 @@ def apply_annotations(reg: Dict[str, Any], annotations: Dict[str, Any]) -> Dict[
     out = dict(reg)
     out["projects"] = projects
     return out
+
+
+FORM_MARKER = "# nextbrief review"
+
+
+def _choice_summary(q, cat) -> str:
+    parts = []
+    for value, key in q.choices:
+        label = cat.t(key) if cat is not None else key
+        parts.append("%s = %s" % (value, label))
+    return "   |   ".join(parts)
+
+
+def render_review_form(projects: Sequence[Dict[str, Any]], cat=None) -> str:
+    """The whole review as one editable file.
+
+    Four heterogeneous questions across a dozen projects is the shape a terminal
+    prompt loop handles worst: it asks in a fixed order, shows one project at a
+    time, cannot go back, and makes a free-text date as awkward as a menu. A file
+    shows every project at once, lets the answers be written in any order, and
+    keeps whatever was already known visible while the rest is filled in.
+
+    Blank means unanswered, and unanswered means asked again -- there is no way
+    to spell "I looked and I have no opinion", because that is not a state the
+    engine can use.
+    """
+    lines = [FORM_MARKER, "#",
+             "# Fill in what you can and save. Anything left blank is simply asked",
+             "# again next time. Lines beginning with # are ignored.",
+             "#"]
+    for q in QUESTIONS:
+        prompt = cat.t(q.key) if cat is not None else q.key
+        lines.append("# %-12s %s" % (q.field, prompt))
+        if q.choices:
+            lines.append("# %-12s %s" % ("", _choice_summary(q, cat)))
+    lines.append("")
+
+    for proj in projects:
+        pid = str(proj.get("id"))
+        name = proj.get("name") or pid
+        lines.append("[%s] %s" % (pid, name) if name != pid else "[%s]" % pid)
+        for q in QUESTIONS:
+            have = current_answer(proj, q)
+            lines.append("%-12s %s" % (q.field + ":", "" if have is None else have))
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def parse_review_form(text: str, known=None) -> Dict[str, Dict[str, Any]]:
+    """Answers out of an edited form. Unparseable lines are skipped, not fatal.
+
+    `known` restricts which ids are accepted, so a typo in a section header is
+    dropped rather than silently creating an answer for a project that does not
+    exist -- which would be recorded, never displayed, and never explained.
+    """
+    by_field = {q.field: q for q in QUESTIONS}
+    out: Dict[str, Dict[str, Any]] = {}
+    pid = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            head = line[1:].split("]", 1)
+            pid = head[0].strip() if len(head) == 2 else None
+            if known is not None and pid not in known:
+                pid = None
+            continue
+        if pid is None or ":" not in line:
+            continue
+        field, _, value = line.partition(":")
+        q = by_field.get(field.strip())
+        value = value.strip()
+        if q is None or not value:
+            continue
+        parsed = coerce_answer(q, value)
+        if parsed is None:
+            continue
+        store_answer(out.setdefault(pid, {}), q, parsed)
+    return out
+
+
+def coerce_answer(q, value: str):
+    """A typed answer as the field's own type, or None if it is not one.
+
+    Silently dropping a bad value rather than raising: this file is hand-edited,
+    and one mistyped line should cost that line, not the other eleven projects'
+    answers.
+    """
+    if q.kind == "date":
+        try:
+            dt.date.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+        return value
+    allowed = [v for v, _k in q.choices]
+    for candidate in allowed:
+        if value == str(candidate):
+            return candidate
+    return None
 
 
 def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]],
