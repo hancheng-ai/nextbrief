@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import html
 import secrets
+import socketserver
 import threading
 import urllib.parse
 import webbrowser
@@ -135,6 +136,30 @@ def _parse(body: str, known) -> Dict[str, Dict[str, str]]:
     return out
 
 
+class _LoopbackServer(HTTPServer):
+    """`HTTPServer`, minus the reverse DNS lookup that binding does.
+
+    `HTTPServer.server_bind` sets `server_name` from `socket.getfqdn(host)`.
+    Nothing here ever reads `server_name` -- the URL below is built from the
+    literal loopback address and the port the OS handed back -- so on a machine
+    whose resolver has nothing to say about 127.0.0.1 the bind blocks until that
+    lookup times out, entirely to compute a string no line of code asks for.
+
+    It is not hypothetical and it is not only a test problem. It is seconds on a
+    CI runner, and for someone running `review --web` it is the same silent wait
+    between the command and the browser opening, with nothing printed to explain
+    it. A command whose first act is an unexplained pause reads as broken.
+    """
+
+    def server_bind(self):
+        # TCPServer's bind, then the two assignments `HTTPServer` makes after it
+        # -- with the `getfqdn` between them dropped. Deliberately not `super()`:
+        # that is the implementation being avoided.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = self.server_address[0]
+        self.server_port = self.server_address[1]
+
+
 def collect(projects: Sequence[Dict[str, Any]], cat=None,
             open_browser: bool = True) -> Optional[Dict[str, Dict[str, str]]]:
     """Serve the form once and return what came back, or None.
@@ -190,7 +215,7 @@ def collect(projects: Sequence[Dict[str, Any]], cat=None,
             """Silence. The access log would be the only thing this command
             prints, and it says nothing the reader wants."""
 
-    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server = _LoopbackServer(("127.0.0.1", 0), Handler)
     url = "http://127.0.0.1:%d/%s" % (server.server_port, token)
     server.timeout = TIMEOUT_SECONDS
 

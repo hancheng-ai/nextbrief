@@ -198,12 +198,48 @@ class TheBrowserFormOverASocket(TempCase):
             target=lambda: result.update(answers=webform.collect(PROJECTS, load_catalog("en"))),
             daemon=True)
         thread.start()
-        for _ in range(100):
+        # Slack for thread scheduling on a loaded runner, and nothing else.
+        # Binding is now a syscall, so anything approaching this budget is a real
+        # regression rather than a machine having a slow minute -- see
+        # `test_binding_does_not_wait_on_a_resolver`, which pins the one thing
+        # that used to make it slow.
+        for _ in range(250):
             if "url" in self.opened:
                 break
             time.sleep(0.02)
         self.assertIn("url", self.opened, "the form never started")
         return result, thread, self.opened["url"]
+
+    def test_binding_does_not_wait_on_a_resolver(self):
+        """Opening a loopback socket must not depend on reverse DNS.
+
+        `HTTPServer.server_bind` sets `server_name` from `socket.getfqdn(host)`.
+        Nothing in `webform` reads `server_name`, so on a machine whose resolver
+        has nothing to say about 127.0.0.1 the whole of that wait buys a string
+        no line of code asks for. It was seconds on the macOS runners -- three
+        socket tests failed there, on every build, while passing everywhere else
+        -- and the same wait sat between a person typing `review --web` and their
+        browser opening, unexplained.
+
+        Asserted as "does not call it" rather than "is fast enough". A duration
+        assertion on a shared runner is a flaky test, and the defect was never
+        really about the duration: it was about asking a question whose answer is
+        discarded.
+        """
+        import socket
+
+        calls = []
+        real = socket.getfqdn
+        socket.getfqdn = lambda *a: (calls.append(a), real(*a))[1]
+        self.addCleanup(setattr, socket, "getfqdn", real)
+
+        server = webform._LoopbackServer(("127.0.0.1", 0), webform.BaseHTTPRequestHandler)
+        self.addCleanup(server.server_close)
+        self.assertEqual(calls, [], "binding performed a reverse DNS lookup")
+        # The two fields `HTTPServer.server_bind` exists to set are still set,
+        # and the port is the one the URL is built from.
+        self.assertEqual(server.server_name, "127.0.0.1")
+        self.assertEqual(server.server_port, server.socket.getsockname()[1])
 
     def test_it_binds_to_loopback_only(self):
         result, thread, url = self._serve()

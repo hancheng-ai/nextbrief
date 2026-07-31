@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`review --web` no longer waits on a name server before opening the browser.**
+  `HTTPServer.server_bind` sets `server_name` from `socket.getfqdn(host)`, and
+  nothing in `webform` ever reads `server_name` — the URL is built from the
+  literal loopback address and the port the OS handed back. On a machine whose
+  resolver has nothing to say about `127.0.0.1`, binding therefore blocked until
+  that lookup timed out, entirely to compute a string no line of code asks for.
+
+  It was seconds on the macOS runners, where it failed three socket tests on
+  every build while passing everywhere else, and it was the same silent wait
+  between someone typing `review --web` and their browser appearing. A command
+  whose first act is an unexplained pause reads as broken.
+
+  The regression test asserts that binding *does not call* `getfqdn`, rather than
+  that binding is fast. A duration assertion on a shared runner is a flaky test,
+  and the defect was never about the duration — it was about asking a question
+  whose answer is thrown away.
+
 - **The zero-dependency guard now runs on the interpreter it exists for.** The
   test that asserts `webform.py` imports nothing outside the standard library
   used `sys.stdlib_module_names`, which arrived in 3.10. On the 3.9 floor it
