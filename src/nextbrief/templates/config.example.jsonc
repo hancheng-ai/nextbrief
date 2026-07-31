@@ -15,7 +15,6 @@
 
   "schedule": {
     "slot": "21:30",              // intended run time, local clock
-    "tz_offset_hours": 0,         // your UTC offset; the scheduler must not depend on system tz naming
     "late_warn_minutes": 360      // running this much later than the slot -> banner in the brief, and the activity windows are recomputed
   },
 
@@ -68,12 +67,13 @@
   },
 
   "neglect": {
-    // "Neglected" alert: a flagship/active project with zero evidence for this long.
-    "default_days": 30,
-    "renotify_days": 7,           // once a week, not once a day
-    // A project with an open decision goes under "decisions pending", not "neglected".
-    // Calling a deliberate pause procrastination is how the whole system loses your trust.
-    "exclude_when_blocked_by_decision": true
+    // "Neglected" alert: an active project with zero evidence for this long.
+    // Only `status: active` can earn the verdict -- `maintenance` is the
+    // declaration that a project is meant to be quiet.
+    "default_days": 30
+    // A project with an open decision goes under "decisions pending" rather than
+    // "neglected", always. Calling a deliberate pause procrastination is how the
+    // whole system loses your trust, so it is behaviour rather than a setting.
   },
 
   "caps": {
@@ -114,27 +114,21 @@
     // -> hook (deterministic, fires on its own). Promotion depends on VARIANCE, not on
     // repetition count: identical steps every time -> hook; same steps but the decision
     // moves -> skill; the decision itself not yet understood -> stay in explore.
-    "tiers": ["explore", "skill", "hook"],
-    "recheck_days": 30,
-    "recheck_budget_per_run": 2
-  },
-
-  "drift": {
-    "renotify_days": 14           // how long a stale/contradictory document stays quiet after being reported once
+    "tiers": ["explore", "skill", "hook"]
   },
 
   "notify": {
     // Where the notification goes. "auto" picks the first sink that works on this
     // machine and degrades to no notification rather than failing the run.
-    "sink": "auto",               // auto | none | <named sink>
-    // Silence rules. A system that tells you on time every day that nothing happened
-    // gets muted in week three.
-    "only_if": ["change", "deadline_lead", "new_stalled", "neglect", "decision_pending_new"],
+    "backend": "auto",            // auto | none | macos | libnotify
+    // Silence rules. A system that tells you on time every day that nothing
+    // happened gets muted in week three.
+    //
+    // These four are what `should_notify` implements, and nothing else is
+    // accepted -- a name it does not know is simply never true, which is silence
+    // where you asked for noise.
+    "only_if": ["change", "deadline_lead", "new_stalled", "neglect"],
     "title": "Today's brief"
-  },
-
-  "cost": {
-    "alert_usd_7d": 3.0
   },
 
   // Measured, running the same digest three times:
@@ -154,7 +148,6 @@
 
   "external_tools": {
     // Always optional: if the binary is absent, record tool_missing and carry on.
-    "scc": "scc",                 // lines of code + cyclomatic complexity, sub-second, zero tokens
-    "ccusage": "ccusage"          // token spend, read from local logs
+    "scc": "scc"                  // lines of code + cyclomatic complexity, sub-second, zero tokens
   }
 }

@@ -221,6 +221,40 @@ def slugify_path(p) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", str(p))
 
 
+def day_count(value, default: int, where: str, field: str, problems) -> int:
+    """A hand-written day count as a non-negative int, or `default` if it is not one.
+
+    `registry.jsonc` is edited by hand and `check_shapes` validates containers
+    rather than leaves, so a scalar like ``"lead_days": "21"`` reaches arithmetic
+    intact. Every one of these is compared or divided somewhere downstream, and a
+    string in a comparison is a `TypeError` raised out of the sense stage -- which
+    on the unattended path is a stack trace and no brief at all, for every other
+    project as well as the one with the typo. That is the failure rule 6 exists
+    to prevent.
+
+    ``null`` deserves its own mention, because it is the likeliest way in. A
+    ``.get(field, 21)`` returns the default only when the key is *absent*; written
+    out explicitly, which reads like "no window here", it returns None and takes
+    the run down.
+
+    Falls back and records rather than raising, and records rather than falling
+    back silently: a value its owner typed and the engine ignored should be
+    visible somewhere they will see it.
+
+    Booleans are refused because ``True`` is an ``int`` in Python and would pass
+    as a one-day window -- a typo scoring as a setting.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        problems.append({"path": where, "code": "bad_%s" % field,
+                         "why": "%s is not a number of days: %r" % (field, value)})
+        return default
+    if value != value or value in (float("inf"), float("-inf")):
+        problems.append({"path": where, "code": "bad_%s" % field,
+                         "why": "%s is not a finite number of days: %r" % (field, value)})
+        return default
+    return max(0, int(value))
+
+
 def days_between(older: Optional[dt.date], newer: dt.date) -> Optional[int]:
     if older is None:
         return None
@@ -1564,7 +1598,8 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                                             % (o.get("by"),)})
                 continue
             days_until = (d - as_of).days
-            lead = o.get("lead_days", 21)
+            lead = day_count(o.get("lead_days", 21), 21,
+                             "outcomes/" + oid, "lead_days", parse_failed)
             entry.update({
                 "by": d.isoformat(), "days_until": days_until, "lead_days": lead,
                 "in_lead_window": 0 <= days_until <= lead, "overdue": days_until < 0,
@@ -1776,7 +1811,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                                      "why": "deadline date is not a valid ISO date: %s" % (dl,)})
                 continue
             days_until = (d - as_of).days
-            lead = dl.get("lead_days", 21)
+            lead = day_count(dl.get("lead_days", 21), 21, pid, "lead_days", parse_failed)
             deadlines.append({
                 "date": dl["date"], "label": dl.get("label", ""),
                 "days_until": days_until, "lead_days": lead, "hard": dl.get("hard", False),
@@ -1926,7 +1961,9 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "open_decision": pr.get("open_decision"),
             "external_dependency": pr.get("external_dependency"),
             "automation_surface": pr.get("automation_surface"),
-            "neglect_days": pr.get("neglect_days", cfg["neglect"]["default_days"]),
+            "neglect_days": day_count(
+                pr.get("neglect_days", cfg["neglect"]["default_days"]),
+                cfg["neglect"]["default_days"], pid, "neglect_days", parse_failed),
             "live_url": pr.get("live_url"),
             "registry_notes": pr.get("notes"),
             "evidence": {
@@ -1970,6 +2007,21 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         lateness = None
         parse_failed.append({"path": "config.jsonc", "code": "bad_slot",
                              "why": "schedule.slot could not be parsed as HH:MM"})
+
+    # A config written before `tier` split into `status` and `positioning` still
+    # parses, and every number in its `tier_weight` table is now ignored. Said
+    # out loud rather than left to be discovered: the file still reads as though
+    # it configures the ranking, and nothing else would ever contradict it.
+    #
+    # Not translated, because it cannot be -- the old table weighed `flagship`
+    # and `active` differently and both are now `active`. Reporting is the honest
+    # move where migrating would have to invent the answer.
+    scoring_cfg = cfg.get("scoring") or {}
+    if "tier_weight" in scoring_cfg and "status_weight" not in scoring_cfg:
+        parse_failed.append({"path": "config.jsonc", "code": "retired_config_key",
+                             "why": "scoring.tier_weight is no longer read; "
+                                    "rename it to scoring.status_weight, whose keys "
+                                    "are active / maintenance / frozen / done"})
 
     for e in evidence_index.values():
         e["kinds"] = sorted(e["kinds"])   # idempotence: never depend on visit order

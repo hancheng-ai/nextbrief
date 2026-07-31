@@ -472,17 +472,32 @@ class Ranking(unittest.TestCase):
             self.assertGreaterEqual(score, 0.0, "days_since=%r went negative" % (days,))
             self.assertLessEqual(score, impact, "days_since=%r exceeded impact" % (days,))
 
-    def test_a_partial_tier_weight_does_not_delete_the_other_tiers(self):
-        # A flat dict update replaced the whole nested table, so naming one tier
-        # silently reset the other three to the 1.0 fallback -- invisible in the
-        # config file, which still reads as though it changed one number.
-        cfg = {"scoring": {"tier_weight": {"flagship": 1.5}}}
+    def test_a_partial_status_weight_does_not_delete_the_other_statuses(self):
+        # A flat dict update replaced the whole nested table, so naming one
+        # status silently reset the other three to the 1.0 fallback -- invisible
+        # in the config file, which still reads as though it changed one number.
+        cfg = {"scoring": {"status_weight": {"frozen": 0.5}}}
         merged = render.scoring_of(cfg)
-        self.assertEqual(merged["tier_weight"]["flagship"], 1.5)
-        self.assertEqual(merged["tier_weight"]["maintenance"], 0.6)
-        self.assertEqual(merged["tier_weight"]["dormant"], 0.4)
+        self.assertEqual(merged["status_weight"]["frozen"], 0.5)
+        self.assertEqual(merged["status_weight"]["maintenance"], 0.6)
+        self.assertEqual(merged["status_weight"]["done"], 0.0)
         # Scalars still replace wholesale.
         self.assertEqual(render.scoring_of({"scoring": {"decay_floor": 0.1}})["decay_floor"], 0.1)
+
+    def test_a_retired_tier_weight_changes_nothing_and_is_not_resurrected(self):
+        # It used to sit in SCORING_DEFAULTS under a comment promising it was
+        # "read only when `status_weight` is absent". No line of code kept that
+        # promise: `scoring_of` merges the defaults first, so `status_weight` was
+        # never absent and the branch could not be reached.
+        #
+        # Nor can the promise be kept. The old table weighed `flagship` 1.3 and
+        # `active` 1.0 and both migrate to the one status `active`, so there is
+        # no weight a translation could pick -- which is the ambiguity that split
+        # `tier` in the first place. `sense` reports the key instead; see
+        # `test_sense.RetiredConfigKeys`.
+        merged = render.scoring_of({"scoring": {"tier_weight": {"flagship": 99.0}}})
+        self.assertNotIn("tier_weight", render.SCORING_DEFAULTS)
+        self.assertEqual(merged["status_weight"]["active"], 1.0)
 
     def test_an_overdue_deadline_outranks_a_fresher_project(self):
         cfg = {}

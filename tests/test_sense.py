@@ -27,6 +27,7 @@ from helpers import (
 )
 
 from nextbrief import sense
+from nextbrief.jsonc import load_jsonc
 from nextbrief.paths import resolve_workspace
 
 
@@ -541,6 +542,89 @@ class FailOpen(TempCase):
         recorded = [f for f in snap["parse_failed"]
                     if f["code"] == "future_dated_evidence"]
         self.assertTrue(recorded, snap["parse_failed"])
+
+    def test_a_hand_written_lead_days_does_not_take_the_run_down(self):
+        """`registry.jsonc` invites hand-editing and `check_shapes` never reaches
+        this leaf, so `"lead_days": "21"` arrives here as a string and
+        `0 <= days_until <= lead` raises `TypeError` out of the sense stage.
+
+        On the unattended path that is a stack trace and no brief at all -- for
+        every other project too, which is exactly what rule 6 exists to prevent.
+
+        `null` is the one worth naming: `dl.get("lead_days", 21)` returns the
+        default only when the key is *absent*, so writing it explicitly as null,
+        which reads like "no lead window", is the fastest way to break the run.
+        """
+        ws = self.workspace()
+        reg = load_jsonc(str(ws / "registry.jsonc"))
+        reg["projects"][0]["deadlines"] = [
+            {"label": "hand-edited", "date": "2026-04-01", "lead_days": "21"},
+            {"label": "explicit null", "date": "2026-04-02", "lead_days": None},
+            {"label": "nonsense", "date": "2026-04-03", "lead_days": "soon"},
+        ]
+        (ws / "registry.jsonc").write_text(json.dumps(reg, indent=2), encoding="utf-8")
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        codes = [f["code"] for f in snap["parse_failed"]]
+        self.assertIn("bad_lead_days", codes)
+        # The deadline itself survives -- the date is still a fact, and only the
+        # window it was given is unreadable.
+        first = {p["id"]: p for p in snap["projects"]}[reg["projects"][0]["id"]]
+        self.assertEqual(len(first["deadlines"]), 3)
+        for d in first["deadlines"]:
+            self.assertIsInstance(d["lead_days"], int)
+            self.assertIsInstance(d["in_lead_window"], bool)
+
+    def test_a_hand_written_neglect_days_does_not_take_the_run_down(self):
+        # Same leaf, different field: `classify` compares `days_since` against it
+        # with `>`, so a string is a TypeError raised from inside the renderer.
+        ws = self.workspace()
+        reg = load_jsonc(str(ws / "registry.jsonc"))
+        reg["projects"][0]["neglect_days"] = "45"
+        (ws / "registry.jsonc").write_text(json.dumps(reg, indent=2), encoding="utf-8")
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        first = {p["id"]: p for p in snap["projects"]}[reg["projects"][0]["id"]]
+        self.assertIsInstance(first["neglect_days"], int)
+
+    def test_a_retired_scoring_key_is_reported_rather_than_ignored(self):
+        """`scoring.tier_weight` stopped being read when `tier` split into
+        `status` and `positioning`. Every number in it is now inert.
+
+        Reported rather than migrated, because migrating would have to invent an
+        answer: the old table weighed `flagship` and `active` differently and
+        both are now the single status `active`.
+
+        Reported rather than dropped, because a config file that still reads as
+        though it configures the ranking, and is not, is the quietest kind of
+        wrong -- nothing else in the system would ever contradict it.
+        """
+        ws = self.workspace()
+        # Through the package's own reader: the file is JSONC, and `json.loads`
+        # chokes on its first comment line.
+        cfg = load_jsonc(str(ws / "config.jsonc"))
+        cfg["scoring"].pop("status_weight", None)
+        cfg["scoring"]["tier_weight"] = {"flagship": 1.3, "dormant": 0.4}
+        (ws / "config.jsonc").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        codes = [f["code"] for f in snap["parse_failed"]]
+        self.assertIn("retired_config_key", codes)
+
+    def test_a_config_that_uses_the_current_key_is_not_nagged(self):
+        # The other half of the rule, and the one that decides whether the notice
+        # above is a defect: a correct config must produce no entry at all. A
+        # warning that fires for a harmless reason is how a warnings column stops
+        # being read.
+        ws = self.workspace()
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        codes = [f["code"] for f in snap["parse_failed"]]
+        self.assertNotIn("retired_config_key", codes)
 
     def test_missing_projects_root_aborts(self):
         # The one thing that must *not* fail open: an empty-but-plausible snapshot

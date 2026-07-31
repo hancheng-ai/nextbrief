@@ -207,3 +207,82 @@ class Architecture(unittest.TestCase):
         for key in documented - {"annotations.jsonc"}:
             self.assertIn('"%s"' % key, src,
                           "ARCHITECTURE.md documents %r but no module reads it" % key)
+
+
+class ShippedConfigTemplate(unittest.TestCase):
+    """Every key in the config a new user copies must be one the engine reads.
+
+    `nextbrief init` writes this file into the workspace, so each key in it is a
+    promise that turning the number changes something. Nine of them did not: a
+    `renotify_days` in two sections that no line of code has ever read, a
+    `recheck_budget_per_run`, a `cost.alert_usd_7d` for cost sensing that was
+    never built -- and a `notify.sink` where the sink layer reads
+    `notify.backend`, so setting it to "none" to stop notifications left them
+    switched on.
+
+    That last one is the shape that makes this worth a test rather than a
+    cleanup. A dead key is inert; a *misspelt* key is a setting that silently
+    does the opposite of what its owner asked, and nothing else in the system
+    would ever contradict the file.
+
+    Two keys are legitimately read by the prompt rather than by Python, and are
+    accepted here on that basis -- but note that a cap enforced only by asking
+    the model politely is not a cap. `docs/ARCHITECTURE.md` says so, and gate 4
+    exists because of it.
+    """
+
+    def _template(self):
+        from nextbrief.jsonc import load_jsonc
+        return load_jsonc(str(REPO_ROOT / "src" / "nextbrief" / "templates"
+                              / "config.example.jsonc"))
+
+    @staticmethod
+    def _leaves(obj, path=""):
+        for key, value in obj.items():
+            full = (path + "." + key) if path else key
+            if isinstance(value, dict):
+                yield from ShippedConfigTemplate._leaves(value, full)
+            else:
+                yield full, key
+
+    def _string_constants(self):
+        # String *constants*, parsed, not grepped. `ccusage` appeared in a
+        # comment while being read by nothing, and a grep would have called that
+        # a reference.
+        import ast
+
+        found = set()
+        for path in sorted((REPO_ROOT / "src" / "nextbrief").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    found.add(node.value)
+        return found
+
+    def _prompt_text(self):
+        return "".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((REPO_ROOT / "src" / "nextbrief" / "prompts").rglob("*.md")))
+
+    def test_every_key_it_ships_is_read_by_something(self):
+        constants = self._string_constants()
+        prompts = self._prompt_text()
+        orphans = [full for full, leaf in self._leaves(self._template())
+                   if leaf not in constants and leaf not in prompts]
+        self.assertEqual(orphans, [],
+                         "config.example.jsonc ships keys nothing reads: %s" % orphans)
+
+    def test_the_notify_reasons_it_lists_are_ones_should_notify_implements(self):
+        # The same defect one level down: `only_if` is a list of names, and a name
+        # `should_notify` does not know is never true. Asking for a notification
+        # in a vocabulary the code does not speak produces silence, which is
+        # indistinguishable from nothing having happened.
+        import inspect
+
+        from nextbrief import render
+
+        source = inspect.getsource(render.should_notify)
+        for reason in self._template()["notify"]["only_if"]:
+            self.assertIn('"%s"' % reason, source,
+                          "config lists notify reason %r that should_notify "
+                          "never tests" % reason)

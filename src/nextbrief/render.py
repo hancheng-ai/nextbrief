@@ -90,10 +90,17 @@ SCORING_DEFAULTS = {
     # small number: a finished project should leave the ranking, not linger at
     # the bottom of it.
     "status_weight": {"active": 1.0, "maintenance": 0.6, "frozen": 0.3, "done": 0.0},
-    # Read only when `status_weight` is absent, so a config written before the
-    # split keeps working. `flagship` has no entry here because it was never a
-    # phase -- it moved to `positioning`.
-    "tier_weight": {"flagship": 1.3, "active": 1.0, "maintenance": 0.6, "dormant": 0.4},
+    # There is deliberately no `tier_weight` fallback here, and the absence is
+    # the point. It sat in this dict with a comment promising it was "read only
+    # when `status_weight` is absent" -- a promise no line of code kept, because
+    # `scoring_of` merges these defaults first, so `status_weight` is never
+    # absent and the branch was unreachable by construction.
+    #
+    # It cannot be written, either. `tier` said two things at once: the old table
+    # weighed `flagship` 1.3 and `active` 1.0, and both migrate to the single
+    # status `active`. There is no answer to what that weight should now be,
+    # which is the ambiguity the split existed to end. A config still naming it
+    # is reported by `sense` rather than translated -- see `retired_config_key`.
 }
 
 
@@ -659,6 +666,26 @@ def is_judged(p) -> bool:
     return declared_impact(p) is not None
 
 
+def _number(value):
+    """A finite number, or None. Signed -- callers that need a floor say so.
+
+    `sense` validates these at the registry boundary now, but this module reads a
+    `snapshot.json` off disk without re-sensing, so it still meets values written
+    by an older version or edited by hand. Comparing an int with a str is a
+    `TypeError`, and one raised from inside `classify`'s sort key costs the whole
+    brief rather than one row.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
 def _age_days(value):
     """`days_since` as a non-negative number, or None if it is not a number.
 
@@ -683,15 +710,8 @@ def _age_days(value):
     trace and no brief at all. Booleans are excluded because ``True`` is an
     ``int`` and would score as one day old.
     """
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if number != number or number in (float("inf"), float("-inf")):
-        return None
-    return max(0.0, number)
+    number = _number(value)
+    return None if number is None else max(0.0, number)
 
 
 def score_project(p, cfg, outcomes=None):
@@ -739,10 +759,17 @@ def score_project(p, cfg, outcomes=None):
 
     boost = 1.0
     for d in _dated_commitments(p, outcomes):
-        if d.get("days_until", 0) < 0:
+        # Coerced on the way in for the same reason `_age_days` is: `sense` now
+        # validates these at the registry boundary, and this function still has
+        # to read a `snapshot.json` written before it did. `days_until` is signed
+        # -- an overdue commitment is negative and that is the whole point -- so
+        # only the window is floored.
+        until = _number(d.get("days_until"))
+        lead = _age_days(d.get("lead_days"))
+        if until is not None and until < 0:
             boost = max(boost, 1.0 + sc["deadline_boost_max"])
-        elif d.get("in_lead_window") and d.get("lead_days"):
-            frac = (d["lead_days"] - d["days_until"]) / float(d["lead_days"])
+        elif d.get("in_lead_window") and lead and until is not None:
+            frac = (lead - until) / float(lead)
             boost = max(boost, 1.0 + sc["deadline_boost_max"] * max(0.0, frac))
 
     # An undeclared status weighs 1.0 rather than nothing: `review` has simply
@@ -829,8 +856,9 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
         if status_of(p) == "active":
             if bootstrapped and not has_next and not by_proj.get(pid):
                 stalled.append(p)
-            d = ev.get("days_since")
-            if d is not None and d > (p.get("neglect_days") or 30):
+            d = _age_days(ev.get("days_since"))
+            limit = _age_days(p.get("neglect_days"))
+            if d is not None and d > (30 if limit is None else limit):
                 neglected.append(p)
         elif status_of(p) == "frozen" and bootstrapped:
             g = (p.get("git") or [{}])[0]

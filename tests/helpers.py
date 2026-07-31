@@ -224,7 +224,7 @@ BASE_CONFIG = {
     "scoring": {
         "half_life_days": 21,
         "decay_floor": 0.3,
-        "tier_weight": {"flagship": 1.3, "active": 1.0, "maintenance": 0.6, "dormant": 0.4},
+        "status_weight": {"active": 1.0, "maintenance": 0.6, "frozen": 0.3, "done": 0.0},
         "deadline_boost_max": 3.0,
     },
     "neglect": {"default_days": 30},
