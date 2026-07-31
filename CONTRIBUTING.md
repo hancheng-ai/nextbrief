@@ -101,10 +101,23 @@ git config core.hooksPath .githooks
 ```
 
 Repo-local rather than global, so it governs this repository and nothing else on
-your machine. There is deliberately no CI job doing the same thing: CI runs after
-the push, a pull request is public from the moment it opens, and a force-push
-does not retract objects that have already landed. A check that can only report
-a leak after publishing it is not a weaker fence, it is a report.
+your machine.
+
+**CI does not run this check, and cannot.** CI runs after the push, a pull
+request is public from the moment it opens, and a force-push does not retract
+objects that have already landed. A check that can only report a leak after
+publishing it is not a weaker fence, it is a report.
+
+What CI does run is a job called `leak-shapes`, and the name is deliberate. It is
+pass 1 alone — the generic shapes that are never publishable whoever they belong
+to, like a home directory path or a private key header. It exists for the single
+case the hook cannot cover: the line above has to be run once per clone, so a
+contributor who never ran it has no check at all. The other two passes read files
+that exist only on one machine, and `--shapes-only` makes the job say so rather
+than print two "did not run" notices that read like breakage.
+
+Do not treat that job going green as this section being satisfied. Turn the hook
+on.
 
 **It holds no list of names.** A denylist kept here would publish exactly what it
 protects, so the identifiers come from `~/.config/nextbrief/private-identifiers`

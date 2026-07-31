@@ -7,7 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The zero-dependency guard now runs on the interpreter it exists for.** The
+  test that asserts `webform.py` imports nothing outside the standard library
+  used `sys.stdlib_module_names`, which arrived in 3.10. On the 3.9 floor it
+  raised before reaching its assertion, so CI was red for two commits while a
+  local run on a newer interpreter reported green.
+
+  It now asks the import system where a module actually lives, which works on
+  every supported version and is the better question besides: a name list says
+  `json` is standard library, but cannot say whether *this* interpreter's `json`
+  came from there or from something earlier on `sys.path`. The negative case has
+  its own test, because a guard that has only ever been seen to pass is
+  indistinguishable from one that cannot fail.
+
+- **An age is no longer allowed to be negative.** The recency contest picks the
+  smallest age, so a file dated in the future won it outright and carried a
+  negative `days_since` into the scorer — where the decay term `0.5 ** (days /
+  half_life)` is bounded above zero and unbounded below it.
+
+  A file dated a year ahead scored 477911 against a normal maximum of 4. Far
+  enough ahead it stopped being a wrong number and became an `OverflowError`
+  raised from inside a sort key, which costs the whole brief rather than one row.
+  A machine clock ahead of this one, or an archive unpacked with its original
+  timestamps, is enough to do it.
+
+  Floored in `sense`, where it is also recorded rather than silently corrected,
+  and floored again in `render`, which re-reads an existing snapshot without
+  re-sensing. The bound is now a property test over every shape `days_since` can
+  hold.
+
+- **A hand-written `lead_days` or `neglect_days` no longer takes the run down.**
+  `registry.jsonc` invites hand-editing and `check_shapes` validates containers
+  rather than leaves, so `"lead_days": "21"` reached a comparison and raised
+  `TypeError` out of the sense stage — no brief at all, for every other project
+  as well as the one with the typo.
+
+  `"lead_days": null` did the same, and is the likeliest way in: a
+  `.get(field, 21)` returns its default only when the key is *absent*, so writing
+  it out explicitly, which reads like "no window here", broke the run.
+
 ### Changed
+
+- **The config template now contains only keys the engine reads.** `init` writes
+  that file into the workspace, so every key in it is a promise that changing the
+  number changes something. Nine were read by nothing: `renotify_days` in two
+  sections, `recheck_days`, `recheck_budget_per_run`, `tz_offset_hours`,
+  `exclude_when_blocked_by_decision`, `cost.alert_usd_7d`,
+  `external_tools.ccusage`, and `notify.sink`.
+
+  That last one was worse than dead. The sink layer reads `notify.backend`, so
+  setting `sink` to `"none"` to stop notifications left them switched on — a
+  setting that silently did the opposite of what its owner asked, with nothing in
+  the system to contradict the file. `notify.only_if` likewise listed a
+  `decision_pending_new` reason `should_notify` never tests, and a reason it does
+  not know is simply never true: silence where you asked for noise.
+
+  Two tests keep it that way, both parsing rather than grepping — `ccusage`
+  appeared in a comment while being read by nothing, and a grep would have called
+  that a reference.
+
+  The behaviour those keys described is unchanged where it existed: a project
+  blocked on a decision still goes under "decisions pending" rather than
+  "neglected", as behaviour rather than as a setting.
+
+- **`scoring.tier_weight` is reported as retired rather than silently ignored.**
+  It sat in the shipped defaults under a comment promising it was read whenever
+  `status_weight` was absent. No line of code kept that promise, and none could:
+  `scoring_of` merges the defaults first, so `status_weight` is never absent.
+
+  Nor can the promise be honoured now. The old table weighed `flagship` 1.3 and
+  `active` 1.0 and both migrate to the single status `active`, so there is no
+  weight a translation could pick — which is the ambiguity that split the field.
+  A config still naming it is recorded in `parse_failed` with the rename to make.
+
+### Added
+
+- **A `leak-shapes` CI job, which is a report and not a fence.** The fence stays
+  `.githooks/pre-push`, which runs before anything leaves the machine. This runs
+  after, so it can only ever report.
+
+  It covers the one case the hook cannot: the hook needs activating once per
+  clone, so a contributor who never ran that line has no check at all. Pass 1 is
+  the only pass a runner can do — the other two read files that exist on one
+  machine — and it names nobody, so its output is safe in a public log. The new
+  `--shapes-only` flag makes the job say which passes it skipped instead of
+  printing two "did not run" notices that read like breakage.
+
+  It is scoped to what a change adds rather than to the whole history, so it
+  cannot go red for something already public and unfixable.
 
 - **`tier` is gone from everything except the migration that reads it.** The
   shipped registry template, the config template, the example workspace, the
