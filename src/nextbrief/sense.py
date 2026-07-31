@@ -1823,6 +1823,25 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             except ValueError:
                 continue
             age = (as_of - d).days
+            # Floored, because the contest below picks the SMALLEST age, so a
+            # date in the future wins it outright and then travels on as a
+            # negative "days since" -- which the scorer raises 0.5 to the power
+            # of, unbounded. See `render._age_days`.
+            #
+            # Floored rather than skipped: a file stamped tomorrow was almost
+            # certainly touched today, and dropping the candidate would report
+            # "no signal" for a project that is plainly moving. Clamping keeps
+            # the useful half of the observation and discards only the
+            # impossible half.
+            if age < 0:
+                # Rare and actionable -- a machine clock ahead of this one, or an
+                # archive unpacked with its original timestamps. Recorded rather
+                # than silently normalised: an engine that quietly corrects its
+                # input teaches you to trust input it has corrected.
+                parse_failed.append({"path": pid, "code": "future_dated_evidence",
+                                     "detail": "%s date %s is after as_of %s"
+                                               % (kind, ds, as_of.isoformat())})
+                age = 0
             if (days_since is None or age < days_since
                     or (age == days_since and _rank(conf, kind) < _rank(conf, best_kind))):
                 days_since, best_kind, best_date = age, kind, ds

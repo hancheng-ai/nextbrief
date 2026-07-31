@@ -424,6 +424,54 @@ class Ranking(unittest.TestCase):
         # avoiding stays visible, and "unreadable" is not a reason to vanish.
         self.assertGreater(render.score_project(blank, cfg), 0.0)
 
+    def test_a_future_dated_project_cannot_outrank_a_worked_one(self):
+        # `days_since` is an age, and an age is not negative. It could be: sense
+        # subtracted a file's date from `as_of` with no floor, and the recency
+        # contest picks the SMALLEST age -- so one file dated in the future won
+        # the contest outright and carried a negative age into the scorer.
+        #
+        # `0.5 ** (days / half_life)` is bounded by 1.0 for days >= 0 and
+        # unbounded below it. A file a year ahead scored 477911 against a normal
+        # maximum of 4: five orders of magnitude, from a wrong clock on a NAS or
+        # an archive unpacked with its original timestamps. Silent, because
+        # nothing else in the brief reads `days_since` as a number.
+        cfg = {}
+        worked_today = make_project_entry(
+            evidence={"best_kind": "commit", "best_date": "2026-03-16", "days_since": 0,
+                      "signal": "hot", "caveat_code": None, "caveat": None}
+        )
+        ceiling = render.score_project(worked_today, cfg)
+        for ahead in (-1, -7, -365, -100000):
+            future = make_project_entry(
+                evidence={"best_kind": "file_mtime", "best_date": "2027-03-16",
+                          "days_since": ahead, "signal": "hot",
+                          "caveat_code": None, "caveat": None}
+            )
+            self.assertLessEqual(
+                render.score_project(future, cfg), ceiling,
+                "days_since=%s scored above a project worked on today" % ahead)
+
+    def test_the_decay_term_is_bounded_for_every_shape_days_since_can_take(self):
+        # The property, stated once: nothing `days_since` can hold makes the score
+        # exceed what impact alone allows. Tomorrow's parser bug is caught here
+        # rather than in a brief that puts the wrong project first for a week.
+        cfg = {}
+        # Read from the entry rather than written here: impact is the base the
+        # decay term multiplies, so the ceiling is whatever the fixture declares.
+        # Hard-coding it makes the test assert on the fixture instead of on the
+        # property.
+        impact = float(make_project_entry()["ice"]["impact"])
+        for days in (None, -100000, -365, -1, 0, 1, 21, 365, 100000,
+                     "not a number", True, float("nan")):
+            p = make_project_entry(
+                evidence={"best_kind": "commit", "best_date": "2026-03-16",
+                          "days_since": days, "signal": "hot",
+                          "caveat_code": None, "caveat": None}
+            )
+            score = render.score_project(p, cfg)
+            self.assertGreaterEqual(score, 0.0, "days_since=%r went negative" % (days,))
+            self.assertLessEqual(score, impact, "days_since=%r exceeded impact" % (days,))
+
     def test_a_partial_tier_weight_does_not_delete_the_other_tiers(self):
         # A flat dict update replaced the whole nested table, so naming one tier
         # silently reset the other three to the 1.0 fallback -- invisible in the

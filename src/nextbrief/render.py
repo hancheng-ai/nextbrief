@@ -659,6 +659,41 @@ def is_judged(p) -> bool:
     return declared_impact(p) is not None
 
 
+def _age_days(value):
+    """`days_since` as a non-negative number, or None if it is not a number.
+
+    An age cannot be negative, and this is the layer that has to insist on it.
+    `sense` now floors it at 0 too, but `render` re-reads an existing
+    `snapshot.json` without re-sensing -- so a snapshot written before that fix,
+    or by a future parser with a new bug, still arrives here. The same reasoning
+    as `status_of`: a guarantee that lives in only one of two layers is a
+    guarantee that lapses on upgrade.
+
+    What a negative value did: the decay term is ``0.5 ** (days / half_life)``,
+    which is bounded by 1.0 for days >= 0 and unbounded below it. One file dated
+    a year ahead -- a NAS with a wrong clock, an archive unpacked with its
+    original timestamps -- scored 477911 against a normal maximum of 4, and
+    pinned that project to the top of the ranking. Far enough ahead it stopped
+    being a wrong number and became an `OverflowError` raised from inside a sort
+    key, which costs the whole brief rather than one row.
+
+    Non-numeric reads as None rather than raising, for the reason
+    `declared_impact` gives at length: this file is re-read from disk, the module
+    contract is fail open, and on the unattended path an exception is a stack
+    trace and no brief at all. Booleans are excluded because ``True`` is an
+    ``int`` and would score as one day old.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return max(0.0, number)
+
+
 def score_project(p, cfg, outcomes=None):
     """Rank a project that has been judged. Callers must check `is_judged` first.
 
@@ -682,7 +717,7 @@ def score_project(p, cfg, outcomes=None):
     # ordering that mixes two definitions is not an ordering.
     base = declared_impact(p) or 0.0
 
-    days = (p.get("evidence") or {}).get("days_since")
+    days = _age_days((p.get("evidence") or {}).get("days_since"))
     sc = scoring_of(cfg)
     floor = sc["decay_floor"]
     if days is None:

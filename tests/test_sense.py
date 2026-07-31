@@ -516,6 +516,32 @@ class FailOpen(TempCase):
         codes = [f["code"] for f in snap["parse_failed"]]
         self.assertIn("status_doc_missing", codes)
 
+    def test_a_file_dated_in_the_future_is_clamped_and_recorded(self):
+        """A clock ahead of this one must not become negative recency.
+
+        The recency contest picks the smallest age, so a future date wins it and
+        travels on as a negative `days_since` -- which the scorer raises 0.5 to
+        the power of. Clamped rather than dropped, because a file stamped
+        tomorrow was almost certainly touched today and discarding the candidate
+        would report "no signal" for a project that is plainly moving.
+
+        Recorded as well as clamped: an engine that quietly corrects its input
+        teaches you to trust input it has corrected.
+        """
+        ws = self.workspace()
+        ahead = dt.datetime.combine(
+            AS_OF_DATE + dt.timedelta(days=400), dt.time(12, 0)
+        ).timestamp()
+        set_mtime(ws / "projects" / "orchard" / "PROJECT_STATUS.md", ahead)
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        orchard = {p["id"]: p for p in snap["projects"]}["orchard"]
+        self.assertGreaterEqual(orchard["evidence"]["days_since"], 0)
+        recorded = [f for f in snap["parse_failed"]
+                    if f["code"] == "future_dated_evidence"]
+        self.assertTrue(recorded, snap["parse_failed"])
+
     def test_missing_projects_root_aborts(self):
         # The one thing that must *not* fail open: an empty-but-plausible snapshot
         # reads as "nothing is happening" rather than "you are not configured".
