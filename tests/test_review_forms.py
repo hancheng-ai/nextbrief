@@ -10,6 +10,7 @@ different conclusions about what a valid answer is.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 import unittest
@@ -31,6 +32,39 @@ PROJECTS = [
     {"id": "alpha", "name": "Alpha", "ice": {"impact": 4}},
     {"id": "beta", "name": "Beta"},
 ]
+
+
+def _is_stdlib(name: str) -> bool:
+    """Did this interpreter get `name` from its own standard library?
+
+    Works on every version the package supports, which `sys.stdlib_module_names`
+    does not -- see `test_it_adds_no_dependency`. The site-packages exclusion is
+    not redundant with the prefix test: a virtualenv built with
+    `--system-site-packages` can place site-packages underneath the stdlib
+    prefix, and without the second test every installed package there would read
+    as standard library.
+    """
+    import importlib.util
+    import os
+    import sysconfig
+
+    if name in sys.builtin_module_names:
+        return True
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ImportError, ValueError):
+        return False        # not importable at all is certainly not stdlib
+    if spec is None:
+        return False
+    if spec.origin in ("built-in", "frozen"):
+        return True
+    if spec.origin is None:
+        return False        # a namespace package, which the stdlib does not use
+    stdlib = os.path.realpath(sysconfig.get_paths()["stdlib"])
+    origin = os.path.realpath(spec.origin)
+    return (origin.startswith(stdlib + os.sep)
+            and "site-packages" not in origin
+            and "dist-packages" not in origin)
 
 
 class TheEditorForm(unittest.TestCase):
@@ -103,10 +137,22 @@ class TheBrowserForm(unittest.TestCase):
         standard library, so the browser form costs a socket rather than a
         package. The zero-dependency rule is load-bearing for the unattended
         path, and this is the module most likely to tempt someone away from it.
+
+        Resolved rather than looked up in a name list. `sys.stdlib_module_names`
+        would be the obvious tool and cannot be used here: it arrived in 3.10, so
+        on the 3.9 floor -- the interpreter this rule exists to protect -- it
+        raises `AttributeError` and the assertion below never runs. A guard that
+        cannot fail on the only platform it is for is worse than no guard, and
+        this one shipped that way: green on 3.11 and 3.13, red on 3.9, for two
+        commits.
+
+        Asking the import system where a module actually lives is also the
+        stronger question. A name list says `json` is standard library; it cannot
+        say whether *this* interpreter's `json` came from the standard library or
+        from something earlier on `sys.path`.
         """
         import ast
         import pathlib
-        import sys
 
         source = pathlib.Path(webform.__file__).read_text(encoding="utf-8")
         imported = set()
@@ -115,7 +161,23 @@ class TheBrowserForm(unittest.TestCase):
                 imported.update(a.name.split(".")[0] for a in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 imported.add(node.module.split(".")[0])
-        self.assertEqual(sorted(imported - set(sys.stdlib_module_names)), [])
+        self.assertEqual(sorted(n for n in imported if not _is_stdlib(n)), [])
+
+    def test_the_dependency_check_can_actually_fail(self):
+        """The guard above is only worth its line count if it can say no.
+
+        Its predecessor could not: it raised before asserting on 3.9 and was
+        skipped by the runner, which looks exactly like passing. So the negative
+        case is pinned here rather than left to be true.
+
+        `nextbrief` is the honest probe -- importable in every environment the
+        suite runs in, since this file imports it, and about as far from the
+        standard library as a module gets.
+        """
+        self.assertFalse(_is_stdlib("nextbrief"))
+        self.assertFalse(_is_stdlib("nextbrief_no_such_module"))
+        self.assertTrue(_is_stdlib("webbrowser"))
+        self.assertTrue(_is_stdlib("sys"))
 
 
 class TheBrowserFormOverASocket(TempCase):
