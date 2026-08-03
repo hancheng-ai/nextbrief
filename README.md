@@ -423,7 +423,7 @@ nextbrief run            all three stages: sense → a model reads it → render
 nextbrief v0             sense + render only, no model at all: zero tokens
 nextbrief sense          stage 1 only; refresh state/snapshot.json
 nextbrief render         stage 3 only; re-render from the existing brief.json
-nextbrief check          idempotence self-check; exit code 3 means out of date
+nextbrief check          self-check over sense and render; exit 3 means out of date
 
 nextbrief open           open BRIEF.html in a browser
 nextbrief brief          print BRIEF.md to the terminal
@@ -441,11 +441,12 @@ nextbrief init [dir]     create a workspace     (-y, --no-scan)
 
 Global flags: `--workspace DIR`, `--out DIR`, `--locale LANG`, `--version`.
 `sense` also takes `--check`, `--stdout`, `--as-of ISO`, `--timing`;
-`render` takes `--no-notify` and `--dry-run`.
+`render` takes `--no-notify`, `--dry-run` and `--check`.
 
-`check` exits `3` when re-running stage 1 would change the output, which is the
-whole scheduling contract — anything that runs nextbrief on a timer can branch on
-it without parsing text:
+`check` exits `3` when re-running the deterministic stages would change anything
+you read — a snapshot that no longer matches the disk, or a `BRIEF.md` that no
+longer matches the snapshot. That is the whole scheduling contract, and anything
+running nextbrief on a timer can branch on it without parsing text:
 
 ```cron
 30 21 * * *  /usr/local/bin/nextbrief run >> ~/brief/log/cron.log 2>&1

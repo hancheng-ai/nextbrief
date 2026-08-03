@@ -609,6 +609,68 @@ class Containment(TempCase):
         self.assertFalse(render.append_jsonl(ws, blocked, {"a": 1}))
 
 
+class WhatIsNew(RenderCase):
+    """The line that decides whether a daily document survives month three.
+
+    The header counts say what is *true*. They do not say what *changed*, so a
+    morning with two stalled projects reads identically whether both were stalled
+    last week or one stalled overnight — and a document that reads the same every
+    day teaches its reader to skim it.
+    """
+
+    def _run_with_prev(self, neglected_ids, stalled_ids=()):
+        # A previous run record is what the delta is measured against; `stalled`
+        # depends on the backlog, so it cannot be recomputed from the snapshot.
+        self.assertEqual(self.render()[0], 0)
+        runs = self.ws / "log" / "runs.jsonl"
+        recs = [json.loads(x) for x in runs.read_text(encoding="utf-8").splitlines() if x.strip()]
+        recs[-1]["neglected_ids"] = list(neglected_ids)
+        recs[-1]["stalled_ids"] = list(stalled_ids)
+        recs[-1]["at"] = "2026-03-15T21:30:00"      # a different run, not a re-render
+        runs.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+        self.assertEqual(self.render()[0], 0)
+        return (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+
+    def test_a_quiet_morning_says_so_in_one_line(self):
+        # Nothing new: the reader has permission to stop after the first three
+        # lines. The rest of the brief is still there — a document whose *shape*
+        # varies is one whose reader no longer knows where to look.
+        brief = self._run_with_prev(neglected_ids=[])
+        self.assertIn("Nothing new since", brief)
+        self.assertIn("## ", brief, "the quiet form dropped the body of the brief")
+
+    def test_something_new_is_named_rather_than_counted(self):
+        # `orchard` is neglected in the fixture; a previous run that had not seen
+        # it makes it news.
+        snap = make_snapshot()
+        for p in snap["projects"]:
+            p["status"] = "active"
+            p["evidence"] = dict(p.get("evidence") or {}, days_since=999)
+        write_snapshot(self.ws, snap)
+        brief = self._run_with_prev(neglected_ids=[])
+        self.assertIn("New since", brief)
+        self.assertIn("quiet limit", brief)
+        self.assertNotIn("Nothing new since", brief)
+
+    def test_the_same_news_is_not_reported_twice(self):
+        snap = make_snapshot()
+        for p in snap["projects"]:
+            p["status"] = "active"
+            p["evidence"] = dict(p.get("evidence") or {}, days_since=999)
+        write_snapshot(self.ws, snap)
+        ids = [p["id"] for p in snap["projects"]]
+        brief = self._run_with_prev(neglected_ids=ids)
+        self.assertIn("Nothing new since", brief)
+
+    def test_the_first_run_makes_no_claim_about_change(self):
+        # There is nothing to compare against, and inventing "nothing new" would
+        # be an assertion about a day the engine never saw.
+        self.assertEqual(self.render()[0], 0)
+        brief = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        self.assertNotIn("Nothing new since", brief)
+        self.assertNotIn("New since", brief)
+
+
 class Truncation(RenderCase):
     """What a brief loses when it runs past its ceiling.
 

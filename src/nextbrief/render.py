@@ -64,6 +64,11 @@ __all__ = [
 
 GENERATOR = "nextbrief render"
 
+# Same numbers `sense` uses, and deliberately the same literal 3: a scheduler
+# running `check || run` branches on the code without caring which stage decided
+# the workspace was out of date.
+EXIT_STALE = 3
+
 # Fields an agent must never write. See docs, "what the daily pass may write".
 HUMAN_ONLY_FIELDS = ["priority", "is_next_action", "human_confirmed", "project", "id", "created_by"]
 TERMINAL_STATUSES = ("done", "dropped")
@@ -1086,6 +1091,45 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     L.append("> " + " | ".join(head))
     L.append("")
 
+    # ---- what is new since the last run -------------------------------------
+    #
+    # The counts above say what is true; this says what changed, which is the
+    # question a reader actually opens a daily document to ask. Without it a
+    # morning with two stalled projects reads identically whether both were
+    # stalled last week or one stalled overnight, and a document that reads the
+    # same every day trains the person to skim it.
+    #
+    # One line, above everything, rather than a shorter document on quiet days.
+    # A brief whose *shape* varies is a brief whose reader no longer knows where
+    # to look, and the saving is a few lines they were not going to read anyway.
+    # Nothing is hidden and nothing is deferred: the full brief is still under
+    # this line, and this line is the permission to stop reading it.
+    #
+    # Against the previous run rather than the previous snapshot, for the same
+    # reason `should_notify` is: `stalled` depends on the backlog, which the
+    # snapshot does not carry. `read_prev_run` already treats a re-render of the
+    # snapshot in hand as the same run, so re-rendering does not report the same
+    # news twice.
+    if prev is not None:
+        since = str(prev.get("at", ""))[:10]
+        fresh = []
+        # Both catalogue keys written out in full rather than built from `key`.
+        # The locale guard finds keys by scanning for literals, so a computed one
+        # is invisible to it -- and an invisible key is one that can be missing
+        # from a translation until the day it is needed and renders as itself.
+        for key, locale_key in (("neglected", "brief.whatsnew.neglected"),
+                                ("stalled", "brief.whatsnew.stalled")):
+            by_id = {str(p.get("id")): p for p in (meta.get(key) or [])}
+            for pid in sorted(_newly(meta, prev, key)):
+                p_ = by_id.get(pid) or {}
+                fresh.append(cat.t(locale_key, name=p_.get("name") or pid))
+        if fresh:
+            L.append("> " + cat.t("brief.whatsnew.some", at=since,
+                                  items="; ".join(fresh)))
+        else:
+            L.append("> " + cat.t("brief.whatsnew.none", at=since))
+        L.append("")
+
     if run.get("late"):
         hrs = (run.get("lateness_minutes") or 0) // 60
         L.append("> " + cat.t("brief.banner.late", slot=run.get("planned_slot", ""), hours=hrs))
@@ -1693,6 +1737,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-notify", action="store_true")
     ap.add_argument("--dry-run", action="store_true",
                     help="print BRIEF.md, write nothing")
+    ap.add_argument("--check", action="store_true",
+                    help="exit 3 if BRIEF.md would change; write nothing")
     return ap
 
 
@@ -1766,7 +1812,9 @@ def main(argv=None) -> int:
     notes: Dict[str, Any] = {"prev_run": read_prev_run(ws, stamp), "conflicts": []}
 
     backlog = load_backlog(ws, rejected)
-    gate = enforce_write_permissions(ws, backlog, rejected, args.dry_run)
+    # `--check` counts as dry: the gate reverts out-of-bounds backlog edits, and
+    # a command whose job is to answer a question must not change the answer.
+    gate = enforce_write_permissions(ws, backlog, rejected, args.dry_run or args.check)
     notes["reverted_fields"] = gate.reverted
     notes["write_gate"] = gate.state
     notes["write_gate_detail"] = gate.detail
@@ -1852,6 +1900,31 @@ def main(argv=None) -> int:
 
     meta = classify(snap, backlog, cfg, reg, ws)
     text, meta = render_brief(snap, brief, backlog, cfg, reg, cat, notes, meta)
+
+    if args.check:
+        # Stage 3's half of the scheduling contract. `sense --check` compares the
+        # snapshot and the digest; nothing compared the artifacts a person
+        # actually reads, so `nextbrief check || nextbrief run` reported "current"
+        # for a workspace whose BRIEF.md was arbitrarily old -- and then did not
+        # re-run, which is the one outcome the command exists to prevent.
+        #
+        # A byte comparison is meaningful here for the same reason a re-render is
+        # idempotent: every date in the output is derived from
+        # `snapshot.run.generated_at`, never from the clock.
+        #
+        # Writes nothing, including the log line and the run record, because a
+        # check that mutates the thing it is checking is not a check. The write
+        # gate above already ran in dry-run mode for the same reason.
+        try:
+            current = ws.brief_md.read_text(encoding="utf-8")
+        except OSError:
+            print("render: %s does not exist yet" % ws.brief_md, file=sys.stderr)
+            return EXIT_STALE
+        if current != text:
+            print("render: %s is out of date" % ws.brief_md, file=sys.stderr)
+            return EXIT_STALE
+        print("render: %s is current" % ws.brief_md.name)
+        return 0
 
     if args.dry_run:
         sys.stdout.write(text)

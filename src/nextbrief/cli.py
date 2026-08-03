@@ -74,7 +74,7 @@ commands:
   v0           sense + render only, no model at all: zero tokens, nothing to invent
   sense        stage 1 only; refresh state/snapshot.json
   render       stage 3 only; re-render from the existing brief.json
-  check        idempotence self-check; exit code 3 means the brief is out of date
+  check        self-check over both stages; exit 3 if a re-run would change anything
 
   open         open BRIEF.html in a browser
   brief        print BRIEF.md to the terminal
@@ -459,9 +459,22 @@ def cmd_render(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
 
 
 def cmd_check(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
-    # Exit code 3 is the contract: "the brief no longer matches reality". Anything
-    # scheduling nextbrief can branch on it without parsing output.
-    return _run_sense(["--check"])
+    """Exit 3 when a re-run would change anything a person reads.
+
+    Both deterministic stages, in order. It used to be `sense --check` alone,
+    which compared the snapshot and the digest -- and so reported "current" for a
+    workspace whose BRIEF.md was arbitrarily old, or absent altogether. A
+    scheduler running `check || run` therefore never re-ran, which is the one
+    outcome the exit code exists to prevent.
+
+    Sense first, and short-circuited: if stage 1 is stale then stage 3 is stale
+    by construction, and rendering against a snapshot already known to be out of
+    date would answer a question nobody asked.
+    """
+    rc = _run_sense(["--check"])
+    if rc != EXIT_OK:
+        return rc
+    return _run_render(["--check", "--no-notify"])
 
 
 def cmd_v0(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
@@ -1694,7 +1707,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print BRIEF.md, write nothing")
     p.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
 
-    add("check", "idempotence self-check; exit 3 means out of date")
+    add("check", "self-check over sense and render; exit 3 means out of date")
     add("open", "open BRIEF.html in a browser")
     add("brief", "print BRIEF.md")
 

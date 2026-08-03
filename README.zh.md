@@ -327,7 +327,7 @@ nextbrief run            完整三段：sense → 模型解读 → render
 nextbrief v0             只跑 sense + render，完全不用模型：零 token
 nextbrief sense          只跑 stage 1，刷新 state/snapshot.json
 nextbrief render         只跑 stage 3，用现有 brief.json 重渲染
-nextbrief check          幂等自检；退出码 3 表示简报已过期
+nextbrief check          对 sense 与 render 两级自检；退出码 3 表示快照或简报已过期
 
 nextbrief open           在浏览器里打开 BRIEF.html
 nextbrief brief          把 BRIEF.md 打到终端
@@ -344,7 +344,7 @@ nextbrief init [dir]     创建 workspace   （-y、--no-scan）
 ```
 
 全局参数：`--workspace DIR`、`--out DIR`、`--locale LANG`、`--version`。
-`sense` 另有 `--check`、`--stdout`、`--as-of ISO`、`--timing`；`render` 有 `--no-notify`、`--dry-run`。
+`sense` 另有 `--check`、`--stdout`、`--as-of ISO`、`--timing`；`render` 有 `--no-notify`、`--dry-run`、`--check`。
 
 重跑 stage 1 会改变输出时，`check` 退出码为 `3`——这就是整个调度契约，任何定时跑 nextbrief 的东西都能直接分支，不用解析文本：
 

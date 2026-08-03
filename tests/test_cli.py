@@ -122,11 +122,45 @@ class Pipeline(TempCase):
         self.assertEqual(json.loads(out)["run"]["as_of_date"], AS_OF)
         self.assertFalse((self.ws / "state").exists())
 
-    def test_check_agrees_with_a_snapshot_it_just_wrote(self):
+    def test_a_fresh_snapshot_with_no_brief_yet_is_out_of_date(self):
+        """`check` covers both deterministic stages, not just the first.
+
+        It used to run `sense --check` and nothing else, so a workspace whose
+        snapshot was current reported current -- however old BRIEF.md was, and
+        even when there was no BRIEF.md at all. A scheduler running
+        `check || run` therefore never re-ran, which is the single outcome the
+        exit code exists to prevent.
+        """
         code, _, err = capture(cli.main, ["--workspace", str(self.ws), "sense"])
         self.assertEqual(code, 0, err)
         self.assertTrue((self.ws / "state" / "snapshot.json").is_file())
+        self.assertFalse((self.ws / "BRIEF.md").exists())
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 3)
+
+    def test_check_agrees_with_a_brief_it_just_wrote(self):
+        code, _, err = capture(cli.main, ["--workspace", str(self.ws), "v0", "--no-notify"])
+        self.assertEqual(code, 0, err)
         self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 0)
+
+    def test_a_stale_brief_is_reported_even_when_the_snapshot_is_current(self):
+        # The gap that made the contract incomplete, stated as a test: the
+        # snapshot is untouched and only the artifact has drifted.
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "v0", "--no-notify"])[0], 0)
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 0)
+        (self.ws / "BRIEF.md").write_text("something else entirely\n", encoding="utf-8")
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 3)
+
+    def test_check_writes_nothing(self):
+        # A check that mutates what it is checking is not a check. The run record
+        # is the sharpest instance: appending one would make the next `check`
+        # compare against a different "last run" line.
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "v0", "--no-notify"])[0], 0)
+        runs = self.ws / "log" / "runs.jsonl"
+        before = runs.read_bytes()
+        brief_before = (self.ws / "BRIEF.md").stat().st_mtime_ns
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 0)
+        self.assertEqual(runs.read_bytes(), before)
+        self.assertEqual((self.ws / "BRIEF.md").stat().st_mtime_ns, brief_before)
 
     def test_v0_runs_the_whole_deterministic_pipeline(self):
         code, _, err = capture(
@@ -705,7 +739,11 @@ class HelpIsNotPrintedTwice(unittest.TestCase):
         code, out, _ = capture(cli.main, ["--help"])
         self.assertEqual(code, 0)
         self.assertEqual(out.count("all three stages"), 1)
-        self.assertEqual(out.count("idempotence self-check"), 1)
+        # Keyed on text that is actually in the help. The phrase this used to
+        # look for was reworded when `check` grew to cover the renderer, and a
+        # count of 1 against a string that appears 0 times fails loudly -- which
+        # is the right way round for a guard.
+        self.assertEqual(out.count("self-check over both stages"), 1)
 
     def test_the_commands_come_before_the_flags(self):
         # The usage line names the flags first; that is argparse's own layout and

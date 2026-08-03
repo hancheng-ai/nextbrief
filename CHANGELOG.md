@@ -7,7 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The brief says what is new, not only what is true.** One line under the
+  header: *"Nothing new since 2026-08-01"*, or the projects that have newly gone
+  quiet or newly lost their next step, named.
+
+  The counts in the header say what is true. They do not say what changed, so a
+  morning with two stalled projects read identically whether both stalled last
+  week or one stalled overnight — and a document that reads the same every day
+  teaches its reader to skim it.
+
+  One line rather than a shorter document on quiet days. A brief whose *shape*
+  varies is one whose reader no longer knows where to look, and the saving would
+  be a few lines they were not going to read anyway. Nothing is hidden: the full
+  brief is still underneath, and the line is permission to stop reading it.
+
+- **`render --check`**, and `nextbrief check` now runs both deterministic stages.
+  It used to be `sense --check` alone, which compares the snapshot and the
+  digest — so a workspace whose snapshot was current reported current however old
+  `BRIEF.md` was, and even when there was no `BRIEF.md` at all. A scheduler
+  running `check || run` therefore never re-ran, which is the single outcome the
+  exit code exists to prevent.
+
+  It writes nothing, including the run record: a check that mutates what it is
+  checking is not a check.
+
 ### Fixed
+
+- **A `session:` citation could be minted for a project with no sessions.** The
+  scan creates a project's entry as soon as a directory name matches, so one that
+  has never had an agent session — or whose transcripts have since been cleaned
+  up, which is the ordinary end state — carried a block full of zeros. A dict of
+  zeros is truthy, and the handle was minted on that.
+
+  The gate resolves a cited source and checks that it can supply that kind of
+  fact. Neither check looks at magnitude. So the handle resolved, the kind
+  matched, and a model could write "three agent sessions this week" about a
+  project with none, printed under a footer promising every claim was checked.
+
+- **`git: "none"` is now checked rather than believed forever.** The registry
+  beating the overlay is a rule about *judgements* — importance, phase,
+  positioning — because nothing else can measure those. Whether a directory is a
+  repository is not a judgement, and the declaration goes stale the moment
+  somebody runs `git init` in it.
+
+  Until now the brief printed "a bad delete is unrecoverable" every morning about
+  a repository that had been recording every change all along. A false warning is
+  worse than a frequent one: acting on it wastes the reader's time, and not
+  acting on it teaches them to skip the column.
+
+  Declared and observed sit side by side and neither is written over the other.
+
+- **A neglected or stalled project no longer interrupts you every morning.**
+  Those two were state tests — "is anything neglected" — while the two branches
+  above them diff against the previous snapshot. Measured on a real portfolio,
+  that reason drove 29 of 40 recorded runs.
+
+  Edge-triggered against the previous run record now. Re-arming falls out of the
+  set difference and needs no timer, which is the better answer: a timer re-fires
+  about a project you already know about.
 
 - **`review --web` no longer waits on a name server before opening the browser.**
   `HTTPServer.server_bind` sets `server_name` from `socket.getfqdn(host)`, and
