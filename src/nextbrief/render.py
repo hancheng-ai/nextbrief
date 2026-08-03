@@ -1052,8 +1052,9 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     if meta is None:
         meta = classify(snap, backlog, cfg, reg)
     L: List[str] = []
-    # Where each section begins, so gate 4 can drop whole ones.
-    marks: List[int] = []
+    # Where each section begins and what it is worth, so gate 4 can drop whole
+    # ones cheapest-first.
+    marks: List[dict] = []
 
     ranked = meta["ranked"]
     # Ranked first, then the unrated in id order. Excluding a project from the
@@ -1110,8 +1111,12 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     # snapshot does not carry. `read_prev_run` already treats a re-render of the
     # snapshot in hand as the same run, so re-rendering does not report the same
     # news twice.
-    if prev is not None:
-        since = str(prev.get("at", ""))[:10]
+    # Against the last run from an EARLIER DAY, not the last run. See
+    # `last_run_before_today`: a second run this evening is not a day the reader
+    # has already read.
+    yesterday = notes.get("prev_day_run")
+    if yesterday is not None:
+        since = str(yesterday.get("as_of") or yesterday.get("at", ""))[:10]
         fresh = []
         # Both catalogue keys written out in full rather than built from `key`.
         # The locale guard finds keys by scanning for literals, so a computed one
@@ -1120,12 +1125,12 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         for key, locale_key in (("neglected", "brief.whatsnew.neglected"),
                                 ("stalled", "brief.whatsnew.stalled")):
             by_id = {str(p.get("id")): p for p in (meta.get(key) or [])}
-            for pid in sorted(_newly(meta, prev, key)):
+            for pid in sorted(_newly(meta, yesterday, key)):
                 p_ = by_id.get(pid) or {}
                 fresh.append(cat.t(locale_key, name=p_.get("name") or pid))
         if fresh:
             L.append("> " + cat.t("brief.whatsnew.some", at=since,
-                                  items="; ".join(fresh)))
+                                  items=cat.t("sep.semicolon").join(fresh)))
         else:
             L.append("> " + cat.t("brief.whatsnew.none", at=since))
         L.append("")
@@ -1453,7 +1458,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
 
     # ---- Gate 4: physical truncation ----
     #
-    # Whole sections, from the end, and the footer is added afterwards rather
+    # Whole sections, cheapest first, and the footer is added afterwards rather
     # than trimmed with everything else.
     #
     # Two things were wrong with keeping a prefix of the finished document. The
@@ -1464,10 +1469,10 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     # a header, a separator, and no rows. A missing section is legible and says
     # so; a halved table is a document that appears to have run out.
     #
-    # No second notion of rank. The order these sections are written in already
-    # encodes what matters most -- the comment above the questions block argues
-    # it explicitly -- and a rank attribute would be a second mechanism deciding
-    # the same question, which is how two mechanisms come to disagree.
+    # Which sections, by the `KEEP` table rather than by position. Dropping from
+    # the end looked right -- the file is written in the order it should be read
+    # -- and rendering a real portfolio refuted it: nineteen lines over, and what
+    # went was the whole reminders section, the brief's only warnings.
     maxl = caps["brief_max_lines"]
     footer = ["---", cat.t("brief.footer", generator=GENERATOR,
                            time=gen.strftime("%Y-%m-%d %H:%M"))]
@@ -1481,11 +1486,18 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                    marks[i + 1]["start"] if i + 1 < len(marks) else len(L),
                    m["keep"])
                   for i, m in enumerate(marks)]
-        # Cheapest first, and later before earlier within a tier, so the choice
-        # is total and does not depend on sort stability.
+        # Cheapest tier first; within a tier, EARLIER sections are given up
+        # before later ones. That looks backwards and is not: the file is written
+        # in reading order, so within one tier the section nearer the bottom is
+        # the one the author put last on purpose -- and tier 4 holds
+        # `next_actions` (first) and `reminders` (nearly last). Breaking the tie
+        # the other way would drop the warnings and keep the actions, which is
+        # the outcome the whole table exists to prevent.
+        #
+        # Total either way, so the result never depends on sort stability.
         doomed = set()
         kept = len(L)
-        for start, end, _keep in sorted(bounds, key=lambda b: (b[2], -b[0])):
+        for start, end, _keep in sorted(bounds, key=lambda b: (b[2], b[0])):
             if kept <= budget:
                 break
             doomed.add(start)
@@ -1510,6 +1522,74 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
 # ---------------------------------------------------------------------------
 # logs / notification
 # ---------------------------------------------------------------------------
+
+def read_runs(ws: Workspace) -> List[dict]:
+    """Every run record, oldest first. Unreadable or malformed lines are skipped."""
+    p = ws.log / "runs.jsonl"
+    if not p.exists():
+        return []
+    try:
+        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except OSError:
+        return []
+    out = []
+    for ln in lines:
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def last_run_before_today(ws: Workspace, as_of) -> Optional[dict]:
+    """The most recent run from an earlier day than `as_of`.
+
+    "What is new" has to mean *new since you could last have read this*, and the
+    unit a daily document is read in is a day. Measured against the last run
+    instead, it collapses: `run` and `v0` re-sense first, and sensing mints a
+    fresh `generated_at` every time, so the second invocation of an evening
+    becomes its own predecessor and replaces news the reader never saw with
+    "nothing new" -- permanently, because the ids are in the record by then.
+
+    `read_prev_run`'s same-stamp skip does not help. It exists to make a
+    *re-render* of one snapshot idempotent, and a second full run is a different
+    snapshot with a different stamp.
+
+    Records written before `as_of` was recorded are ignored rather than guessed
+    at: a run whose date is unknown cannot be shown to be from an earlier day,
+    and inventing that it was would suppress real news exactly once, silently.
+    """
+    best = None
+    for rec in read_runs(ws):
+        day = rec.get("as_of")
+        if not day or str(day) >= str(as_of):
+            continue
+        if best is None or str(day) >= str(best.get("as_of")):
+            best = rec
+    return best
+
+
+def last_notified_run(ws: Workspace) -> Optional[dict]:
+    """The most recent run that actually delivered a notification.
+
+    The edge has to be armed by *delivery*, not by writing a record. Armed by the
+    record, a run that was told `--no-notify`, or whose sink returned False --
+    which `sinks/none.py` always does, and which any failing transport does --
+    consumed the edge anyway, so the project it would have told you about was
+    never mentioned again. `cmd_open` re-renders whenever BRIEF.html is missing,
+    which is enough to spend the evening's notification before the scheduled run
+    reaches it.
+
+    The old state test was noisy and self-healing. Replacing it with a
+    fire-once test that can fire into nothing trades a defect for a worse one.
+    """
+    for rec in reversed(read_runs(ws)):
+        if rec.get("notified"):
+            return rec
+    return None
+
 
 def read_prev_run(ws: Workspace, current_at=None) -> Optional[dict]:
     """The last recorded run that is not a re-render of the snapshot in hand.
@@ -1632,7 +1712,15 @@ def _newly(meta, prev_run, key: str):
     something is new again, which is the only thing worth interrupting for.
     """
     now = {str(i) for i in (meta.get(key + "_ids") or ())}
-    before = {str(i) for i in ((prev_run or {}).get(key + "_ids") or ())}
+    # `runs.jsonl` is a plain text log a person can edit, and a scalar there --
+    # `"neglected_ids": 3` -- iterates as a TypeError out of `render_brief`,
+    # costing the whole brief for a stray keystroke in a file the engine only
+    # reads. Anything that is not a list or tuple reads as "nothing recorded",
+    # which is the same fallback a missing key gets.
+    recorded = (prev_run or {}).get(key + "_ids")
+    if not isinstance(recorded, (list, tuple)):
+        recorded = ()
+    before = {str(i) for i in recorded}
     return now - before
 
 
@@ -1809,12 +1897,17 @@ def main(argv=None) -> int:
     stamp = run["generated_at"]
 
     rejected: List[dict] = []
-    notes: Dict[str, Any] = {"prev_run": read_prev_run(ws, stamp), "conflicts": []}
+    notes: Dict[str, Any] = {"prev_run": read_prev_run(ws, stamp), "conflicts": [],
+                             "prev_day_run": last_run_before_today(ws, run["as_of_date"])}
 
     backlog = load_backlog(ws, rejected)
+    # One flag for "this invocation may touch the workspace", set once and read
+    # everywhere, because the two dry paths return from different places and
+    # anything that writes above the earlier return escapes both of them.
+    writing = not (args.dry_run or args.check)
     # `--check` counts as dry: the gate reverts out-of-bounds backlog edits, and
     # a command whose job is to answer a question must not change the answer.
-    gate = enforce_write_permissions(ws, backlog, rejected, args.dry_run or args.check)
+    gate = enforce_write_permissions(ws, backlog, rejected, not writing)
     notes["reverted_fields"] = gate.reverted
     notes["write_gate"] = gate.state
     notes["write_gate_detail"] = gate.detail
@@ -1865,9 +1958,17 @@ def main(argv=None) -> int:
             # ---- gate 4: caps ----
             if key in capmap and len(kept) > capmap[key]:
                 for extra in kept[capmap[key]:]:
-                    append_jsonl(ws, ws.log / "deferred.jsonl",
-                                 {"at": stamp, "section": key, "item": extra,
-                                  "why": "over caps.%s" % key})
+                    # Only on a run that is actually writing. This append sits
+                    # far above the `--check` and `--dry-run` returns, so both of
+                    # them were growing a log in a workspace they had promised
+                    # not to touch -- `--dry-run` since it was written, and
+                    # `--check` under a docstring that says so in as many words.
+                    # `test_dry_run_writes_nothing` did not catch it because it
+                    # asserts on runs.jsonl and BRIEF.md, not on this file.
+                    if writing:
+                        append_jsonl(ws, ws.log / "deferred.jsonl",
+                                     {"at": stamp, "section": key, "item": extra,
+                                      "why": "over caps.%s" % key})
                 notes["deferred"] = notes.get("deferred", 0) + len(kept) - capmap[key]
                 kept = kept[:capmap[key]]
             brief[key] = kept
@@ -1915,15 +2016,39 @@ def main(argv=None) -> int:
         # Writes nothing, including the log line and the run record, because a
         # check that mutates the thing it is checking is not a check. The write
         # gate above already ran in dry-run mode for the same reason.
+        # Both artifacts. BRIEF.html is what `nextbrief open` shows, and its
+        # write is fail-open -- one failed HTML render leaves a stale file that a
+        # markdown-only check calls current forever, and `cmd_open` re-renders
+        # only when the file is absent, never when it is wrong.
+        wanted = [(ws.brief_md, text)]
         try:
-            current = ws.brief_md.read_text(encoding="utf-8")
-        except OSError:
-            print("render: %s does not exist yet" % ws.brief_md, file=sys.stderr)
-            return EXIT_STALE
-        if current != text:
-            print("render: %s is out of date" % ws.brief_md, file=sys.stderr)
-            return EXIT_STALE
-        print("render: %s is current" % ws.brief_md.name)
+            from . import html as html_mod
+            wanted.append((ws.brief_html,
+                           html_mod.render_html(snap, brief, backlog, cfg, reg,
+                                                cat, notes, meta)))
+        except Exception as exc:                               # noqa: BLE001 - fail-open
+            # Same rule as the write path: a broken HTML renderer must not cost
+            # the answer about the markdown. Reported, never fatal.
+            print("render: BRIEF.html could not be rendered for comparison: %s"
+                  % exc, file=sys.stderr)
+        for path, expected in wanted:
+            try:
+                current = path.read_text(encoding="utf-8")
+            except OSError:
+                print("render: %s does not exist yet" % path, file=sys.stderr)
+                return EXIT_STALE
+            except ValueError:
+                # UnicodeDecodeError is a ValueError. A file that cannot be
+                # decoded certainly does not match, and this command's contract
+                # is an exit code, not a traceback.
+                print("render: %s cannot be read back; treating it as out of date"
+                      % path, file=sys.stderr)
+                return EXIT_STALE
+            if current != expected:
+                print("render: %s is out of date" % path, file=sys.stderr)
+                return EXIT_STALE
+        print("render: %s and %s are current"
+              % (ws.brief_md.name, ws.brief_html.name))
         return 0
 
     if args.dry_run:
@@ -1953,8 +2078,11 @@ def main(argv=None) -> int:
 
     # The record `notes` already holds, not a second read of the same file. Two
     # reads are two chances to disagree about which run was the last one.
+    # Armed by the last run that actually DELIVERED. A record written by a run
+    # that was told --no-notify, or whose sink returned False, must not count
+    # as having told anyone anything.
     do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes,
-                                   prev_run=notes.get("prev_run"))
+                                   prev_run=last_notified_run(ws))
     notified = False
     if do_notify and not args.no_notify:
         notified = _send_notification(cfg, meta, brief, cat, ws)
@@ -1965,6 +2093,9 @@ def main(argv=None) -> int:
     #   liveness signal, so it is written last and read by the next run.
     append_jsonl(ws, ws.log / "runs.jsonl", {
         "at": stamp,
+        # The run's own date, so a later run can ask "was this an earlier day?"
+        # without parsing `at` and hoping it is an ISO timestamp.
+        "as_of": snap["run"]["as_of_date"],
         "duration_s": round((dt.datetime.now() - started).total_seconds(), 2),
         "mode": "v1" if brief else "v0",
         "locale": cat.locale,

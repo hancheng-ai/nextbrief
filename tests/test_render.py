@@ -626,7 +626,11 @@ class WhatIsNew(RenderCase):
         recs = [json.loads(x) for x in runs.read_text(encoding="utf-8").splitlines() if x.strip()]
         recs[-1]["neglected_ids"] = list(neglected_ids)
         recs[-1]["stalled_ids"] = list(stalled_ids)
-        recs[-1]["at"] = "2026-03-15T21:30:00"      # a different run, not a re-render
+        # An earlier DAY, not merely an earlier run: the delta is measured
+        # against the last day the reader could have read a brief, so that a
+        # second run this evening does not become its own predecessor.
+        recs[-1]["at"] = "2026-03-15T21:30:00"
+        recs[-1]["as_of"] = "2026-03-15"
         runs.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
         self.assertEqual(self.render()[0], 0)
         return (self.ws / "BRIEF.md").read_text(encoding="utf-8")
@@ -636,7 +640,7 @@ class WhatIsNew(RenderCase):
         # lines. The rest of the brief is still there — a document whose *shape*
         # varies is one whose reader no longer knows where to look.
         brief = self._run_with_prev(neglected_ids=[])
-        self.assertIn("Nothing new since", brief)
+        self.assertIn("newly stalled or gone quiet", brief)
         self.assertIn("## ", brief, "the quiet form dropped the body of the brief")
 
     def test_something_new_is_named_rather_than_counted(self):
@@ -650,7 +654,7 @@ class WhatIsNew(RenderCase):
         brief = self._run_with_prev(neglected_ids=[])
         self.assertIn("New since", brief)
         self.assertIn("quiet limit", brief)
-        self.assertNotIn("Nothing new since", brief)
+        self.assertNotIn("newly stalled or gone quiet", brief)
 
     def test_the_same_news_is_not_reported_twice(self):
         snap = make_snapshot()
@@ -660,14 +664,39 @@ class WhatIsNew(RenderCase):
         write_snapshot(self.ws, snap)
         ids = [p["id"] for p in snap["projects"]]
         brief = self._run_with_prev(neglected_ids=ids)
-        self.assertIn("Nothing new since", brief)
+        self.assertIn("newly stalled or gone quiet", brief)
+
+    def test_a_second_run_the_same_day_does_not_eat_the_news(self):
+        """"New" means new since a day the reader could have read, not since the
+        last invocation.
+
+        `run` and `v0` re-sense first, and sensing mints a fresh `generated_at`
+        every time — so measured against the last *run*, the second invocation of
+        an evening becomes its own predecessor and replaces news nobody has seen
+        with "nothing new". Permanently, because the ids are in the record by
+        then. `read_prev_run`'s same-stamp skip does not help: it exists to make
+        a re-render idempotent, and a second full run is a different snapshot.
+        """
+        snap = make_snapshot()
+        for p in snap["projects"]:
+            p["status"] = "active"
+            p["evidence"] = dict(p.get("evidence") or {}, days_since=999)
+        write_snapshot(self.ws, snap)
+        first = self._run_with_prev(neglected_ids=[])
+        self.assertIn("New since", first)
+
+        # Same day, run again with nothing changed on disk.
+        self.assertEqual(self.render()[0], 0)
+        again = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        self.assertIn("New since", again,
+                      "a second run on the same day replaced the news with silence")
 
     def test_the_first_run_makes_no_claim_about_change(self):
         # There is nothing to compare against, and inventing "nothing new" would
         # be an assertion about a day the engine never saw.
         self.assertEqual(self.render()[0], 0)
         brief = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
-        self.assertNotIn("Nothing new since", brief)
+        self.assertNotIn("newly stalled or gone quiet", brief)
         self.assertNotIn("New since", brief)
 
 
@@ -824,6 +853,57 @@ class Notification(RenderCase):
             cfg, snap, prev, meta, {}, prev_run={"neglected_ids": ["orchard"]})
         self.assertFalse(again, "the same neglected project notified twice")
         self.assertIn("nothing changed", why)
+
+    def test_a_notification_that_went_nowhere_does_not_arm_the_edge(self):
+        """The edge is armed by delivery, not by writing a record.
+
+        `sinks/none.py` always returns False, any failing transport returns
+        False, and `--no-notify` never calls a sink at all — yet each of those
+        runs wrote the ids down, so the project they would have told you about
+        was never mentioned again. `cmd_open` re-renders whenever BRIEF.html is
+        missing, which is enough to spend the evening's notification before the
+        scheduled run gets to it.
+
+        The state test this replaced was noisy and self-healing. A fire-once test
+        that can fire into nothing is a worse defect, not a better one.
+        """
+        snap = make_snapshot()
+        prev = json.loads(json.dumps(snap))
+        cfg = {"notify": {"only_if": ["neglect"]}}
+        meta = self._meta(neglected=["orchard"])
+        # A record from a run that recorded the ids but delivered nothing must
+        # not count as having told anyone.
+        undelivered = {"notified": False, "neglected_ids": ["orchard"]}
+        self.assertTrue(
+            render.should_notify(cfg, snap, prev, meta, {}, prev_run=None)[0],
+            "a run that never delivered should not have armed anything")
+        # `last_notified_run` is what the caller passes, and it skips records
+        # like `undelivered` entirely -- so the lookup returns an earlier
+        # delivered run, or None.
+        self.assertNotEqual(undelivered.get("notified"), True)
+
+    def test_last_notified_run_skips_the_runs_that_delivered_nothing(self):
+        from nextbrief.paths import resolve_workspace
+
+        ws = resolve_workspace(str(self.ws))
+        (self.ws / "log").mkdir(parents=True, exist_ok=True)
+        (self.ws / "log" / "runs.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+            {"at": "2026-03-14T21:30:00", "notified": True, "neglected_ids": ["kiln"]},
+            {"at": "2026-03-15T21:30:00", "notified": False, "neglected_ids": ["kiln", "orchard"]},
+            {"at": "2026-03-16T21:30:00", "notified": False, "neglected_ids": ["kiln", "orchard"]},
+        ]), encoding="utf-8")
+        got = render.last_notified_run(ws)
+        self.assertEqual(got["at"], "2026-03-14T21:30:00")
+        self.assertEqual(got["neglected_ids"], ["kiln"],
+                         "an undelivered run was allowed to arm the edge")
+
+    def test_a_malformed_run_record_does_not_cost_the_brief(self):
+        # runs.jsonl is a plain text log a person can edit. A scalar where a list
+        # belongs used to iterate as a TypeError out of render_brief.
+        meta = self._meta(neglected=["orchard"])
+        self.assertEqual(render._newly(meta, {"neglected_ids": 3}, "neglected"), {"orchard"})
+        self.assertEqual(render._newly(meta, {"neglected_ids": "orchard"}, "neglected"), {"orchard"})
+        self.assertEqual(render._newly(meta, {"neglected_ids": None}, "neglected"), {"orchard"})
 
     def test_a_newly_neglected_project_still_breaks_the_silence(self):
         # The half that decides whether the above is a fix or an amputation.

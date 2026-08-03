@@ -1943,9 +1943,24 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 "why": "registry declares `git: \"none\"` but a .git is present; "
                        "history exists, so nothing here is unrecoverable"})
         # Declared and observed, side by side, neither written over the other.
-        # `no_git` is the *claim about recoverability*, so it is the one the
-        # observation gets to settle.
-        no_git = pr.get("git") == "none" and not git_present
+        #
+        # `no_git` keeps its original meaning and is NOT settled by the
+        # observation: it says *the engine did not read git for this project*,
+        # which stays true whatever is on disk, because the whole git pass is
+        # skipped for a `none` declaration. Everything keyed off it -- the
+        # evidence caveat, the digest, BRIEF.html -- is making that claim and is
+        # right to.
+        #
+        # Two different claims were riding on one flag, and settling the flag
+        # with `git_present` silently withdrew the second one: the caveat naming
+        # the numbers as file timestamps disappeared, so an mtime-derived count
+        # began reading exactly like a commit count. The engine still had not
+        # opened the repository; it had only stopped saying so.
+        #
+        # The claim the observation *does* settle is recoverability -- "a bad
+        # delete is unrecoverable" -- and that one is made in exactly one place,
+        # the reminder in `render`, which reads `git_present` directly.
+        no_git = pr.get("git") == "none"
         # Name the measure this list was actually ranked by. `scc` being
         # installed is not the same as `scc` having reported on these files -- it
         # skips languages it does not know, and each such file silently falls
@@ -2171,7 +2186,13 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         for r in p.get("git") or []:
             if r.get("last_commit"):
                 cite.append(r["last_commit"]["short"])
-        if p.get("sessions"):
+        # The same condition the handle is minted under, and it has to stay that
+        # way. Advertising a citation the evidence index does not contain invites
+        # the model to write a claim that is then always dropped -- which costs a
+        # true sentence and shows up as gate noise rather than as the mismatch it
+        # is. A zero-session block is truthy, so this needs the count, not the
+        # block.
+        if (p.get("sessions") or {}).get("session_files"):
             cite.append("session:" + p["id"])
         for d in p.get("status_docs") or []:
             if d.get("exists"):
