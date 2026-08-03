@@ -1090,3 +1090,87 @@ class WhatIsNotRanked(TempCase):
         done["status"] = "done"
         done["evidence"] = dict(done["evidence"], days_since=0)
         self.assertEqual(render.score_project(done, {}), 0.0)
+
+
+class NotificationEndToEnd(RenderCase):
+    """The wiring, not the rule.
+
+    Three consecutive attempts at the notification edge each shipped a defect,
+    all at the same seam: which run record the rule is handed. Every test written
+    for those attempts built that record by hand and called `should_notify`
+    directly, so none of them could see the seam — and one repair deleted the only
+    test that read a real `runs.jsonl` through a real `Workspace`.
+
+    These drive the real `main()` with a stubbed sink and count deliveries.
+    """
+
+    def setUp(self):
+        super().setUp()
+        snap = make_snapshot()
+        for p in snap["projects"]:
+            p["status"] = "active"
+            p["evidence"] = dict(p.get("evidence") or {}, days_since=999)
+        write_snapshot(self.ws, snap)
+        # A previous snapshot has to exist or `should_notify` short-circuits on
+        # "first run" and never reaches the edge these tests are about. Sensing
+        # writes it by rotation on the second run; here it is placed directly,
+        # because the subject is the renderer.
+        import shutil
+        shutil.copyfile(str(self.ws / "state" / "snapshot.json"),
+                        str(self.ws / "state" / "snapshot.prev.json"))
+        cfg_path = self.ws / "config.jsonc"
+        from nextbrief.jsonc import load_jsonc
+        cfg = load_jsonc(str(cfg_path))
+        cfg.setdefault("notify", {})["only_if"] = ["neglect"]
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+        # Count deliveries instead of making them. Patched on the sinks package,
+        # which is what `_send_notification` imports at call time.
+        from nextbrief import sinks
+
+        self.delivered = []
+        real = sinks.notify
+
+        def counting(title, body, cfg_, open_url=None):
+            self.delivered.append(body)
+            return True
+
+        sinks.notify = counting
+        self.addCleanup(setattr, sinks, "notify", real)
+
+    def _render(self, *args):
+        return capture(render.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _records(self):
+        return read_jsonl(self.ws / "log" / "runs.jsonl")
+
+    def test_a_re_render_does_not_deliver_the_same_news_again(self):
+        """Rendering the same snapshot three times is one piece of news.
+
+        `read_prev_run` skips records whose stamp matches the snapshot in hand —
+        which is right for the header's "last run" line and wrong here, because
+        those are precisely the records holding what has already been announced.
+        Fed that record, every re-render saw its own announcement as unmade and
+        delivered again, forever.
+        """
+        self.assertEqual(self._render()[0], 0)
+        self.assertEqual(len(self.delivered), 1, "the first run should announce")
+        self.assertEqual(self._render()[0], 0)
+        self.assertEqual(self._render()[0], 0)
+        self.assertEqual(len(self.delivered), 1,
+                         "a re-render delivered the same news again: %r" % (self.delivered,))
+
+    def test_a_re_render_does_not_roll_back_what_was_announced(self):
+        """The quieter half of the same defect.
+
+        A same-stamp re-render that does not deliver took the `not delivered`
+        branch and intersected against a record from *before* the announcement,
+        writing an empty announced set over a full one. Nothing on the page
+        changed; the next scheduled run simply announced it all over again.
+        """
+        self.assertEqual(self._render()[0], 0)
+        after_first = self._records()[-1]["announced_neglected_ids"]
+        self.assertTrue(after_first, "the delivering run recorded nothing")
+        self.assertEqual(self._render("--no-notify")[0], 0)
+        self.assertEqual(self._records()[-1]["announced_neglected_ids"], after_first,
+                         "a suppressed re-render rolled the announcement back")

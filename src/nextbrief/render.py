@@ -1556,6 +1556,24 @@ def read_runs(ws: Workspace) -> List[dict]:
     return out
 
 
+def last_run(ws: Workspace) -> Optional[dict]:
+    """The most recent run record, same stamp or not.
+
+    Deliberately NOT `read_prev_run`, which skips records whose `at` matches the
+    snapshot in hand. That skip exists so the header's "last run" line survives a
+    re-render, and it is exactly wrong for the announcement bookkeeping: the
+    skipped record is the one holding what was just announced, so reading through
+    it made every re-render see its own announcement as unmade and deliver again
+    -- and a suppressed re-render write an empty announced set over a full one.
+
+    Notification is not part of the artifact, so nothing here owes anything to
+    re-render idempotence. The question is only ever "what does the newest record
+    say the reader has been told".
+    """
+    records = read_runs(ws)
+    return records[-1] if records else None
+
+
 def last_run_before_today(ws: Workspace, as_of) -> Optional[dict]:
     """The most recent run from an earlier day than `as_of`.
 
@@ -2131,12 +2149,13 @@ def main(argv=None) -> int:
 
     # The record `notes` already holds, not a second read of the same file. Two
     # reads are two chances to disagree about which run was the last one.
-    # The immediately previous run's ANNOUNCED set -- what the reader has
-    # actually been told, which `announced_after` only advances on delivery and
-    # shrinks as projects recover. `notes` already holds that record; reading the
-    # file twice is two chances to disagree about which run was the last one.
-    do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes,
-                                   prev_run=notes.get("prev_run"))
+    # The newest record's ANNOUNCED set -- what the reader has actually been told,
+    # which `announced_after` only advances on delivery and shrinks as projects
+    # recover. `last_run`, not `notes["prev_run"]`: the latter skips a record
+    # written under this same snapshot stamp, and that record is the one holding
+    # the announcement.
+    latest = last_run(ws)
+    do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes, prev_run=latest)
     notified = False
     if do_notify and not args.no_notify:
         notified = _send_notification(cfg, meta, brief, cat, ws)
@@ -2182,10 +2201,8 @@ def main(argv=None) -> int:
         # log that gets diffed.
         "neglected_ids": sorted(str(i) for i in (meta.get("neglected_ids") or ())),
         "stalled_ids": sorted(str(i) for i in (meta.get("stalled_ids") or ())),
-        "announced_neglected_ids": announced_after(
-            notes.get("prev_run"), meta, "neglected", notified),
-        "announced_stalled_ids": announced_after(
-            notes.get("prev_run"), meta, "stalled", notified),
+        "announced_neglected_ids": announced_after(latest, meta, "neglected", notified),
+        "announced_stalled_ids": announced_after(latest, meta, "stalled", notified),
         "ok": True,          # <- success sentinel, must be the last thing written
     })
 
