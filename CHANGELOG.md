@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **The brief says what is new, not only what is true.** One line under the
-  header: *"Nothing new since 2026-08-01"*, or the projects that have newly gone
-  quiet or newly lost their next step, named.
+  header: *"Nothing has newly stalled or gone quiet since 2026-08-01"*, or the
+  projects that have newly gone quiet or newly lost their next step, named.
 
   The counts in the header say what is true. They do not say what changed, so a
   morning with two stalled projects read identically whether both stalled last
@@ -64,9 +64,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   above them diff against the previous snapshot. Measured on a real portfolio,
   that reason drove 29 of 40 recorded runs.
 
-  Edge-triggered against the previous run record now. Re-arming falls out of the
-  set difference and needs no timer, which is the better answer: a timer re-fires
-  about a project you already know about.
+  Edge-triggered now, against what the reader has actually been *told*. That set
+  advances only when a notification is delivered, and shrinks as projects
+  recover, so: a run told `--no-notify` or whose sink was broken does not consume
+  the edge; a project that is announced, recovers and relapses is announced
+  again; and a notification that never lands keeps being retried, which reaches
+  nobody while the transport is down and says what has been true all along on the
+  first run after it is fixed.
+
+  No timer, which is the better answer than one: a timer re-fires about a project
+  you already know about.
+
+- **A crowded brief loses its least valuable section, not its last one.**
+  Truncation kept a prefix, so the footer went first — the line naming what
+  generated the document and stating that every claim passed the evidence gate —
+  and the cut landed wherever the line count fell, which for a portfolio of any
+  size is inside the projects table.
+
+  Whole sections now, chosen by an explicit table rather than by position.
+  Reading order and drop order are different questions: the reminders are written
+  near the bottom because that is where they read best, and they are the last
+  thing given up because they are the brief's only warnings.
+
+  The default ceiling goes from 60 lines to 100. Measured on a twelve-project
+  workspace the brief wants 72, so the gate fired every single morning, and a cap
+  that always fires is not bounding a document — it is deleting the end of it.
+  Not derived from the project count: a ceiling that rises to meet its contents
+  is not a ceiling.
 
 - **`review --web` no longer waits on a name server before opening the browser.**
   `HTTPServer.server_bind` sets `server_name` from `socket.getfqdn(host)`, and

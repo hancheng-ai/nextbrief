@@ -826,7 +826,11 @@ def score_project(p, cfg, outcomes=None):
 # first, and what can I afford to lose.
 KEEP = {
     # Enrichment. Useful, and none of it is a warning or a decision.
-    "questions": 0,           # a question that waits a night costs nothing
+    # Its own tier, below everything, because the block that emits it says so:
+    # "a question that waits a night costs nothing". Sharing tier 0 with the
+    # agent queue meant the tie-break decided between them by position, and
+    # position put the questions last -- so the queue was given up to keep them.
+    "questions": -1,
     "automation_review": 0,
     "agent_queue": 0,
     "waiting": 1,
@@ -1374,8 +1378,16 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     # Read as "not observed present" rather than "declared none", so a snapshot
     # written before the check existed still behaves: `git_present` is absent
     # there, which is falsy, which is the old behaviour exactly.
+    # `has_git` as well as `git_present`, because they cover different holes. A
+    # registry entry that omits `git` entirely is defaulted to the string "none"
+    # by sense, yet the git pass still runs for it (`None != "none"`) -- so the
+    # engine reads its history, `git_present` is never computed, and the old
+    # condition told the owner of a perfectly ordinary repository that a bad
+    # delete would be unrecoverable. Nothing this claim is about is true when the
+    # engine has resolved a repository by either route.
     nogit = [p.get("name", "") for p in (snap.get("projects") or [])
-             if p.get("git_declared") == "none" and not p.get("git_present")
+             if p.get("git_declared") == "none"
+             and not p.get("git_present") and not p.get("has_git")
              and ((p.get("fs") or {}).get("changed") or {}).get("7", 0) > 0]
     if nogit:
         rem.append(cat.t("reminder.no_git", projects=sep.join(nogit)))
@@ -1436,9 +1448,10 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
 
     # ---- the one thing only a person can answer -------------------------
     #
-    # LAST on purpose. Gate 4 below keeps the first `brief_max_lines` and drops
-    # the tail, so whatever sits at the bottom is what a full brief loses. When
-    # this section was placed above the reminders it pushed them off the page --
+    # LAST on purpose, and cheapest in `KEEP` for the same reason. Position no
+    # longer decides what a crowded brief loses -- the table does -- but the two
+    # agree here. When this section was placed above the reminders it pushed them
+    # off the page --
     # and the reminders are the brief's only warnings: which projects have no git
     # and are unrecoverable if deleted, which status documents contradict each
     # other. A question that waits a night costs nothing. A warning that
@@ -1571,24 +1584,47 @@ def last_run_before_today(ws: Workspace, as_of) -> Optional[dict]:
     return best
 
 
-def last_notified_run(ws: Workspace) -> Optional[dict]:
-    """The most recent run that actually delivered a notification.
+def announced_after(prev_run, meta, key: str, delivered: bool) -> List[str]:
+    """What the reader will have been told about, once this run is over.
 
-    The edge has to be armed by *delivery*, not by writing a record. Armed by the
-    record, a run that was told `--no-notify`, or whose sink returned False --
-    which `sinks/none.py` always does, and which any failing transport does --
-    consumed the edge anyway, so the project it would have told you about was
-    never mentioned again. `cmd_open` re-renders whenever BRIEF.html is missing,
-    which is enough to spend the evening's notification before the scheduled run
-    reaches it.
+    One carried-forward set per verdict, and the update rule is the whole design:
 
-    The old state test was noisy and self-healing. Replacing it with a
-    fire-once test that can fire into nothing trades a defect for a worse one.
+    * a notification got through -- everything currently in the verdict set has
+      now been announced;
+    * it did not -- the set is unchanged, **intersected with what is still true**,
+      so a project that has recovered stops counting as announced.
+
+    Both halves are load-bearing, and each fixes a defect the other one causes.
+
+    Without the delivery condition, a run told `--no-notify` or whose sink
+    returned False -- which `sinks/none.py` always does, and any broken transport
+    does -- consumed the edge anyway, and the project it would have told you
+    about was never mentioned again. `cmd_open` re-renders whenever BRIEF.html is
+    absent, which is enough to spend the evening's notification before the
+    scheduled run reaches it.
+
+    Without the intersection, the baseline freezes at the last delivery, so a
+    project that is announced, recovers, and relapses is never announced again --
+    which is worse than the noisy state test all of this replaced, because it
+    fails silently. That was an earlier attempt at this function and it shipped
+    for exactly one commit.
+
+    Retrying into a broken sink is deliberate. Nothing reaches the reader while
+    the transport is down, so the repetition costs nobody anything, and the first
+    run after it is fixed says what has been true all along.
     """
-    for rec in reversed(read_runs(ws)):
-        if rec.get("notified"):
-            return rec
-    return None
+    now = {str(i) for i in (meta.get(key + "_ids") or ())}
+    if delivered:
+        return sorted(now)
+    return sorted(_announced(prev_run, key) & now)
+
+
+def _announced(prev_run, key: str):
+    """The recorded announced set, tolerating anything a hand-edited log holds."""
+    recorded = (prev_run or {}).get("announced_" + key + "_ids")
+    if not isinstance(recorded, (list, tuple)):
+        return set()
+    return {str(i) for i in recorded}
 
 
 def read_prev_run(ws: Workspace, current_at=None) -> Optional[dict]:
@@ -1697,8 +1733,15 @@ def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catal
     append_text(ws, path, text)
 
 
-def _newly(meta, prev_run, key: str):
-    """Ids in this run's verdict set that were not in the last run's.
+def _newly(meta, prev_run, key: str, field: Optional[str] = None):
+    """Ids in this run's verdict set that were not in the recorded one.
+
+    `field` names which record to compare against, because two callers ask two
+    different questions and guessing between them gets one of them wrong. The
+    brief's what-is-new line asks "what changed since a day the reader could have
+    read", which is that day's raw verdict set. The notifier asks "what has the
+    reader been TOLD", which is the announced set -- see `announced_after`.
+
 
     A missing record, or one written before these sets were recorded, reads as
     "nothing was known" -- so everything currently in the set looks new and the
@@ -1717,7 +1760,7 @@ def _newly(meta, prev_run, key: str):
     # costing the whole brief for a stray keystroke in a file the engine only
     # reads. Anything that is not a list or tuple reads as "nothing recorded",
     # which is the same fallback a missing key gets.
-    recorded = (prev_run or {}).get(key + "_ids")
+    recorded = (prev_run or {}).get(field or (key + "_ids"))
     if not isinstance(recorded, (list, tuple)):
         recorded = ()
     before = {str(i) for i in recorded}
@@ -1763,9 +1806,11 @@ def should_notify(cfg, snap, prev_snap, meta, notes, prev_run=None):
             for d in p.get("deadlines") or []:
                 if d.get("in_lead_window") and not (old.get(d.get("date"), {}).get("in_lead_window")):
                     return True, "deadline entered its lead window"
-    if "neglect" in want and _newly(meta, prev_run, "neglected"):
+    if "neglect" in want and _newly(meta, prev_run, "neglected",
+                                    "announced_neglected_ids"):
         return True, "a project is neglected"
-    if "new_stalled" in want and _newly(meta, prev_run, "stalled"):
+    if "new_stalled" in want and _newly(meta, prev_run, "stalled",
+                                        "announced_stalled_ids"):
         return True, "a project is stalled"
     if notes.get("dropped_claims") or notes.get("reverted_fields"):
         return True, "claims were dropped or fields reverted"
@@ -1826,7 +1871,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dry-run", action="store_true",
                     help="print BRIEF.md, write nothing")
     ap.add_argument("--check", action="store_true",
-                    help="exit 3 if BRIEF.md would change; write nothing")
+                    help="exit 3 if BRIEF.md or BRIEF.html would change; write nothing")
     return ap
 
 
@@ -2021,16 +2066,23 @@ def main(argv=None) -> int:
         # markdown-only check calls current forever, and `cmd_open` re-renders
         # only when the file is absent, never when it is wrong.
         wanted = [(ws.brief_md, text)]
+        html_compared = False
         try:
             from . import html as html_mod
             wanted.append((ws.brief_html,
                            html_mod.render_html(snap, brief, backlog, cfg, reg,
                                                 cat, notes, meta)))
+            html_compared = True
         except Exception as exc:                               # noqa: BLE001 - fail-open
-            # Same rule as the write path: a broken HTML renderer must not cost
-            # the answer about the markdown. Reported, never fatal.
+            # A broken HTML renderer must not raise out of a command whose
+            # contract is an exit code. But it must not be reported as agreement
+            # either: the write path is fail-open in the same way, so the state
+            # that produces a stale BRIEF.html is exactly the state where this
+            # branch is taken, and answering "current" there is the hole this
+            # comparison was added to close.
             print("render: BRIEF.html could not be rendered for comparison: %s"
                   % exc, file=sys.stderr)
+            return EXIT_STALE
         for path, expected in wanted:
             try:
                 current = path.read_text(encoding="utf-8")
@@ -2048,7 +2100,8 @@ def main(argv=None) -> int:
                 print("render: %s is out of date" % path, file=sys.stderr)
                 return EXIT_STALE
         print("render: %s and %s are current"
-              % (ws.brief_md.name, ws.brief_html.name))
+              % (ws.brief_md.name, ws.brief_html.name)
+              if html_compared else "render: %s is current" % ws.brief_md.name)
         return 0
 
     if args.dry_run:
@@ -2078,11 +2131,12 @@ def main(argv=None) -> int:
 
     # The record `notes` already holds, not a second read of the same file. Two
     # reads are two chances to disagree about which run was the last one.
-    # Armed by the last run that actually DELIVERED. A record written by a run
-    # that was told --no-notify, or whose sink returned False, must not count
-    # as having told anyone anything.
+    # The immediately previous run's ANNOUNCED set -- what the reader has
+    # actually been told, which `announced_after` only advances on delivery and
+    # shrinks as projects recover. `notes` already holds that record; reading the
+    # file twice is two chances to disagree about which run was the last one.
     do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes,
-                                   prev_run=last_notified_run(ws))
+                                   prev_run=notes.get("prev_run"))
     notified = False
     if do_notify and not args.no_notify:
         notified = _send_notification(cfg, meta, brief, cat, ws)
@@ -2113,13 +2167,25 @@ def main(argv=None) -> int:
         "truncated_lines": meta.get("truncated_lines", 0),
         "notified": notified,
         "notify_reason": why,
-        # Yesterday's verdicts, so tomorrow can tell what is new. `stalled` is
-        # the reason this lives here rather than being recomputed from the
-        # previous snapshot: it depends on the backlog, which the snapshot does
-        # not carry. Sorted, because a set's iteration order is not a thing to
-        # write into a log that gets diffed.
+        # Two records of two different things, because two callers ask two
+        # different questions.
+        #
+        # The plain sets are what was TRUE on this run, and the brief's
+        # what-is-new line diffs them against the last run from an earlier day.
+        # They live here rather than being recomputed from a snapshot because
+        # `stalled` depends on the backlog, which the snapshot does not carry.
+        #
+        # The announced sets are what the reader has been TOLD, which only
+        # advances on a delivered notification -- see `announced_after`.
+        #
+        # Sorted, because a set's iteration order is not a thing to write into a
+        # log that gets diffed.
         "neglected_ids": sorted(str(i) for i in (meta.get("neglected_ids") or ())),
         "stalled_ids": sorted(str(i) for i in (meta.get("stalled_ids") or ())),
+        "announced_neglected_ids": announced_after(
+            notes.get("prev_run"), meta, "neglected", notified),
+        "announced_stalled_ids": announced_after(
+            notes.get("prev_run"), meta, "stalled", notified),
         "ok": True,          # <- success sentinel, must be the last thing written
     })
 

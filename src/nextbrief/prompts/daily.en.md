@@ -169,5 +169,5 @@ Filename `NA-00NN-<project>-<hyphenated-title>.md`, strictly in the format of `{
 ## Language and length
 
 - **English.** Leave code identifiers, paths and field names exactly as they are.
-- The whole brief is `caps.brief_max_lines` lines or fewer (default 60); the renderer truncates physically. **Summarise, do not enumerate**; write only what earns its line.
+- The whole brief is `caps.brief_max_lines` lines or fewer (default 100); the renderer truncates physically. **Summarise, do not enumerate**; write only what earns its line.
 - One line per project, one sentence. Neutral tone -- this is a working ledger for someone who is already busy, not a motivational poster.

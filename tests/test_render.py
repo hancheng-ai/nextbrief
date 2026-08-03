@@ -850,52 +850,68 @@ class Notification(RenderCase):
         self.assertIn("neglected", why)
 
         again, why = render.should_notify(
-            cfg, snap, prev, meta, {}, prev_run={"neglected_ids": ["orchard"]})
+            cfg, snap, prev, meta, {}, prev_run={"announced_neglected_ids": ["orchard"]})
         self.assertFalse(again, "the same neglected project notified twice")
         self.assertIn("nothing changed", why)
 
-    def test_a_notification_that_went_nowhere_does_not_arm_the_edge(self):
-        """The edge is armed by delivery, not by writing a record.
+    def test_the_announced_set_advances_only_on_delivery(self):
+        """The rule the notification edge turns on, stated directly.
 
-        `sinks/none.py` always returns False, any failing transport returns
-        False, and `--no-notify` never calls a sink at all — yet each of those
-        runs wrote the ids down, so the project they would have told you about
-        was never mentioned again. `cmd_open` re-renders whenever BRIEF.html is
-        missing, which is enough to spend the evening's notification before the
-        scheduled run gets to it.
-
-        The state test this replaced was noisy and self-healing. A fire-once test
-        that can fire into nothing is a worse defect, not a better one.
+        Armed by writing a record, a suppressed or failed notification consumed
+        the edge and the project was never mentioned again. Armed by "the last
+        run that delivered", the baseline froze at that run, so a project that
+        was announced, recovered and relapsed was never mentioned again either —
+        worse, because it fails silently. Both of those shipped; this is the rule
+        that fixes each without causing the other.
         """
+        meta = self._meta(neglected=["orchard"])
+        # Delivered: everything true is now announced.
+        self.assertEqual(render.announced_after(None, meta, "neglected", True), ["orchard"])
+        # Not delivered: nothing becomes announced.
+        self.assertEqual(render.announced_after(None, meta, "neglected", False), [])
+        # Not delivered, but previously announced and still true: stays announced.
+        prev = {"announced_neglected_ids": ["orchard"]}
+        self.assertEqual(render.announced_after(prev, meta, "neglected", False), ["orchard"])
+        # Recovered: drops out even though nothing was delivered, so that a
+        # relapse counts as news again.
+        empty = self._meta(neglected=[])
+        self.assertEqual(render.announced_after(prev, empty, "neglected", False), [])
+
+    def test_a_project_that_recovers_and_relapses_is_announced_again(self):
+        # The blocker the "last delivered run" version shipped: the baseline
+        # froze, so `_newly` returned nothing forever.
+        cfg = {"notify": {"only_if": ["neglect"]}}
         snap = make_snapshot()
         prev = json.loads(json.dumps(snap))
+        announced = {"announced_neglected_ids": ["orchard"]}
+
+        # Day 2: recovered. Nothing to say, and the announcement lapses.
+        gone = self._meta(neglected=[])
+        self.assertFalse(render.should_notify(cfg, snap, prev, gone, {}, prev_run=announced)[0])
+        lapsed = {"announced_neglected_ids":
+                  render.announced_after(announced, gone, "neglected", False)}
+        self.assertEqual(lapsed["announced_neglected_ids"], [])
+
+        # Day 3: relapsed. This must break the silence.
+        back = self._meta(neglected=["orchard"])
+        fires, why = render.should_notify(cfg, snap, prev, back, {}, prev_run=lapsed)
+        self.assertTrue(fires, "a relapse after a recovery was never announced")
+        self.assertIn("neglected", why)
+
+    def test_an_undelivered_notification_is_retried(self):
+        # Retrying into a broken sink is deliberate: nothing reaches the reader
+        # while the transport is down, so repetition costs nobody anything, and
+        # the first run after it is fixed says what has been true all along.
         cfg = {"notify": {"only_if": ["neglect"]}}
+        snap = make_snapshot()
+        prev = json.loads(json.dumps(snap))
         meta = self._meta(neglected=["orchard"])
-        # A record from a run that recorded the ids but delivered nothing must
-        # not count as having told anyone.
-        undelivered = {"notified": False, "neglected_ids": ["orchard"]}
-        self.assertTrue(
-            render.should_notify(cfg, snap, prev, meta, {}, prev_run=None)[0],
-            "a run that never delivered should not have armed anything")
-        # `last_notified_run` is what the caller passes, and it skips records
-        # like `undelivered` entirely -- so the lookup returns an earlier
-        # delivered run, or None.
-        self.assertNotEqual(undelivered.get("notified"), True)
-
-    def test_last_notified_run_skips_the_runs_that_delivered_nothing(self):
-        from nextbrief.paths import resolve_workspace
-
-        ws = resolve_workspace(str(self.ws))
-        (self.ws / "log").mkdir(parents=True, exist_ok=True)
-        (self.ws / "log" / "runs.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
-            {"at": "2026-03-14T21:30:00", "notified": True, "neglected_ids": ["kiln"]},
-            {"at": "2026-03-15T21:30:00", "notified": False, "neglected_ids": ["kiln", "orchard"]},
-            {"at": "2026-03-16T21:30:00", "notified": False, "neglected_ids": ["kiln", "orchard"]},
-        ]), encoding="utf-8")
-        got = render.last_notified_run(ws)
-        self.assertEqual(got["at"], "2026-03-14T21:30:00")
-        self.assertEqual(got["neglected_ids"], ["kiln"],
-                         "an undelivered run was allowed to arm the edge")
+        rec = None
+        for _ in range(3):
+            fires, _why = render.should_notify(cfg, snap, prev, meta, {}, prev_run=rec)
+            self.assertTrue(fires, "a notification that never landed stopped being attempted")
+            rec = {"announced_neglected_ids":
+                   render.announced_after(rec, meta, "neglected", False)}
 
     def test_a_malformed_run_record_does_not_cost_the_brief(self):
         # runs.jsonl is a plain text log a person can edit. A scalar where a list
@@ -912,7 +928,7 @@ class Notification(RenderCase):
         cfg = {"notify": {"only_if": ["neglect"]}}
         do_notify, why = render.should_notify(
             cfg, snap, prev, self._meta(neglected=["orchard", "kiln"]), {},
-            prev_run={"neglected_ids": ["orchard"]})
+            prev_run={"announced_neglected_ids": ["orchard"]})
         self.assertTrue(do_notify)
         self.assertIn("neglected", why)
 
@@ -925,7 +941,7 @@ class Notification(RenderCase):
         cfg = {"notify": {"only_if": ["neglect"]}}
         do_notify, _ = render.should_notify(
             cfg, snap, prev, self._meta(neglected=["orchard"]), {},
-            prev_run={"neglected_ids": []})
+            prev_run={"announced_neglected_ids": []})
         self.assertTrue(do_notify)
 
     def test_a_stalled_project_is_edge_triggered_too(self):
@@ -935,7 +951,7 @@ class Notification(RenderCase):
         meta = self._meta(stalled=["kiln"])
         self.assertTrue(render.should_notify(cfg, snap, prev, meta, {}, prev_run=None)[0])
         self.assertFalse(render.should_notify(
-            cfg, snap, prev, meta, {}, prev_run={"stalled_ids": ["kiln"]})[0])
+            cfg, snap, prev, meta, {}, prev_run={"announced_stalled_ids": ["kiln"]})[0])
 
     def test_an_upgrade_from_a_record_without_the_sets_fires_once(self):
         # Older run records carry no id lists. Read as "nothing was known", which

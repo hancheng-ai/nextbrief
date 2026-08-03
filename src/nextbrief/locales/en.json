@@ -127,7 +127,7 @@
   "evidence.active_days_30d": "{count} active days/30d",
   "evidence.active_days_30d.compact": "{count} active days/30d",
   "evidence.caveat_mtime": "*file timestamps; no git in this repo*",
-  "evidence.caveat_no_git": "*no git in this repo*",
+  "evidence.caveat_no_git": "*file timestamps; git not read here*",
   "evidence.commits_30d": "{count} commits/30d",
   "evidence.files_7d": "{count} files/7d",
   "evidence.last_commit": "last commit {date}",

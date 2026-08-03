@@ -127,7 +127,7 @@
   "evidence.active_days_30d": "{count} 个活跃日/30d",
   "evidence.active_days_30d.compact": "{count} 活跃日/30d",
   "evidence.caveat_mtime": "*文件时间戳；本仓无 git*",
-  "evidence.caveat_no_git": "*本仓无 git*",
+  "evidence.caveat_no_git": "*文件时间戳；此处未读 git*",
   "evidence.commits_30d": "{count} 提交/30d",
   "evidence.files_7d": "{count} 文件/7d",
   "evidence.last_commit": "末次提交 {date}",

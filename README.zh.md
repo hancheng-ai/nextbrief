@@ -346,7 +346,7 @@ nextbrief init [dir]     创建 workspace   （-y、--no-scan）
 全局参数：`--workspace DIR`、`--out DIR`、`--locale LANG`、`--version`。
 `sense` 另有 `--check`、`--stdout`、`--as-of ISO`、`--timing`；`render` 有 `--no-notify`、`--dry-run`、`--check`。
 
-重跑 stage 1 会改变输出时，`check` 退出码为 `3`——这就是整个调度契约，任何定时跑 nextbrief 的东西都能直接分支，不用解析文本：
+重跑两个确定性阶段会改变你读到的任何东西时——快照与磁盘不再一致，或 `BRIEF.md` / `BRIEF.html` 与快照不再一致——`check` 退出码为 `3`。这就是整个调度契约，任何定时跑 nextbrief 的东西都能直接分支，不用解析文本：
 
 ```cron
 30 21 * * *  /usr/local/bin/nextbrief run >> ~/brief/log/cron.log 2>&1

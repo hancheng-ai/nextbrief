@@ -222,7 +222,13 @@ def slugify_path(p) -> str:
 
 
 def git_dir_present(root, paths) -> bool:
-    """Does any of these paths hold a `.git`?
+    """Does EVERY one of these paths hold a `.git`?
+
+    Every, not any. The answer suppresses "a bad delete is unrecoverable", and
+    that warning is true of a project the moment *one* of its paths is
+    unprotected. Answering "any" silenced the warning for a two-path project
+    where only the first was a repository -- which is the reading that turns a
+    narrowly-true observation into a broadly-false reassurance.
 
     One `exists()` per declared path, and deliberately not `git rev-parse`. The
     question being answered is narrow: someone declared `git: "none"` and the
@@ -235,15 +241,16 @@ def git_dir_present(root, paths) -> bool:
     A file rather than a directory counts: that is what a worktree and a
     submodule both leave behind, and both mean the history is somewhere.
     """
+    seen = False
     for rel in paths or []:
         try:
-            if (Path(root) / rel / ".git").exists():
-                return True
+            if not (Path(root) / rel / ".git").exists():
+                return False
         except OSError:
-            continue        # unreadable is not evidence of absence, but it is
-                            # not evidence of presence either -- and this must
-                            # never raise on the sensing path
-    return False
+            return False    # unreadable is not evidence of presence, and this
+                            # must never raise on the sensing path
+        seen = True
+    return seen
 
 
 def day_count(value, default: int, where: str, field: str, problems) -> int:
@@ -2052,8 +2059,9 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 # (file timestamps; this tree has no git)" and "178 commits"
                 # should not read the same.
                 "caveat_code": "no_git" if (best_kind != "commit" and no_git) else None,
-                "caveat": ("no git here, so progress can only be inferred from file "
-                           "timestamps and sessions") if (best_kind != "commit" and no_git) else None,
+                "caveat": ("git is not read for this project, so progress can only be "
+                           "inferred from file timestamps and sessions"
+                           ) if (best_kind != "commit" and no_git) else None,
             },
         })
 
