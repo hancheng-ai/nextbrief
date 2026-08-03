@@ -57,7 +57,7 @@
   "brief.table.next": "下一步",
   "brief.table.project": "项目",
   "brief.table.signal": "信号",
-  "brief.truncated": "⚠ 简报超出 {max} 行上限，已截断 {lines} 行。完整数据在 `{path}`。",
+  "brief.truncated": "⚠ 简报超出 {max} 行上限，已整节截断 {lines} 行（先舍价值最低的那几节）。完整数据在 `{path}`；若天天如此，调高 `caps.brief_max_lines`。",
   "brief.urgent_line": "**{project}** —— {label}，**距今 {days} 天**",
   "brief.urgent_line.overdue": "**{project}** —— {label}，**已逾期 {days} 天**",
   "brief.v0_note": "*（v0 模式：尚未接 LLM 解读层，以下只有确定性事实。跑 `{command}` 得到「下一步做什么」。）*",

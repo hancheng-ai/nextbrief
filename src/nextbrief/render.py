@@ -80,7 +80,22 @@ GIT_TIMEOUT = 10
 # actually bound the output have defaults here as well as in the shipped config.
 CAP_DEFAULTS = {
     "max_next_actions": 3, "max_waiting_for": 5, "max_agent_queue": 3,
-    "max_decision_pending": 3, "per_project_line_chars": 140, "brief_max_lines": 60,
+    "max_decision_pending": 3, "per_project_line_chars": 140,
+    # 60 was set against a smaller portfolio and had stopped being a ceiling:
+    # measured on a twelve-project workspace the brief wants 72 lines, so the
+    # gate fired every single morning. A cap that always fires is not bounding
+    # the document, it is deleting the end of it -- and this tool is now aimed at
+    # people with more projects, not fewer.
+    #
+    # 100 rather than "however many it takes": the cap exists because a daily
+    # document nobody finishes is a document nobody reads, and that argument does
+    # not weaken as the portfolio grows. It leaves real headroom over the
+    # reference workspace and still fits on about two screens.
+    #
+    # Not derived from the project count. A ceiling that rises to meet its
+    # contents is not a ceiling, and the one number a reader can hold in their
+    # head about this document is how long it can ever get.
+    "brief_max_lines": 100,
 }
 LIMIT_DEFAULTS = {"max_open_items_total": 40, "max_open_per_project": 5}
 SCORING_DEFAULTS = {
@@ -792,6 +807,56 @@ def score_project(p, cfg, outcomes=None):
 # classification -- computed once, consumed by both renderings
 # ---------------------------------------------------------------------------
 
+# What a crowded brief gives up, and in what order. Higher survives longer.
+#
+# Reading order and drop order are different questions, and conflating them is
+# how this went wrong the first time. The file is written in the order it should
+# be READ, which puts the reminders near the bottom -- so dropping from the end
+# sacrificed the warnings first, the exact outcome the comment above the
+# questions block exists to prevent. Measured on a twelve-project workspace:
+# nineteen lines over, and what went was the whole reminders section.
+#
+# So the order stays as it reads and this table says what may be lost. The two
+# are allowed to disagree because they answer different questions: what do I read
+# first, and what can I afford to lose.
+KEEP = {
+    # Enrichment. Useful, and none of it is a warning or a decision.
+    "questions": 0,           # a question that waits a night costs nothing
+    "automation_review": 0,
+    "agent_queue": 0,
+    "waiting": 1,
+    # The whole portfolio in one table -- the largest section by far, and the
+    # one whose every value is recoverable verbatim from state/snapshot.json.
+    "projects": 2,
+    # Verdicts. Something is wrong and a person has to look at it.
+    "stalled": 3,
+    "decision_pending": 3,
+    "most_urgent": 3,
+    # Never given up while anything else can be. The reminders are the brief's
+    # only warnings -- which projects have no version control, which status
+    # documents contradict each other -- and the next actions are the answer to
+    # the question the reader opened the file to ask.
+    "next_actions": 4,
+    "reminders": 4,
+}
+
+
+def section(lines: List[str], marks: List[dict], key: str, title: str) -> None:
+    """Open a section, and record where it starts and what it is worth.
+
+    Recorded as it is written rather than recovered afterwards by scanning for
+    lines beginning with "## ". That scan would be right almost always and wrong
+    on the day a project is named with a leading hash -- and the failure would be
+    a brief silently cut in the wrong place, which is the least debuggable kind.
+
+    An unknown key sorts with the enrichment tier rather than raising: a section
+    added later and not listed here should cost its author a review comment, not
+    the reader their brief.
+    """
+    marks.append({"start": len(lines), "key": key, "keep": KEEP.get(key, 0)})
+    lines.append("## " + title)
+
+
 def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     """Decide, once, which projects are stalled / neglected / awaiting a decision.
 
@@ -982,6 +1047,8 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     if meta is None:
         meta = classify(snap, backlog, cfg, reg)
     L: List[str] = []
+    # Where each section begins, so gate 4 can drop whole ones.
+    marks: List[int] = []
 
     ranked = meta["ranked"]
     # Ranked first, then the unrated in id order. Excluding a project from the
@@ -1035,7 +1102,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     # ---- do these first (whole portfolio) ----
     nexts = (brief or {}).get("next_actions") or []
     if nexts:
-        L.append("## " + cat.t("brief.section.next_actions"))
+        section(L, marks, "next_actions", cat.t("brief.section.next_actions"))
         for i, a in enumerate(nexts[:caps["max_next_actions"]], 1):
             who = a.get("who") or cat.t("brief.action.who_default")
             est = (cat.t("sep.dot") + a["estimate"]) if a.get("estimate") else ""
@@ -1073,7 +1140,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                     urgent.append(cat.t("brief.urgent_line", project=p.get("name", ""),
                                         label=d.get("label", ""), days=days))
         if urgent:
-            L.append("## " + cat.t("brief.section.most_urgent"))
+            section(L, marks, "most_urgent", cat.t("brief.section.most_urgent"))
             for u in urgent[:caps["max_next_actions"]]:
                 L.append("- " + u)
             L.append("")
@@ -1081,7 +1148,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         L.append("")
 
     # ---- one line per project ----
-    L.append("## " + cat.t("brief.section.projects"))
+    section(L, marks, "projects", cat.t("brief.section.projects"))
     L.append("")
     L.append("| %s | %s | %s | %s |" % (cat.t("brief.table.project"), cat.t("brief.table.signal"),
                                         cat.t("brief.table.evidence"), cat.t("brief.table.next")))
@@ -1128,7 +1195,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
 
     # ---- awaiting a decision ----
     if decision_pending:
-        L.append("## " + cat.t("brief.section.decision_pending"))
+        section(L, marks, "decision_pending", cat.t("brief.section.decision_pending"))
         for p in decision_pending[:caps["max_decision_pending"]]:
             od = p.get("open_decision") or {}
             L.append("- " + cat.t("brief.decision.line", name=p.get("name", ""),
@@ -1152,7 +1219,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
 
     # ---- stalled ----
     if stalled:
-        L.append("## " + cat.t("brief.section.stalled"))
+        section(L, marks, "stalled", cat.t("brief.section.stalled"))
         for p in stalled:
             g = (p.get("git") or [{}])[0]
             if g.get("uncommitted"):
@@ -1178,7 +1245,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
            if p.get("external_dependency") and p.get("id") not in stall_ids
            and p.get("id") not in self_ids]
     if waits or ext:
-        L.append("## " + cat.t("brief.section.waiting"))
+        section(L, marks, "waiting", cat.t("brief.section.waiting"))
         n = 0
         for b in waits[:caps["max_waiting_for"]]:
             L.append("- " + cat.t("brief.waiting.item", id=b.get("id", ""), title=b.get("title", ""),
@@ -1196,7 +1263,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     agentq = [b for b in open_items if b.get("blocked_by") == "agent"
               or (b.get("automation") or {}).get("tier") == "hook"]
     if agentq:
-        L.append("## " + cat.t("brief.section.agent_queue"))
+        section(L, marks, "agent_queue", cat.t("brief.section.agent_queue"))
         for b in agentq[:caps["max_agent_queue"]]:
             a = b.get("automation") or {}
             human = _first_clause(a.get("what_needs_human"))
@@ -1217,7 +1284,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
             wn = str(auto.get("what_needs_human") or "").lower()
             if any(m.strip().lower() in wn for m in markers):
                 human_perm += 1
-        L.append("## " + cat.t("brief.section.automation_review"))
+        section(L, marks, "automation_review", cat.t("brief.section.automation_review"))
         L.append("> " + cat.t("brief.automation.summary", total=len(open_items),
                               hook=tiers.get("hook", 0), skill=tiers.get("skill", 0),
                               explore=tiers.get("explore", 0), unknown=tiers.get("unknown", 0),
@@ -1313,7 +1380,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     notes["reminders"] = rem   # the HTML reuses this list, so the two cannot drift
 
     if rem:
-        L.append("## " + cat.t("brief.section.reminders"))
+        section(L, marks, "reminders", cat.t("brief.section.reminders"))
         for r in rem[:8]:
             L.append("- " + r)
         L.append("")
@@ -1332,7 +1399,7 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     # string from the catalogue or a fact about the registry's own contents,
     # which the reader can verify by opening it.
     if asking:
-        L.append("## " + cat.t("brief.section.questions"))
+        section(L, marks, "questions", cat.t("brief.section.questions"))
         for p_ in asking:
             L.append("- **%s** — %s" % (p_.get("name") or p_.get("id"),
                                         cat.t(QUESTIONS[0].key)))
@@ -1340,19 +1407,58 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                 L.append("  - " + cat.t(key))
         L.append("")
 
-    L.append("---")
-    L.append(cat.t("brief.footer", generator=GENERATOR, time=gen.strftime("%Y-%m-%d %H:%M")))
-
     # ---- Gate 4: physical truncation ----
+    #
+    # Whole sections, from the end, and the footer is added afterwards rather
+    # than trimmed with everything else.
+    #
+    # Two things were wrong with keeping a prefix of the finished document. The
+    # footer went first, because it is last -- so on precisely the busiest days
+    # the brief lost the line naming what generated it and stating that every
+    # claim had passed the evidence gate. And the cut landed wherever the line
+    # count fell, which for a portfolio of any size is inside the projects table:
+    # a header, a separator, and no rows. A missing section is legible and says
+    # so; a halved table is a document that appears to have run out.
+    #
+    # No second notion of rank. The order these sections are written in already
+    # encodes what matters most -- the comment above the questions block argues
+    # it explicitly -- and a rank attribute would be a second mechanism deciding
+    # the same question, which is how two mechanisms come to disagree.
     maxl = caps["brief_max_lines"]
+    footer = ["---", cat.t("brief.footer", generator=GENERATOR,
+                           time=gen.strftime("%Y-%m-%d %H:%M"))]
     truncated = 0
-    if len(L) > maxl:
-        keep = L[:maxl - 3]
-        truncated = len(L) - len(keep)
-        keep.append("")
-        keep.append("> " + cat.t("brief.truncated", max=maxl, lines=truncated,
-                                 path="state/snapshot.json"))
-        L = keep
+    if len(L) + len(footer) > maxl:
+        # Room for the footer and for the blank line and notice that explain the
+        # cut. Reserved before choosing, so the explanation can never be the
+        # thing that pushes it back over.
+        budget = maxl - len(footer) - 2
+        bounds = [(m["start"],
+                   marks[i + 1]["start"] if i + 1 < len(marks) else len(L),
+                   m["keep"])
+                  for i, m in enumerate(marks)]
+        # Cheapest first, and later before earlier within a tier, so the choice
+        # is total and does not depend on sort stability.
+        doomed = set()
+        kept = len(L)
+        for start, end, _keep in sorted(bounds, key=lambda b: (b[2], -b[0])):
+            if kept <= budget:
+                break
+            doomed.add(start)
+            kept -= end - start
+        body = [line for i, line in enumerate(L)
+                if not any(s <= i < e for s, e, _k in bounds if s in doomed)]
+        # Even the preamble does not fit: a line cut, because a ceiling that
+        # cannot be met is still a ceiling.
+        if len(body) > budget:
+            body = body[:max(0, budget)]
+        truncated = len(L) - len(body)
+        L = body
+        if truncated:
+            L.append("")
+            L.append("> " + cat.t("brief.truncated", max=maxl, lines=truncated,
+                                  path="state/snapshot.json"))
+    L.extend(footer)
     meta["truncated_lines"] = truncated
     return "\n".join(L) + "\n", meta
 

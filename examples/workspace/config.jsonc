@@ -65,7 +65,7 @@
     "max_new_items_per_run": 5,
     "max_decision_pending": 3,
     "per_project_line_chars": 140,
-    "brief_max_lines": 60
+    "brief_max_lines": 100
   },
 
   "limits": {

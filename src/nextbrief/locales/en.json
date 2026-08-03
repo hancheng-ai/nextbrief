@@ -57,7 +57,7 @@
   "brief.table.next": "Next",
   "brief.table.project": "Project",
   "brief.table.signal": "Signal",
-  "brief.truncated": "⚠ The brief ran past its {max}-line ceiling; {lines} lines were cut. The full data is in `{path}`.",
+  "brief.truncated": "⚠ The brief ran past its {max}-line ceiling; {lines} lines were cut — whole sections, lowest-value first. The full data is in `{path}`; raise `caps.brief_max_lines` if this keeps happening.",
   "brief.urgent_line": "**{project}** — {label}, **{days} days out**",
   "brief.urgent_line.overdue": "**{project}** — {label}, **{days} days overdue**",
   "brief.v0_note": "*(v0: nothing has interpreted this yet, so what follows is deterministic fact only. Run `{command}` to get \"what to do next\".)*",

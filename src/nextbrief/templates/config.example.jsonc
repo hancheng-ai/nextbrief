@@ -90,7 +90,11 @@
     // few enough that the section never competes with the actual brief.
     "max_questions": 2,
     "per_project_line_chars": 140,
-    "brief_max_lines": 60
+    // The hard ceiling. Overflow drops WHOLE sections from the end, so a
+    // crowded day loses a section and says so rather than stopping mid-table --
+    // and the footer is added after the cut, so the line naming what generated
+    // this never disappears. The full data is always in state/snapshot.json.
+    "brief_max_lines": 100
   },
 
   "limits": {
