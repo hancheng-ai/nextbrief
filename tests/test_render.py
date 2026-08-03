@@ -813,12 +813,27 @@ class Notification(RenderCase):
         self.assertFalse(do_notify)
         self.assertIn("nothing changed", why)
 
-    def test_a_dropped_claim_always_breaks_the_silence(self):
+    def test_a_dropped_claim_breaks_the_silence_only_when_asked_to(self):
+        """Deliberate change: it used to break the silence unconditionally.
+
+        The branch consulted no configuration and sat after every `only_if`
+        check, so `only_if: []` — the documented way to say "never interrupt me"
+        — delivered anyway, every run, for as long as `brief.json` held a claim
+        the gate drops. The notification body never mentions the drop, and the
+        brief already carries the same fact as a reminder, so what the reader got
+        was a byte-identical banner every day about nothing new.
+
+        It is a named reason now, shipped in the default `only_if`, so the
+        behaviour is unchanged for anyone who has not asked for silence.
+        """
         snap = make_snapshot()
-        cfg = {"notify": {"only_if": ["change"]}}
-        do_notify, _ = render.should_notify(cfg, snap, json.loads(json.dumps(snap)),
-                                            self._meta(), {"dropped_claims": 1})
-        self.assertTrue(do_notify)
+        prev = json.loads(json.dumps(snap))
+        asked = {"notify": {"only_if": ["change", "claims_dropped"]}}
+        self.assertTrue(render.should_notify(
+            asked, snap, prev, self._meta(), {"dropped_claims": 1})[0])
+        silent = {"notify": {"only_if": []}}
+        self.assertFalse(render.should_notify(
+            silent, snap, prev, self._meta(), {"dropped_claims": 1})[0])
 
     def _meta(self, neglected=(), stalled=()):
         meta = render.classify(make_snapshot(), [], {})
@@ -1174,3 +1189,58 @@ class NotificationEndToEnd(RenderCase):
         self.assertEqual(self._render("--no-notify")[0], 0)
         self.assertEqual(self._records()[-1]["announced_neglected_ids"], after_first,
                          "a suppressed re-render rolled the announcement back")
+
+
+class EveryNotifyReasonIsReRenderSafe(NotificationEndToEnd):
+    """One snapshot, one notification — whichever reason fires.
+
+    The edge work covered `neglect` and `new_stalled` and left `change` and
+    `deadline_lead` diffing the snapshot against its predecessor, neither of
+    which a re-render touches. `change` is the first entry of the shipped
+    default, so the branch that fires most often was the one still delivering
+    the same news on every render, without bound.
+    """
+
+    def _configure(self, only_if, brief=None):
+        from nextbrief.jsonc import load_jsonc
+
+        # A previous snapshot that differs, so `change` has something to see.
+        prev = json.loads((self.ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        prev["projects"][0]["evidence"]["best_date"] = "2026-01-01"
+        (self.ws / "state" / "snapshot.prev.json").write_text(
+            json.dumps(prev), encoding="utf-8")
+        cfg = load_jsonc(str(self.ws / "config.jsonc"))
+        cfg.setdefault("notify", {})["only_if"] = only_if
+        (self.ws / "config.jsonc").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        if brief:
+            write_brief_json(self.ws, brief)
+
+    def test_change_does_not_re_deliver_on_a_re_render(self):
+        self._configure(["change"])
+        for _ in range(4):
+            self.assertEqual(self._render()[0], 0)
+        self.assertEqual(len(self.delivered), 1,
+                         "`change` delivered %d times for one snapshot" % len(self.delivered))
+
+    def test_an_empty_only_if_really_means_never_interrupt_me(self):
+        """The documented way to ask for silence, which one branch ignored.
+
+        The dropped-claims branch consulted no configuration at all and sat after
+        every `want` check, so it delivered every run for as long as `brief.json`
+        held a claim the evidence gate drops — and the body never mentions the
+        drop, so the reader got a byte-identical notification daily about
+        something the brief already carries as a reminder line.
+        """
+        self._configure([], brief={"next_actions": [
+            {"title": "A claim with no evidence", "project": "orchard", "evidence": []}]})
+        for _ in range(4):
+            self.assertEqual(self._render()[0], 0)
+        self.assertEqual(self.delivered, [],
+                         "only_if: [] still delivered: %r" % (self.delivered,))
+
+    def test_dropped_claims_still_notify_when_asked_for(self):
+        # The other half: gating it must not delete it.
+        self._configure(["claims_dropped"], brief={"next_actions": [
+            {"title": "A claim with no evidence", "project": "orchard", "evidence": []}]})
+        self.assertEqual(self._render()[0], 0)
+        self.assertEqual(len(self.delivered), 1)

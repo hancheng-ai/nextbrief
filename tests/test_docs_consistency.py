@@ -231,10 +231,18 @@ class ShippedConfigTemplate(unittest.TestCase):
     exists because of it.
     """
 
-    def _template(self):
+    # Both of them. Phase 0 cleaned the template and this test only looked at the
+    # template, so the example workspace kept eight dead keys and a `notify.sink`
+    # that made `make render` push a real desktop notification -- in the one
+    # workspace whose entire purpose is to be safe to try.
+    CONFIGS = (
+        ("src/nextbrief/templates/config.example.jsonc", "the shipped template"),
+        ("examples/workspace/config.jsonc", "the example workspace"),
+    )
+
+    def _template(self, rel="src/nextbrief/templates/config.example.jsonc"):
         from nextbrief.jsonc import load_jsonc
-        return load_jsonc(str(REPO_ROOT / "src" / "nextbrief" / "templates"
-                              / "config.example.jsonc"))
+        return load_jsonc(str(REPO_ROOT / rel))
 
     @staticmethod
     def _leaves(obj, path=""):
@@ -267,10 +275,11 @@ class ShippedConfigTemplate(unittest.TestCase):
     def test_every_key_it_ships_is_read_by_something(self):
         constants = self._string_constants()
         prompts = self._prompt_text()
-        orphans = [full for full, leaf in self._leaves(self._template())
-                   if leaf not in constants and leaf not in prompts]
-        self.assertEqual(orphans, [],
-                         "config.example.jsonc ships keys nothing reads: %s" % orphans)
+        for rel, label in self.CONFIGS:
+            orphans = [full for full, leaf in self._leaves(self._template(rel))
+                       if leaf not in constants and leaf not in prompts]
+            self.assertEqual(orphans, [],
+                             "%s ships keys nothing reads: %s" % (label, orphans))
 
     def test_the_notify_reasons_it_lists_are_ones_should_notify_implements(self):
         # The same defect one level down: `only_if` is a list of names, and a name
@@ -282,7 +291,22 @@ class ShippedConfigTemplate(unittest.TestCase):
         from nextbrief import render
 
         source = inspect.getsource(render.should_notify)
-        for reason in self._template()["notify"]["only_if"]:
-            self.assertIn('"%s"' % reason, source,
-                          "config lists notify reason %r that should_notify "
-                          "never tests" % reason)
+        for rel, label in self.CONFIGS:
+            for reason in self._template(rel)["notify"]["only_if"]:
+                self.assertIn('"%s"' % reason, source,
+                              "%s lists notify reason %r that should_notify "
+                              "never tests" % (label, reason))
+
+    def test_the_example_workspace_cannot_push_a_real_notification(self):
+        """Its own comment promises this, and the key it used could not keep it.
+
+        `notify.sink` is read by nothing -- the sink layer reads `notify.backend`
+        -- so the example resolved to the platform default and pushed a real
+        desktop banner on every `make render`. An example whose whole purpose is
+        to be safe to try must be safe to try.
+        """
+        from nextbrief.sinks import resolve_backend
+
+        self.assertEqual(
+            resolve_backend(self._template("examples/workspace/config.jsonc")),
+            "none")

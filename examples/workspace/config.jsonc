@@ -12,7 +12,6 @@
 
   "schedule": {
     "slot": "21:30",
-    "tz_offset_hours": 0,         // DEMO: UTC, so the example produces the same output everywhere
     "late_warn_minutes": 360
   },
 
@@ -49,11 +48,10 @@
   },
 
   "neglect": {
-    "default_days": 30,
-    "renotify_days": 7,
     // orchard-api has an open decision, so it belongs under "decisions pending".
-    // Calling a deliberate pause procrastination is how the system loses your trust.
-    "exclude_when_blocked_by_decision": true
+    // Calling a deliberate pause procrastination is how the system loses your
+    // trust -- so it is behaviour, not a setting.
+    "default_days": 30
   },
 
   "caps": {
@@ -84,23 +82,16 @@
   },
 
   "automation": {
-    "tiers": ["explore", "skill", "hook"],
-    "recheck_days": 30,
-    "recheck_budget_per_run": 2
-  },
-
-  "drift": {
-    "renotify_days": 14
+    "tiers": ["explore", "skill", "hook"]
   },
 
   "notify": {
-    "sink": "none",               // DEMO: an example run must not push a desktop notification
-    "only_if": ["change", "deadline_lead", "new_stalled", "neglect", "decision_pending_new"],
+    // `backend`, not `sink`. The sink layer reads `notify.backend`, so the key
+    // this file carried was read by nothing -- and an example run, whose whole
+    // point is to be safe to try, pushed a real desktop notification every time.
+    "backend": "none",            // DEMO: an example run must not push a desktop notification
+    "only_if": ["change", "deadline_lead", "new_stalled", "neglect", "claims_dropped"],
     "title": "Today's brief (example)"
-  },
-
-  "cost": {
-    "alert_usd_7d": 3.0
   },
 
   "model_by_stage": {
@@ -113,7 +104,6 @@
 
   "external_tools": {
     // Optional by contract: absent binary means tool_missing in the snapshot, not a failed run.
-    "scc": "scc",
-    "ccusage": "ccusage"
+    "scc": "scc"
   }
 }

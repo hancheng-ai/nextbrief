@@ -1785,7 +1785,21 @@ def _newly(meta, prev_run, key: str, field: Optional[str] = None):
     return now - before
 
 
-def should_notify(cfg, snap, prev_snap, meta, notes, prev_run=None):
+def announced_this_snapshot(ws: Workspace, stamp) -> bool:
+    """Has any run of THIS snapshot already delivered a notification?
+
+    Any, not the last one. Checking only the newest record made the guard
+    alternate: run 1 delivered, run 2 saw a delivery and went quiet, run 3 saw
+    run 2's `notified: false` and delivered again. "One snapshot, one
+    notification" is a property of the whole run of records sharing that stamp.
+    """
+    if not stamp:
+        return False
+    return any(r.get("at") == stamp and r.get("notified") for r in read_runs(ws))
+
+
+def should_notify(cfg, snap, prev_snap, meta, notes, prev_run=None,
+                  already_announced=False):
     """The quiet rule: a system that tells you punctually every day that nothing
     happened gets muted in week three. Reasons are English on purpose -- they are
     operator diagnostics in runs.jsonl, not part of the brief.
@@ -1807,6 +1821,22 @@ def should_notify(cfg, snap, prev_snap, meta, notes, prev_run=None):
     decides whether to *send* a notification, never what BRIEF.md contains.
     """
     want = set(((cfg or {}).get("notify") or {}).get("only_if") or [])
+
+    # One snapshot, one delivered notification.
+    #
+    # This is the guard the edge work should have started with. Making `neglect`
+    # and `new_stalled` re-render-safe left `change` and `deadline_lead` -- which
+    # diff the snapshot against its predecessor, neither of which a re-render
+    # touches -- delivering the same news on every render of one snapshot,
+    # unbounded. `change` is the first entry of the shipped default, so the
+    # branch that fires most often was the one still doing it.
+    #
+    # Keyed on delivery, not on the record existing, for the same reason
+    # `announced_after` is: a first render told `--no-notify` said nothing to
+    # anybody, and the real render after it still has news to deliver.
+    if already_announced:
+        return False, "already announced for this snapshot"
+
     if prev_snap is None:
         return True, "first run"
     prevp = {p.get("id"): p for p in prev_snap.get("projects", [])}
@@ -1830,7 +1860,13 @@ def should_notify(cfg, snap, prev_snap, meta, notes, prev_run=None):
     if "new_stalled" in want and _newly(meta, prev_run, "stalled",
                                         "announced_stalled_ids"):
         return True, "a project is stalled"
-    if notes.get("dropped_claims") or notes.get("reverted_fields"):
+    # Named in `only_if` like every other reason. Ungated, it ignored the one
+    # setting that means "never interrupt me": `only_if: []` delivered anyway,
+    # every run, for as long as `brief.json` held a claim the gate drops -- and
+    # the body never mentions the drop, so the reader got a byte-identical
+    # notification daily about something the brief already states as a reminder.
+    if "claims_dropped" in want and (notes.get("dropped_claims")
+                                     or notes.get("reverted_fields")):
         return True, "claims were dropped or fields reverted"
     return False, "nothing changed; staying quiet"
 
@@ -2155,7 +2191,9 @@ def main(argv=None) -> int:
     # written under this same snapshot stamp, and that record is the one holding
     # the announcement.
     latest = last_run(ws)
-    do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes, prev_run=latest)
+    do_notify, why = should_notify(
+        cfg, snap, prev_snap, meta, notes, prev_run=latest,
+        already_announced=announced_this_snapshot(ws, stamp))
     notified = False
     if do_notify and not args.no_notify:
         notified = _send_notification(cfg, meta, brief, cat, ws)

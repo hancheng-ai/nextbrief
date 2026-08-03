@@ -128,10 +128,10 @@
     // Silence rules. A system that tells you on time every day that nothing
     // happened gets muted in week three.
     //
-    // These four are what `should_notify` implements, and nothing else is
+    // These five are what `should_notify` implements, and nothing else is
     // accepted -- a name it does not know is simply never true, which is silence
     // where you asked for noise.
-    "only_if": ["change", "deadline_lead", "new_stalled", "neglect"],
+    "only_if": ["change", "deadline_lead", "new_stalled", "neglect", "claims_dropped"],
     "title": "Today's brief"
   },
 
