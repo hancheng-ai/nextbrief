@@ -1250,8 +1250,16 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         # actionable instruction the very first brief gives, so naming a command
         # that is not there is the worst possible place to be wrong.
         rem.append(cat.t("reminder.empty_backlog", command="nextbrief run"))
+    # `git_present` settles it where the two disagree. This line ends "a bad
+    # delete is unrecoverable", which is simply untrue of a directory that turns
+    # out to hold a repository -- and it fired every morning, because the other
+    # half of the condition is "somebody edited a file this week".
+    #
+    # Read as "not observed present" rather than "declared none", so a snapshot
+    # written before the check existed still behaves: `git_present` is absent
+    # there, which is falsy, which is the old behaviour exactly.
     nogit = [p.get("name", "") for p in (snap.get("projects") or [])
-             if p.get("git_declared") == "none"
+             if p.get("git_declared") == "none" and not p.get("git_present")
              and ((p.get("fs") or {}).get("changed") or {}).get("7", 0) > 0]
     if nogit:
         rem.append(cat.t("reminder.no_git", projects=sep.join(nogit)))
@@ -1459,10 +1467,46 @@ def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catal
     append_text(ws, path, text)
 
 
-def should_notify(cfg, snap, prev_snap, meta, notes):
+def _newly(meta, prev_run, key: str):
+    """Ids in this run's verdict set that were not in the last run's.
+
+    A missing record, or one written before these sets were recorded, reads as
+    "nothing was known" -- so everything currently in the set looks new and the
+    first run after an upgrade notifies once, then goes quiet. The alternative,
+    treating absence as "already reported", would swallow a genuinely new
+    neglected project on exactly the run where nobody has a reason to expect a
+    gap.
+
+    Re-arming falls out of the set difference and needs no timer. A timer
+    re-fires about a project you already know about; this fires only when
+    something is new again, which is the only thing worth interrupting for.
+    """
+    now = {str(i) for i in (meta.get(key + "_ids") or ())}
+    before = {str(i) for i in ((prev_run or {}).get(key + "_ids") or ())}
+    return now - before
+
+
+def should_notify(cfg, snap, prev_snap, meta, notes, prev_run=None):
     """The quiet rule: a system that tells you punctually every day that nothing
     happened gets muted in week three. Reasons are English on purpose -- they are
-    operator diagnostics in runs.jsonl, not part of the brief."""
+    operator diagnostics in runs.jsonl, not part of the brief.
+
+    `neglect` and `new_stalled` used to be *state* tests -- "is anything
+    neglected" -- while `change` and `deadline_lead` directly above them diff
+    against the previous snapshot. So a project you already knew was neglected
+    interrupted you again every morning until you fixed it: the precise
+    behaviour this docstring calls fatal, four lines under the docstring.
+
+    They are edge tests now, against the previous run record rather than the
+    previous snapshot. `stalled` is why: it depends on the backlog, which the
+    snapshot does not carry, so yesterday's verdict cannot be recomputed from
+    `prev_snap` and has to have been written down. `read_prev_run` already skips
+    a re-render of the snapshot in hand, so rendering twice is one run and does
+    not re-fire.
+
+    This reads state, and that is allowed here and nowhere near the artifacts: it
+    decides whether to *send* a notification, never what BRIEF.md contains.
+    """
     want = set(((cfg or {}).get("notify") or {}).get("only_if") or [])
     if prev_snap is None:
         return True, "first run"
@@ -1481,9 +1525,9 @@ def should_notify(cfg, snap, prev_snap, meta, notes):
             for d in p.get("deadlines") or []:
                 if d.get("in_lead_window") and not (old.get(d.get("date"), {}).get("in_lead_window")):
                     return True, "deadline entered its lead window"
-    if "neglect" in want and meta["neglected"]:
+    if "neglect" in want and _newly(meta, prev_run, "neglected"):
         return True, "a project is neglected"
-    if "new_stalled" in want and meta["stalled"]:
+    if "new_stalled" in want and _newly(meta, prev_run, "stalled"):
         return True, "a project is stalled"
     if notes.get("dropped_claims") or notes.get("reverted_fields"):
         return True, "claims were dropped or fields reverted"
@@ -1728,7 +1772,10 @@ def main(argv=None) -> int:
     as_of = dt.date.fromisoformat(snap["run"]["as_of_date"])
     write_day_log(ws, as_of, snap, prev_snap, meta, notes, cat, args.dry_run)
 
-    do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes)
+    # The record `notes` already holds, not a second read of the same file. Two
+    # reads are two chances to disagree about which run was the last one.
+    do_notify, why = should_notify(cfg, snap, prev_snap, meta, notes,
+                                   prev_run=notes.get("prev_run"))
     notified = False
     if do_notify and not args.no_notify:
         notified = _send_notification(cfg, meta, brief, cat, ws)
@@ -1756,6 +1803,13 @@ def main(argv=None) -> int:
         "truncated_lines": meta.get("truncated_lines", 0),
         "notified": notified,
         "notify_reason": why,
+        # Yesterday's verdicts, so tomorrow can tell what is new. `stalled` is
+        # the reason this lives here rather than being recomputed from the
+        # previous snapshot: it depends on the backlog, which the snapshot does
+        # not carry. Sorted, because a set's iteration order is not a thing to
+        # write into a log that gets diffed.
+        "neglected_ids": sorted(str(i) for i in (meta.get("neglected_ids") or ())),
+        "stalled_ids": sorted(str(i) for i in (meta.get("stalled_ids") or ())),
         "ok": True,          # <- success sentinel, must be the last thing written
     })
 

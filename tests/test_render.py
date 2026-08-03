@@ -633,7 +633,88 @@ class Notification(RenderCase):
                                             self._meta(), {"dropped_claims": 1})
         self.assertTrue(do_notify)
 
-    def _meta(self):
+    def _meta(self, neglected=(), stalled=()):
+        meta = render.classify(make_snapshot(), [], {})
+        meta["neglected"] = [{"id": i} for i in neglected]
+        meta["stalled"] = [{"id": i} for i in stalled]
+        meta["neglected_ids"] = set(neglected)
+        meta["stalled_ids"] = set(stalled)
+        return meta
+
+    def test_a_neglected_project_does_not_notify_every_single_day(self):
+        """The defect this class's own docstring describes, in the code below it.
+
+        `neglect` and `new_stalled` were state tests -- `if want and
+        meta["neglected"]` -- while the two branches directly above them diff
+        against the previous snapshot. So a project you already know is neglected
+        interrupted you again every morning until you fixed it, which is the
+        precise behaviour the docstring calls fatal, sitting four lines under the
+        docstring.
+
+        Nothing new to say is the whole definition of a quiet morning.
+        """
+        snap = make_snapshot()
+        prev = json.loads(json.dumps(snap))
+        cfg = {"notify": {"only_if": ["neglect"]}}
+        meta = self._meta(neglected=["orchard"])
+
+        first, why = render.should_notify(cfg, snap, prev, meta, {}, prev_run=None)
+        self.assertTrue(first, "the first sighting must break the silence")
+        self.assertIn("neglected", why)
+
+        again, why = render.should_notify(
+            cfg, snap, prev, meta, {}, prev_run={"neglected_ids": ["orchard"]})
+        self.assertFalse(again, "the same neglected project notified twice")
+        self.assertIn("nothing changed", why)
+
+    def test_a_newly_neglected_project_still_breaks_the_silence(self):
+        # The half that decides whether the above is a fix or an amputation.
+        snap = make_snapshot()
+        prev = json.loads(json.dumps(snap))
+        cfg = {"notify": {"only_if": ["neglect"]}}
+        do_notify, why = render.should_notify(
+            cfg, snap, prev, self._meta(neglected=["orchard", "kiln"]), {},
+            prev_run={"neglected_ids": ["orchard"]})
+        self.assertTrue(do_notify)
+        self.assertIn("neglected", why)
+
+    def test_a_project_that_comes_back_notifies_again(self):
+        # Re-arming falls out of set difference rather than needing a timer, and
+        # is better than one: a timer re-fires about a project you already know
+        # about, whereas this fires only when something is genuinely new again.
+        snap = make_snapshot()
+        prev = json.loads(json.dumps(snap))
+        cfg = {"notify": {"only_if": ["neglect"]}}
+        do_notify, _ = render.should_notify(
+            cfg, snap, prev, self._meta(neglected=["orchard"]), {},
+            prev_run={"neglected_ids": []})
+        self.assertTrue(do_notify)
+
+    def test_a_stalled_project_is_edge_triggered_too(self):
+        snap = make_snapshot()
+        prev = json.loads(json.dumps(snap))
+        cfg = {"notify": {"only_if": ["new_stalled"]}}
+        meta = self._meta(stalled=["kiln"])
+        self.assertTrue(render.should_notify(cfg, snap, prev, meta, {}, prev_run=None)[0])
+        self.assertFalse(render.should_notify(
+            cfg, snap, prev, meta, {}, prev_run={"stalled_ids": ["kiln"]})[0])
+
+    def test_an_upgrade_from_a_record_without_the_sets_fires_once(self):
+        # Older run records carry no id lists. Read as "nothing was known", which
+        # makes everything currently in the set look new: one notification on the
+        # first run after an upgrade, and quiet after that. The alternative --
+        # treating absence as "everything already reported" -- would swallow a
+        # genuinely new neglected project on exactly the run where the reader has
+        # least reason to expect a gap.
+        snap = make_snapshot()
+        prev = json.loads(json.dumps(snap))
+        cfg = {"notify": {"only_if": ["neglect"]}}
+        do_notify, _ = render.should_notify(
+            cfg, snap, prev, self._meta(neglected=["orchard"]), {},
+            prev_run={"at": "2026-03-15T21:30:00", "ok": True})
+        self.assertTrue(do_notify)
+
+    def _unused(self):
         return render.classify(make_snapshot(), [], {})
 
 

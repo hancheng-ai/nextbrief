@@ -16,6 +16,7 @@ import unittest
 from helpers import (
     AS_OF,
     AS_OF_DATE,
+    RECENT_MTIME,
     TempCase,
     base_registry,
     capture,
@@ -502,6 +503,126 @@ class Determinism(TempCase):
         self.assertEqual(doc["mtime_date"], "2026-03-14")
         self.assertEqual(doc["declared_date"], "2026-02-01")
         self.assertTrue(doc["stale"])
+
+
+class CheckableDeclarations(TempCase):
+    """`git: "none"` is a claim about the world, and the world can be asked.
+
+    The registry wins over the overlay because someone who opened their own file
+    said something deliberate. That rule is about *judgements* — importance,
+    phase, positioning — none of which anything else can measure. Whether a
+    directory is a git repository is not a judgement, and a declaration of it
+    goes stale the moment somebody runs `git init`.
+
+    What it costs to trust the stale one: the brief prints "a bad delete is
+    unrecoverable" every morning about a repository that has been recording
+    every change all along. A warning that is *false* is worse than one that is
+    merely frequent, because acting on it wastes the reader's time and not
+    acting on it teaches them to skip the column.
+    """
+
+    def _ws_declaring_none_with_a_repo(self):
+        ws = self.workspace()
+        reg = load_jsonc(str(ws / "registry.jsonc"))
+        # `kiln` is the fixture's non-git project. Declare it none, then make it
+        # a repository anyway -- which is exactly what `git init` on a directory
+        # somebody described months ago produces.
+        target = [p for p in reg["projects"] if p["id"] == "kiln"][0]
+        target["git"] = "none"
+        (ws / "registry.jsonc").write_text(json.dumps(reg, indent=2), encoding="utf-8")
+        (ws / "projects" / "kiln" / ".git").mkdir(parents=True, exist_ok=True)
+        return ws
+
+    def test_a_repository_under_a_none_declaration_is_reported(self):
+        ws = self._ws_declaring_none_with_a_repo()
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        codes = [f["code"] for f in snap["parse_failed"]]
+        self.assertIn("git_declared_none_but_present", codes)
+
+    def test_the_observation_is_recorded_beside_the_declaration_not_over_it(self):
+        # Both survive: `git_declared` is what a person typed and is never
+        # rewritten by us; `git_present` is what the disk says. Downstream has to
+        # be able to tell a claim from a measurement, which is the whole reason
+        # the snapshot separates declared from observed everywhere else.
+        ws = self._ws_declaring_none_with_a_repo()
+        capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        kiln = {p["id"]: p for p in snap["projects"]}["kiln"]
+        self.assertEqual(kiln["git_declared"], "none")
+        self.assertTrue(kiln["git_present"])
+
+    def test_an_honest_none_declaration_is_not_nagged(self):
+        # The half that decides whether the check above is a fix or a new daily
+        # warning: a project that really has no repository must produce nothing.
+        ws = self.workspace()
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        codes = [f["code"] for f in snap["parse_failed"]]
+        self.assertNotIn("git_declared_none_but_present", codes)
+        kiln = {p["id"]: p for p in snap["projects"]}["kiln"]
+        self.assertFalse(kiln["git_present"])
+
+
+class SessionEvidence(TempCase):
+    """What a `session:<id>` citation is allowed to mean.
+
+    The gate resolves a claim's source against the evidence index and, for
+    `commit` and `session`, checks that the source can supply that kind of fact.
+    Neither check looks at magnitude — so a handle that exists at all is a handle
+    a model can cite, and everything downstream of it is trusted.
+    """
+
+    def _sense_with_sessions(self, make):
+        ws = self.workspace()
+        sessions = self.tmp / "sessions"
+        sessions.mkdir(exist_ok=True)
+        # The scan matches a directory NAME against the slugified project path,
+        # which is how the agent names them.
+        slug = sense.slugify_path(ws / "projects" / "orchard")
+        make(sessions / slug)
+        cfg = load_jsonc(str(ws / "config.jsonc"))
+        cfg["sessions"] = {"dir": str(sessions)}
+        (ws / "config.jsonc").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        return json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+
+    def test_a_directory_with_no_transcripts_mints_no_citable_handle(self):
+        """An empty session directory is not evidence of a session.
+
+        `scan_sessions` creates a project's entry as soon as the directory name
+        matches, so a project that has never had an agent session — but whose
+        directory survives, which is the normal state after a transcript is
+        cleaned up — carried a `sessions` block full of zeros. That block is a
+        truthy dict, and the handle was minted on its truthiness rather than on
+        anything in it.
+
+        The consequence is not cosmetic. The handle resolves, the kind matches,
+        and the model may therefore write "three agent sessions this week" about
+        a project with none and have it printed under a footer promising every
+        claim was checked.
+        """
+        snap = self._sense_with_sessions(lambda d: d.mkdir())
+        index = snap["evidence_index"]
+        self.assertNotIn("session:orchard", index,
+                         "a handle was minted for a project with no sessions")
+
+    def test_a_directory_with_a_transcript_does_mint_one(self):
+        # The other half, and the one that decides whether the rule above is a
+        # fix or an amputation: a real session must still be citable.
+        def make(d):
+            d.mkdir()
+            (d / "0198c1f4-1111-2222-3333-444455556666.jsonl").write_text(
+                '{"type":"user"}\n', encoding="utf-8")
+            set_mtime(d / "0198c1f4-1111-2222-3333-444455556666.jsonl", RECENT_MTIME)
+
+        snap = self._sense_with_sessions(make)
+        self.assertIn("session:orchard", snap["evidence_index"])
+        orchard = {p["id"]: p for p in snap["projects"]}["orchard"]
+        self.assertEqual(orchard["sessions"]["session_files"], 1)
 
 
 class FailOpen(TempCase):

@@ -221,6 +221,31 @@ def slugify_path(p) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", str(p))
 
 
+def git_dir_present(root, paths) -> bool:
+    """Does any of these paths hold a `.git`?
+
+    One `exists()` per declared path, and deliberately not `git rev-parse`. The
+    question being answered is narrow: someone declared `git: "none"` and the
+    directory turns out to be a repository root. Shelling out to git would also
+    catch a project nested inside some ancestor repository, at the cost of a
+    subprocess per project on the exact path the declaration exists to keep
+    cheap -- and a subdirectory of a larger repo is a far more defensible thing
+    to describe as "not a git project" than a repository root is.
+
+    A file rather than a directory counts: that is what a worktree and a
+    submodule both leave behind, and both mean the history is somewhere.
+    """
+    for rel in paths or []:
+        try:
+            if (Path(root) / rel / ".git").exists():
+                return True
+        except OSError:
+            continue        # unreadable is not evidence of absence, but it is
+                            # not evidence of presence either -- and this must
+                            # never raise on the sensing path
+    return False
+
+
 def day_count(value, default: int, where: str, field: str, problems) -> int:
     """A hand-written day count as a non-negative int, or `default` if it is not one.
 
@@ -1885,10 +1910,42 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             add_ev(p, "file_mtime", None)
         for rel in paths:
             add_ev(rel, "file_mtime", None)
-        if sess:
+        # On the count, not on the block. `scan_sessions` creates a project's
+        # entry as soon as a directory name matches, so a project that has never
+        # had an agent session -- or whose transcripts have since been cleaned up,
+        # which is the ordinary end state -- carried a block full of zeros. A dict
+        # of zeros is truthy, and this handle used to be minted on that.
+        #
+        # The gate checks that a cited source exists and, for `commit` and
+        # `session`, that it can supply that kind of fact. Neither check looks at
+        # magnitude. So the handle resolved, the kind matched, and a model could
+        # write "three agent sessions this week" about a project with none and
+        # have it printed under a footer promising every claim was checked.
+        if sess.get("session_files"):
             add_ev("session:" + pid, "session", sess.get("last_active_date"))
 
-        no_git = pr.get("git") == "none"
+        # A declaration about the world, checked against the world.
+        #
+        # The registry beating the overlay is a rule about *judgements* --
+        # importance, phase, positioning -- because nothing else can measure
+        # those. Whether a directory is a repository is not a judgement, and the
+        # declaration goes stale the moment somebody runs `git init` in it.
+        #
+        # Trusting the stale one has a specific cost: the brief prints "a bad
+        # delete is unrecoverable" every morning about a repository that has been
+        # recording every change all along. A false warning is worse than a
+        # frequent one -- acting on it wastes the reader's time, and not acting on
+        # it teaches them to skip the column.
+        git_present = git_dir_present(root, paths) if pr.get("git") == "none" else None
+        if git_present:
+            parse_failed.append({
+                "path": pid, "code": "git_declared_none_but_present",
+                "why": "registry declares `git: \"none\"` but a .git is present; "
+                       "history exists, so nothing here is unrecoverable"})
+        # Declared and observed, side by side, neither written over the other.
+        # `no_git` is the *claim about recoverability*, so it is the one the
+        # observation gets to settle.
+        no_git = pr.get("git") == "none" and not git_present
         # Name the measure this list was actually ranked by. `scc` being
         # installed is not the same as `scc` having reported on these files -- it
         # skips languages it does not know, and each such file silently falls
@@ -1939,6 +1996,11 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "horizon": pr.get("horizon"),
             "ice": pr.get("ice"),
             "git_declared": pr.get("git", "none"),
+            # Observed, and only where it was worth asking: `None` means the
+            # question was never put, which is not the same as "no". Only a
+            # `none` declaration is checked, because that is the only one that
+            # can be contradicted into a false statement on the page.
+            "git_present": bool(git_present) if git_present is not None else None,
             "has_git": bool(git_out),
             "git": git_out,
             "hotspots": hotspots,
