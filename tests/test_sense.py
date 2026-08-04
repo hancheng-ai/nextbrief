@@ -553,6 +553,25 @@ class CheckableDeclarations(TempCase):
         self.assertEqual(kiln["git_declared"], "none")
         self.assertTrue(kiln["git_present"])
 
+    def test_the_daily_false_warning_actually_stops_appearing(self):
+        """The user-visible half of this, which had no test at all.
+
+        Everything else here asserts on snapshot fields. Nobody rendered a brief
+        and looked for the sentence the whole change exists to remove -- so the
+        clause suppressing it could be deleted with all 623 tests green, which a
+        mutation audit duly demonstrated.
+        """
+        ws = self._ws_declaring_none_with_a_repo()
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        from nextbrief import render as render_mod
+        code, _, err = capture(render_mod.main, ["--workspace", str(ws), "--no-notify"])
+        self.assertEqual(code, 0, err)
+        brief = (ws / "BRIEF.md").read_text(encoding="utf-8")
+        offending = [ln for ln in brief.splitlines() if "unrecoverable" in ln]
+        self.assertEqual(offending, [],
+                         "the brief still calls a repository unrecoverable: %r" % offending)
+
     def test_an_honest_none_declaration_is_not_nagged(self):
         # The half that decides whether the check above is a fix or a new daily
         # warning: a project that really has no repository must produce nothing.

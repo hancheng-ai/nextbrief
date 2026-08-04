@@ -481,6 +481,25 @@ class WritePermissionGate(GateCase):
         self.assertIn(old, text)
         path.write_text(text.replace(old, new), encoding="utf-8")
 
+    def test_check_reports_an_out_of_bounds_edit_without_repairing_it(self):
+        """`--check` must answer the question, not change the answer.
+
+        The gate rewrites the file on disk when it reverts, which is right on a
+        real run and wrong on a check -- a command asked "would a run change
+        anything" that itself performs the change has made its own answer false,
+        and the next check reports clean. `render --check` therefore runs the
+        gate in dry-run mode.
+
+        Placed here rather than beside the other check tests because the gate is
+        inert without a git baseline, and this is the only fixture that has one.
+        """
+        self._rewrite("NA-0001", "status: open", "status: done")
+        before = (self.ws / "backlog" / "NA-0001.md").read_text(encoding="utf-8")
+        capture(render.main, ["--workspace", str(self.ws), "--check", "--no-notify"])
+        self.assertEqual((self.ws / "backlog" / "NA-0001.md").read_text(encoding="utf-8"),
+                         before, "--check repaired the file it was asked about")
+        self.assertEqual(self._fields("NA-0001")["status"], "done")
+
     def test_a_terminal_status_written_by_an_agent_is_reverted(self):
         self._rewrite("NA-0001", "status: open", "status: done")
         code, _, err = self.render()

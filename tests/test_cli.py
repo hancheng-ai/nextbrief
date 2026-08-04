@@ -26,11 +26,13 @@ from helpers import (
     requires_git,
     tree_state,
     write_backlog_item,
+    write_brief_json,
     write_snapshot,
 )
 
 from nextbrief import cli, sense
 from nextbrief.frontmatter import parse_frontmatter
+from nextbrief.jsonc import load_jsonc
 from nextbrief.paths import pointer_file
 
 
@@ -150,17 +152,47 @@ class Pipeline(TempCase):
         (self.ws / "BRIEF.md").write_text("something else entirely\n", encoding="utf-8")
         self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 3)
 
-    def test_check_writes_nothing(self):
-        # A check that mutates what it is checking is not a check. The run record
-        # is the sharpest instance: appending one would make the next `check`
-        # compare against a different "last run" line.
+    def test_a_stale_brief_html_is_reported_too(self):
+        """BRIEF.html is what `nextbrief open` shows, and its write is fail-open.
+
+        A markdown-only check calls a workspace current however wrong the HTML
+        is, and `cmd_open` re-renders only when the file is absent -- never when
+        it is merely stale. This half of the check had no test, so dropping the
+        HTML comparison left all 623 green.
+        """
         self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "v0", "--no-notify"])[0], 0)
-        runs = self.ws / "log" / "runs.jsonl"
-        before = runs.read_bytes()
-        brief_before = (self.ws / "BRIEF.md").stat().st_mtime_ns
         self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 0)
-        self.assertEqual(runs.read_bytes(), before)
-        self.assertEqual((self.ws / "BRIEF.md").stat().st_mtime_ns, brief_before)
+        (self.ws / "BRIEF.html").write_text("<h1>arbitrarily stale</h1>", encoding="utf-8")
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 3,
+                         "a stale BRIEF.html was reported as current")
+
+    def test_check_writes_nothing(self):
+        """A check that mutates what it is checking is not a check.
+
+        Compared over the whole tree. Checking `runs.jsonl` and `BRIEF.md` alone
+        — which is what this did — missed `log/deferred.jsonl`, and would equally
+        have missed the write gate reverting a backlog file on disk. A mutation
+        audit reverted both halves of that fix and every one of the 623 tests
+        stayed green.
+        """
+        # Over the cap on purpose. The write this missed is `log/deferred.jsonl`,
+        # which only gets appended to when a section overflows -- so a fixture
+        # that never overflows cannot see the defect however much of the tree it
+        # compares. A mutation audit re-enabled the write and this test stayed
+        # green until the fixture below was added.
+        caps = load_jsonc(str(self.ws / "config.jsonc"))
+        over = caps.get("caps", {}).get("max_next_actions", 3) + 2
+        write_brief_json(self.ws, {"next_actions": [
+            {"title": "Item %d" % i, "project": "orchard",
+             "evidence": [{"kind": "doc_declared", "source": "orchard/PROJECT_STATUS.md"}]}
+            for i in range(over)]})
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "v0", "--no-notify"])[0], 0)
+        self.assertTrue((self.ws / "log" / "deferred.jsonl").is_file(),
+                        "the fixture did not overflow a cap, so nothing was deferred")
+        before = tree_state(self.ws)
+        self.assertEqual(capture(cli.main, ["--workspace", str(self.ws), "check"])[0], 0)
+        self.assertEqual(tree_state(self.ws), before, "check modified the workspace")
+
 
     def test_v0_runs_the_whole_deterministic_pipeline(self):
         code, _, err = capture(

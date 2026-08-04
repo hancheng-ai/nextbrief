@@ -101,11 +101,20 @@ class Idempotence(RenderCase):
         self.assertEqual(log.count("# %s" % AS_OF), 1)
 
     def test_dry_run_writes_nothing(self):
+        """The WHOLE tree, not two files anyone happened to think of.
+
+        This asserted on BRIEF.md and runs.jsonl only, and so could not see that
+        the gate-4 caps loop was appending to `log/deferred.jsonl` on every dry
+        run — a write into a workspace the command had promised not to touch,
+        present since the flag was written. A mutation audit reverted the fix and
+        all 623 tests stayed green.
+        """
+        before = tree_state(self.ws)
         code, out, err = self.render("--dry-run")
         self.assertEqual(code, 0, err)
         self.assertIn("Daily brief", out)
-        self.assertFalse((self.ws / "BRIEF.md").exists())
-        self.assertFalse((self.ws / "log" / "runs.jsonl").exists())
+        self.assertEqual(tree_state(self.ws), before,
+                         "--dry-run modified the workspace")
 
 
 class OptionalTools(RenderCase):
@@ -752,6 +761,12 @@ class Truncation(RenderCase):
                 if line == "---":
                     break
                 current[1].append(line)
+        # The blank line that introduces the truncation notice falls inside the
+        # last section's span, because sections are delimited by their headings
+        # and nothing closes them. Trailing blanks are not content.
+        for _head, body in out:
+            while body and not body[-1].strip():
+                body.pop()
         return out
 
     def test_a_surviving_section_survives_whole(self):
@@ -764,9 +779,15 @@ class Truncation(RenderCase):
         """
         full = dict(self._sections(self._brief_with_cap(10_000)))
         self.assertTrue(full, "the fixture produced no sections at all")
-        # 12 is chosen, not arbitrary: under a line count the gate keeps `L[:9]`,
-        # which is a table header and its separator with every row cut off.
-        for head, body in self._sections(self._brief_with_cap(12)):
+        # 14, not 12. At 12 the fixture leaves ZERO surviving sections, so the
+        # loop below never executed and this test asserted nothing at all --
+        # which a mutation audit found by reverting the production code and
+        # watching it stay green. 14 is the only band where the brief both
+        # truncates and keeps a section, i.e. the only band where there is
+        # anything to check.
+        survivors = self._sections(self._brief_with_cap(14))
+        self.assertTrue(survivors, "no section survived, so nothing was compared")
+        for head, body in survivors:
             self.assertIn(head, full)
             self.assertEqual(body, full[head],
                              "%r survived in part rather than whole" % head)
