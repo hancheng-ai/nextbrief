@@ -416,6 +416,29 @@ Three properties of that picker are deliberate:
 - **The session is interactive, never headless.** These tasks touch real files. You
   should be at the keyboard when they do.
 
+## Release history
+
+Newest first. Every entry links to the full detail in
+[CHANGELOG.md](CHANGELOG.md), which is the record; this table is the index.
+
+Dates are the day the tag was published. `0.1.0rc*` are prereleases and live on
+**TestPyPI** — the release workflow routes any version carrying `rc`, `a`, `b` or
+`.dev` there, and only a final version goes to PyPI.
+
+| Version | Published | What it brought |
+|---|---|---|
+| [Unreleased](CHANGELOG.md#unreleased) | — | The brief says what *changed*, not only what is true. Notifications go through cc-notify under nextbrief's own identity. `check` covers the renderer as well as the sensor, and writes nothing. A crowded brief drops its least valuable section rather than its last one. |
+| [0.1.0rc14](CHANGELOG.md#010rc14---2026-07-30) | 2026-07-30 | `scripts/privacy-scan.py` and a `pre-push` hook that runs it: three passes over the commits a push would add, refusing to publish content copied out of a private directory. |
+| [0.1.0rc13](CHANGELOG.md#010rc13---2026-07-29) | 2026-07-29 | The engine's own checkout became a project like any other — if you are developing it, it is the work. |
+| [0.1.0rc12](CHANGELOG.md#010rc12---2026-07-29) | 2026-07-29 | `capability`: what a project's built thing could *also* serve, beyond what it was built for. |
+| [0.1.0rc11](CHANGELOG.md#010rc11---2026-07-29) | 2026-07-29 | `needs`: waiting on another project is not neglect, and the brief stopped calling it that. |
+| [0.1.0rc10](CHANGELOG.md#010rc10---2026-07-29) | 2026-07-29 | Fixed the question section evicting the brief's warnings — a question can wait a night; a warning that disappears cannot. |
+| [0.1.0rc9](CHANGELOG.md#010rc9---2026-07-28) | 2026-07-28 | `nextbrief review`, and a question channel in the brief: asking a person the one thing only a person knows. |
+| [0.1.0rc8](CHANGELOG.md#010rc8---2026-07-28) | 2026-07-28 | Outcomes — a commitment named once, with contributors pointing at it, instead of one deadline copied into three projects. |
+| [0.1.0rc7](CHANGELOG.md#010rc7---2026-07-28) | 2026-07-28 | Projects are discovered, not declared. A portfolio with a hole in it is indistinguishable from a calm one. |
+| [0.1.0rc6](CHANGELOG.md#010rc6---2026-07-28) | 2026-07-28 | Containment and delete gates: the engine writes only its own directory, and nothing automated may remove a human's file. |
+| [0.1.0rc5](CHANGELOG.md#010rc5---2026-07-27) | 2026-07-27 | The three-stage pipeline, and the evidence gate in the renderer that the rest is arranged around. |
+
 ## Commands
 
 ```

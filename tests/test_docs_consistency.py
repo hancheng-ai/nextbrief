@@ -310,3 +310,62 @@ class ShippedConfigTemplate(unittest.TestCase):
         self.assertEqual(
             resolve_backend(self._template("examples/workspace/config.jsonc")),
             "none")
+
+
+class ReleaseHistory(unittest.TestCase):
+    """The README's release table, against the CHANGELOG it indexes.
+
+    A hand-maintained list of releases is a list that stops being true the first
+    time somebody cuts a tag in a hurry. The failure is quiet — a table missing
+    its newest row looks exactly like a table — so the correspondence is checked
+    rather than trusted.
+    """
+
+    def _versions_in_changelog(self):
+        return re.findall(r"^## \[([^\]]+)\](?:\s*-\s*(\d{4}-\d{2}-\d{2}))?",
+                          read(CHANGELOG), re.MULTILINE)
+
+    def _table(self):
+        text = read(README)
+        start = text.index("## Release history")
+        return text[start:text.index("\n## ", start + 1)]
+
+    def test_every_released_version_appears(self):
+        table = self._table()
+        for version, _date in self._versions_in_changelog():
+            self.assertIn(version, table,
+                          "CHANGELOG has %s and the README release table does not" % version)
+
+    def test_the_dates_agree_with_the_changelog(self):
+        table = self._table()
+        for version, date in self._versions_in_changelog():
+            if not date:
+                continue          # Unreleased carries no date, by definition
+            row = [ln for ln in table.splitlines() if ("[%s]" % version) in ln]
+            self.assertTrue(row, "no row for %s" % version)
+            # The DATE CELL, not the row. The anchor link in the first cell ends
+            # in the same date, so `assertIn(date, row)` matched there and passed
+            # while the published column said something else entirely -- caught
+            # by mutating the date and watching this stay green.
+            cells = [c.strip() for c in row[0].strip().strip("|").split("|")]
+            self.assertEqual(cells[1], date,
+                             "README dates %s as %r; the CHANGELOG says %s"
+                             % (version, cells[1], date))
+
+    def test_it_is_ordered_newest_first(self):
+        table = self._table()
+        dates = re.findall(r"\|\s*(\d{4}-\d{2}-\d{2})\s*\|", table)
+        self.assertTrue(dates, "the table carries no dates at all")
+        self.assertEqual(dates, sorted(dates, reverse=True),
+                         "release rows are not newest-first: %s" % dates)
+
+    def test_it_does_not_invent_a_version(self):
+        # The other direction. A row for a version nobody tagged is the same
+        # promise-the-repo-cannot-keep this file already checks for in the
+        # CHANGELOG itself.
+        known = {v for v, _ in self._versions_in_changelog()}
+        for row in self._table().splitlines():
+            for cited in re.findall(r"\[([0-9][^\]]*)\]\(CHANGELOG", row):
+                self.assertIn(cited, known,
+                              "README release table cites %s, which the CHANGELOG "
+                              "does not have" % cited)
