@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"
+     role="img" aria-labelledby="title desc">
+  <title id="title">nextbrief menu bar template</title>
+  <desc id="desc">Transparent black nextbrief mark sized to fill a menu bar item.</desc>
+
+  <!-- ==================================================================
+       A macOS menu bar item must be a *template* image: solid black on
+       transparency, with no tile. AppKit throws away the colour and
+       recolours the alpha to match the menu bar, which is the only way
+       one asset can work in both light and dark menu bars. That is why
+       this is a separate file and not the .icns; an .icns is full-colour
+       and cannot serve this role.
+
+       Re-drawn on its own 16px grid rather than scaled from
+       nextbrief.svg, because scaling would take the edges off the pixel
+       grid and smear the rules. There is no tile here, so the mark fills
+       the canvas: rules at y = 2 and 4, and a 2.5px check whose apex
+       stops at y=5 so its cap clears the first rule.
+       1 device pixel at 16px = 64 units.
+       ================================================================== -->
+
+  <rect x="64" y="128" width="768" height="64" rx="32" fill="#000"/>
+  <rect x="64" y="256" width="576" height="64" rx="32" fill="#000"/>
+  <path d="M96 608 L288 800 L864 320" fill="none" stroke="#000" stroke-width="160"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

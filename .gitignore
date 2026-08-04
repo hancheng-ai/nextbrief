@@ -17,6 +17,13 @@ venv/
 .DS_Store
 Icon?
 
+# Maintainer-only checks live outside this repository: they read an out-of-band
+# identifier list and a private directory, so published they would serve one
+# person while documenting that person's setup. Listed here so that a stray copy
+# cannot be committed back by accident.
+/scripts/privacy-scan.py
+/tests/test_privacy_scan.py
+
 # A workspace must never live inside the engine repo. These are here so that a
 # stray local experiment cannot be committed by accident.
 /registry.jsonc
@@ -26,3 +33,6 @@ Icon?
 /log/
 /BRIEF.md
 /BRIEF.html
+
+# Icon build scratch
+packaging/icon/__pycache__/

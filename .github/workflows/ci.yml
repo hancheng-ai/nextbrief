@@ -365,15 +365,14 @@ jobs:
           print("ok: %d referenced key(s) present in all %d catalogs" % (len(used), len(catalogs)))
           PY
 
-  # Deliberately NOT "the privacy scan". The fence is `.githooks/pre-push`, which
-  # runs before anything leaves the machine; this runs after, so it can only ever
-  # be a report. See the docstring in scripts/privacy-scan.py.
+  # A report, not the fence. The fence is `.githooks/pre-push`, which runs before
+  # anything leaves the machine; this runs after, so it can only ever report. See
+  # the docstring in scripts/leak-shapes.py.
   #
   # It exists for the one case the hook cannot cover: the hook needs activating
   # once per clone (`git config core.hooksPath .githooks`), so a contributor who
-  # never ran that line has no check at all. Pass 1 is the only pass a runner can
-  # do -- the other two read files that exist on one machine -- and it names
-  # nobody, so its output is safe in a public log.
+  # never ran that line has no check at all. What it scans for names nobody, so
+  # its output is safe in a public log.
   leak-shapes:
     name: publishable-shape scan (a report, not the fence)
     runs-on: ubuntu-latest
@@ -415,4 +414,4 @@ jobs:
           fi
 
       - name: Scan for shapes that are never publishable
-        run: python3 scripts/privacy-scan.py ${{ steps.range.outputs.mode }} --shapes-only
+        run: python3 scripts/leak-shapes.py ${{ steps.range.outputs.mode }}

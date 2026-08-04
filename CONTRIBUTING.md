@@ -92,7 +92,7 @@ parser changes.
 
 Three things about that check are worth knowing before you rely on it.
 
-**It runs locally, and there is no remote equivalent.** `scripts/privacy-scan.py`
+**It runs locally, and there is no remote equivalent.** `scripts/leak-shapes.py`
 is the implementation and `.githooks/pre-push` runs it on the commits a push
 would add. Turn it on once per clone:
 
@@ -103,34 +103,33 @@ git config core.hooksPath .githooks
 Repo-local rather than global, so it governs this repository and nothing else on
 your machine.
 
-**CI does not run this check, and cannot.** CI runs after the push, a pull
-request is public from the moment it opens, and a force-push does not retract
-objects that have already landed. A check that can only report a leak after
-publishing it is not a weaker fence, it is a report.
-
-What CI does run is a job called `leak-shapes`, and the name is deliberate. It is
-pass 1 alone — the generic shapes that are never publishable whoever they belong
-to, like a home directory path or a private key header. It exists for the single
-case the hook cannot cover: the line above has to be run once per clone, so a
-contributor who never ran it has no check at all. The other two passes read files
-that exist only on one machine, and `--shapes-only` makes the job say so rather
-than print two "did not run" notices that read like breakage.
+**CI runs it too, and that is a report rather than a fence.** CI runs after the
+push, a pull request is public from the moment it opens, and a force-push does
+not retract objects that have already landed — unreferenced commits stay
+retrievable by SHA. A check that can only report a leak after publishing it is
+not a weaker fence, it is a report. The `leak-shapes` job earns its place for the
+single case the hook cannot cover: hooks are not cloned, so a contributor who
+never ran the line above has no check at all. Minutes rather than never.
 
 Do not treat that job going green as this section being satisfied. Turn the hook
 on.
 
-**It holds no list of names.** A denylist kept here would publish exactly what it
-protects, so the identifiers come from `~/.config/nextbrief/private-identifiers`
-— one per line — or `$NEXTBRIEF_PRIVATE_IDENTIFIERS`. A match reports the *file*
-and never the matched text. Where no list is configured that pass is skipped and
-says so, rather than passing quietly.
+**It catches shapes, and a shape is a low bar.** An absolute home path, a private
+key header, a connection string with the password still in it, a token — things
+recognisable without knowing whose they are. That is deliberate: it is why the
+check can live in a public repository and print its findings in a public log
+without disclosing anything itself.
 
-And it only ever catches the names it was told about, which is a much weaker
-guarantee than a green check suggests. Relabelling a real example defeats it
-entirely: swap the project name and every specific that made the example worth
-reaching for — a file and line number, a status, a date — survives the rename and
-is still somebody's real detail. Concrete examples are much better than vague
-ones. Invent the concreteness rather than borrowing it.
+What it structurally cannot catch is the case that actually happens. Relabelling
+a real example defeats it entirely: swap the project name and every specific that
+made the example worth reaching for — a file and line number, a status, a date —
+survives the rename and is still somebody's real detail. There is no shape left
+to match on.
+
+So the guarantee is much narrower than a green check suggests, and the real
+defence is the rule at the top of this section rather than the script. Concrete
+examples are much better than vague ones. **Invent the concreteness rather than
+borrowing it.**
 
 ---
 

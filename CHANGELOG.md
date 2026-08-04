@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An app icon, and the tooling that rebuilds it** — `packaging/icon/`. An ivory
+  sheet carrying two rules and a deep teal check: a brief, and the gate every
+  claim passes before it prints. Drawn at 16px first, because a Notification
+  Center banner and a menu bar are where it actually lives; everything larger is
+  the same drawing at more pixels.
+
+  Ten iconset members, 16 through 1024, and a valid `.icns` confirmed by an
+  `iconutil` round trip. `verify-iconset.py` checks each member against the
+  geometry rather than trusting the render — sheet coverage, ink weight, the
+  check's position and its share of the tile — so a silently broken export fails
+  the build instead of shipping.
+
+  It is not in the wheel, and that is not an oversight. cc-notify derives a
+  banner's icon from process ancestry, not from a path a caller hands it, so a
+  copy inside `site-packages` would be read by nothing. It ships for packagers —
+  a Homebrew cask, an `.app` bundle — and becomes useful to notifications the day
+  cc-notify grows a flag for it.
+
 - **Notifications can go through [cc-notify](https://github.com/hancheng-ai/cc-notify),
   under nextbrief's own identity.** macOS draws a banner's icon and its
   Notification Center grouping from the *sending* app, so shelling out to a bare
@@ -170,6 +188,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The repository publishes what the public needs, and nothing that is only
+  about the maintainer.** The pre-push fence is now `scripts/leak-shapes.py`: the
+  generic shapes that are never publishable whoever they belong to — an absolute
+  home path, a private key header, a connection string carrying a password, a
+  token.
+
+  The checks it replaces read an out-of-band identifier list and a private
+  directory, so published they served exactly one person while their
+  documentation described that person's arrangement — a check whose own
+  docstring is a disclosure. They now live outside this repository, and the hook
+  a maintainer runs calls this file first, so a defect in the published fence is
+  found here rather than by a contributor.
+
+  What a contributor gets is therefore narrower and honest about it. `--worktree`
+  also searches untracked files now: it is the check you run *before* committing,
+  and `git grep` without `--untracked` reads only tracked ones, so a leak in the
+  file you were about to add was invisible to it.
+
 - **The config template now contains only keys the engine reads.** `init` writes
   that file into the workspace, so every key in it is a promise that changing the
   number changes something. Nine were read by nothing: `renotify_days` in two
@@ -208,12 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.githooks/pre-push`, which runs before anything leaves the machine. This runs
   after, so it can only ever report.
 
-  It covers the one case the hook cannot: the hook needs activating once per
-  clone, so a contributor who never ran that line has no check at all. Pass 1 is
-  the only pass a runner can do — the other two read files that exist on one
-  machine — and it names nobody, so its output is safe in a public log. The new
-  `--shapes-only` flag makes the job say which passes it skipped instead of
-  printing two "did not run" notices that read like breakage.
+  It covers the one case the hook cannot: hooks are not cloned, so a contributor
+  who never ran that line has no check at all. What it scans for names nobody, so
+  its output is safe in a public log.
 
   It is scoped to what a change adds rather than to the whole history, so it
   cannot go red for something already public and unfixable.
@@ -396,26 +429,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`scripts/privacy-scan.py`, and a `pre-push` hook that runs it.** A push that
-  would publish content copied out of a private directory is refused before the
-  objects leave the machine.
+- **`scripts/leak-shapes.py`, and a `pre-push` hook that runs it.** A push that
+  would publish an absolute home path, a private key header, a connection string
+  carrying a password or a token is refused before the objects leave the machine.
 
-  Local, and deliberately with no remote counterpart. A CI job would run after
-  the push, a pull request is public from the moment it opens, and a force-push
-  does not retract objects that have already landed — so there is no point in a
-  remote pipeline where such a check is still preventive. Activate it once per
-  clone with `git config core.hooksPath .githooks`, repo-local rather than
-  global, so it governs this repository and nothing else on the machine.
+  The fence is local. A CI job runs after the push, a pull request is public from
+  the moment it opens, and a force-push does not retract objects that have
+  already landed — so a remote check is a report rather than a fence. Activate it
+  once per clone with `git config core.hooksPath .githooks`, repo-local rather
+  than global, so it governs this repository and nothing else on the machine.
 
   It scans commits, not the working tree, because a push publishes history and a
-  clean tip says nothing about what is behind it. Three passes: credential and
-  home-path shapes, built in and generic; a list of identifiers supplied out of
-  band, since a denylist kept in a repository publishes exactly what it protects;
-  and, where a private directory is configured, lines appearing in both — the
-  only pass that can catch a borrowed example whose names have been changed,
-  because there is nothing left for a name to match. Each pass announces itself
-  when it cannot run: a check that silently covers less than you think is worse
-  than one that is plainly absent.
+  clean tip says nothing about what is behind it. What it matches is a *shape* —
+  recognisable without knowing whose it is — which is both why it can print its
+  findings in a public log and why it is a floor rather than a guarantee. The
+  case it structurally cannot catch is a real example that has been relabelled,
+  and the defence against that one is the rule in `CONTRIBUTING.md`.
 
 - **`nextbrief describe <id> --capability "<text>"`** — what the thing built here
   could also serve, as against what it currently does. Always declared, never
@@ -424,9 +453,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The identifier scan is gone from CI. It could only ever run its weakest pass
-  there — the other two need a local configuration a runner does not have — and
-  what it did run, it ran too late to matter.
+- The identifier scan is gone from CI. It could only ever run its weakest check
+  there — the rest needs a local configuration a runner does not have — and what
+  it did run, it ran too late to matter.
 
 - The `--help` command list leads with the commands rather than argparse's
   positional-arguments block.

@@ -428,7 +428,7 @@ Dates are the day the tag was published. `0.1.0rc*` are prereleases and live on
 | Version | Published | What it brought |
 |---|---|---|
 | [Unreleased](CHANGELOG.md#unreleased) | — | The brief says what *changed*, not only what is true. Notifications go through cc-notify under nextbrief's own identity. `check` covers the renderer as well as the sensor, and writes nothing. A crowded brief drops its least valuable section rather than its last one. |
-| [0.1.0rc14](CHANGELOG.md#010rc14---2026-07-30) | 2026-07-30 | `scripts/privacy-scan.py` and a `pre-push` hook that runs it: three passes over the commits a push would add, refusing to publish content copied out of a private directory. |
+| [0.1.0rc14](CHANGELOG.md#010rc14---2026-07-30) | 2026-07-30 | `scripts/leak-shapes.py` and a `pre-push` hook that runs it: a scan over the commits a push would add, refusing to publish a home path, a private key, a connection string or a token. |
 | [0.1.0rc13](CHANGELOG.md#010rc13---2026-07-29) | 2026-07-29 | The engine's own checkout became a project like any other — if you are developing it, it is the work. |
 | [0.1.0rc12](CHANGELOG.md#010rc12---2026-07-29) | 2026-07-29 | `capability`: what a project's built thing could *also* serve, beyond what it was built for. |
 | [0.1.0rc11](CHANGELOG.md#010rc11---2026-07-29) | 2026-07-29 | `needs`: waiting on another project is not neglect, and the brief stopped calling it that. |

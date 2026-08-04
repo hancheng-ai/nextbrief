@@ -1,5 +1,5 @@
 #!/bin/sh
-# Refuse a push that would publish content copied out of a private directory.
+# Refuse a push that would publish a shape that is never publishable.
 #
 # Activate once per clone:
 #
@@ -19,37 +19,24 @@
 # SHA and the public events feed lists those SHAs. CI is the backstop for what
 # reaches the remote by another route; this is the fence.
 #
+# What it covers is deliberately narrow -- see the docstring in
+# scripts/leak-shapes.py. It is the floor, not a guarantee. The case it
+# structurally cannot catch is an example copied out of real notes and
+# relabelled, and the defence against that one is the rule in CONTRIBUTING.md:
+# invent the concreteness rather than borrowing it.
+#
 # git feeds us "<local ref> <local sha> <remote ref> <remote sha>" on stdin, one
 # line per ref being pushed.
 
 set -eu
 
 root="$(git rev-parse --show-toplevel)"
-scan="$root/scripts/privacy-scan.py"
+scan="$root/scripts/leak-shapes.py"
 
 if [ ! -f "$scan" ]; then
     echo "pre-push: $scan is missing -- refusing to push." >&2
-    echo "          A privacy check that cannot run must not look like one that passed." >&2
+    echo "          A check that cannot run must not look like one that passed." >&2
     exit 1
-fi
-
-# A private directory, when one is configured, turns on the overlap pass -- the
-# only pass that catches a borrowed example whose names have been changed.
-#
-# Its location is deliberately NOT written here. A guard that hardcodes the path
-# it is guarding publishes that path, which is the failure this file exists to
-# prevent, committed inside the fence itself. So it is read from the
-# environment, or from a file outside the repository:
-#
-#     echo /path/to/your/workspace > ~/.config/nextbrief/private-workspace
-#
-# Absent, the scan runs its other passes and reports the skip rather than
-# passing quietly.
-config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
-pointer="$config_home/nextbrief/private-workspace"
-if [ -z "${NEXTBRIEF_PRIVATE_WORKSPACE:-}" ] && [ -f "$pointer" ]; then
-    NEXTBRIEF_PRIVATE_WORKSPACE="$(head -n1 "$pointer")"
-    export NEXTBRIEF_PRIVATE_WORKSPACE
 fi
 
 status=0
@@ -60,8 +47,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
         *) continue ;;
     esac
 
-    if ! python3 "$scan" --range "$remote_sha..$local_sha" \
-            ${NEXTBRIEF_PRIVATE_WORKSPACE:+--private-workspace "$NEXTBRIEF_PRIVATE_WORKSPACE"}; then
+    if ! python3 "$scan" --range "$remote_sha..$local_sha"; then
         status=1
     fi
 done

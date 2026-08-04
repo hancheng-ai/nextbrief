@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"
+     role="img" aria-labelledby="title desc">
+  <title id="title">nextbrief app icon</title>
+  <desc id="desc">A warm ivory sheet carrying two short rules and a deep teal check.</desc>
+
+  <!-- ==================================================================
+       Grid: designed on a 16x16 pixel grid and multiplied by 64, so one
+       device pixel at 16px is 64 user units. Both rule edges are whole
+       multiples of 64 in y; on half-pixel boundaries the rules smear
+       into a single grey block at 16px.
+
+       The check's ascending arm rises into the notch left by the shorter
+       second rule. That single relationship is what makes the three
+       marks read as one shape rather than three stacked ones; a
+       three-rule version pushed the check down and away from the text
+       and lost it.
+       ================================================================== -->
+
+  <defs>
+    <linearGradient id="nb-sheet" x1="0" y1="64" x2="0" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F7F2E6"/>
+      <stop offset="1" stop-color="#E9DCC2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- the sheet: 16px x=1..15, y=1..15, corner r=3 -->
+  <rect x="64" y="64" width="896" height="896" rx="192" fill="url(#nb-sheet)"/>
+  <!-- rim: holds the silhouette against a white Notification Center card -->
+  <rect x="72" y="72" width="880" height="880" rx="184" fill="none" stroke="#CBBA96" stroke-width="16"/>
+
+  <!-- two rules: the brief itself, kept short -->
+  <rect x="256" y="192" width="544" height="64" rx="32" fill="#2A303C"/>
+  <rect x="256" y="320" width="384" height="64" rx="32" fill="#2A303C"/>
+
+  <!-- the gate: every claim checked before it is allowed to print -->
+  <path d="M256 640 L416 800 L800 416" fill="none" stroke="#14584F" stroke-width="128"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
