@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **The brief says what is new, not only what is true.** One line under the
-  header: *"Nothing has newly stalled or gone quiet since 2026-08-01"*, or the
+  header: *"Nothing has newly stalled or gone quiet since <the last run>"*, or the
   projects that have newly gone quiet or newly lost their next step, named.
 
   The counts in the header say what is true. They do not say what changed, so a
