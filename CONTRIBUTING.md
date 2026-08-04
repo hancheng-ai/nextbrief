@@ -178,6 +178,28 @@ strains one, say so in the PR rather than working around it quietly.
    must never cost you the whole brief, and a silent gap that is *recorded* is
    recoverable in a way that a crashed nightly job is not.
 
+7. **Watch every guard fail before you trust it.** After writing a test, revert
+   the line it covers, run that test, and require it to go red. Then put the line
+   back.
+
+   This is two minutes and it is not optional, because a test that cannot fail is
+   indistinguishable from one that passes. Four shipped in a single stretch of
+   work here, and each was green for a *different* reason: a loop whose body
+   never ran, because the fixture left nothing to iterate; an assertion on the
+   wrong file, checking `runs.jsonl` for a write that goes to `deferred.jsonl`; a
+   fixture that short-circuited upstream, so the code under test was never
+   reached; and a substring match that found what it wanted in a URL rather than
+   in the column it meant. Every one of them looked exactly like a passing test.
+
+   Two corollaries, both learned the same way:
+
+   - **The fixture has to be able to reach the code.** A whole-tree assertion
+     that nothing was written still passes if nothing in the fixture could have
+     triggered the write. Assert that the trigger happened, too.
+   - **Prefer the real entry point for anything with a record-keeping seam.** A
+     unit test on a hand-built dict confirmed the same reasoning three rounds
+     running while the wiring underneath it was wrong.
+
 ---
 
 ## The four extension points
