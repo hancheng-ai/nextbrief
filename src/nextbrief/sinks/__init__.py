@@ -25,6 +25,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Dict, Optional
 
+from . import cc_notify as _cc_notify
 from . import linux as _linux
 from . import macos as _macos
 from . import none as _none
@@ -32,12 +33,15 @@ from . import none as _none
 __all__ = ["notify", "SINKS", "resolve_backend", "MAX_LEN"]
 
 SINKS = {
+    "cc-notify": _cc_notify,
     "macos": _macos,
     "linux": _linux,
     "none": _none,
 }
 
 ALIASES = {
+    "cc_notify": "cc-notify",
+    "ccnotify": "cc-notify",
     "darwin": "macos",
     "osascript": "macos",
     "notify-send": "linux",
@@ -76,6 +80,13 @@ def resolve_backend(cfg: Any = None) -> str:
         return requested
     if requested not in ("auto", ""):
         return "none"  # a name we do not know; stay quiet rather than guess
+    # Preferred where it is installed, on any platform: it is the only backend
+    # that posts under this tool's own identity instead of sharing one with every
+    # other thing on the machine that shells out to the same notifier. Asked
+    # whether it is there rather than assumed -- on most machines it is not, so
+    # the platform default below is the ordinary path, not the fallback path.
+    if _cc_notify.available(cfg):
+        return "cc-notify"
     if sys.platform == "darwin":
         return "macos"
     if sys.platform.startswith("linux"):

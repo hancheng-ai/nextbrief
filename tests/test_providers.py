@@ -11,7 +11,13 @@ No test in this file starts a model, opens a socket, or posts a notification.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import tempfile
+import types
 import unittest
+from unittest import mock
 
 from helpers import TempCase
 
@@ -299,3 +305,119 @@ class _BrokenProbe:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CcNotifySink(unittest.TestCase):
+    """Delivery through cc-notify, and the fallback when it is not there.
+
+    macOS draws a banner's icon and its grouping from the sending app, so every
+    tool shelling out to a bare `terminal-notifier` shares one identity and piles
+    into one Notification Center group. cc-notify solved that for itself and grew
+    a `--send` mode so callers can post under their own badge.
+    """
+
+    def setUp(self):
+        from nextbrief.sinks import cc_notify
+
+        self.mod = cc_notify
+        self.tmp = tempfile.mkdtemp(prefix="ccn-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.script = os.path.join(self.tmp, "notify.py")
+        with open(self.script, "w", encoding="utf-8") as fh:
+            fh.write("#!/usr/bin/env python3\n")
+
+    def _cfg(self, **over):
+        cfg = {"notify": {"cc_notify_path": self.script}}
+        cfg["notify"].update(over)
+        return cfg
+
+    def test_it_is_unavailable_when_the_script_is_not_installed(self):
+        """The ordinary case on most machines: not here, not a failure.
+
+        The search paths are patched out. Without that this test passes or fails
+        depending on whether the developer happens to have cc-notify installed --
+        it failed on the machine it was written on for exactly that reason, which
+        is the whole argument against letting a test read the real environment.
+        """
+        with mock.patch.object(self.mod, "CANDIDATES", ()):
+            self.assertFalse(self.mod.available({"notify": {"cc_notify_path": "/nope/notify.py"}}))
+            self.assertFalse(self.mod.available(None))
+            self.assertFalse(self.mod.send("t", "b", None))
+
+    def test_a_declared_path_is_preferred_over_the_search(self):
+        self.assertTrue(self.mod.available(self._cfg()))
+        self.assertEqual(self.mod._script(self._cfg()), self.script)
+
+    def test_the_exit_code_is_the_contract(self):
+        """cc-notify exits 0 only when a banner was actually delivered.
+
+        That is the whole reason this sink can be tried first: an unauthorized
+        bundle id fails silently on macOS, so a caller that assumed success would
+        be silently muted. Anything but 0 has to read as "fall back".
+        """
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=self.code)
+
+        with mock.patch.object(self.mod.subprocess, "run", fake_run):
+            self.code = 0
+            self.assertTrue(self.mod.send("t", "b", self._cfg()))
+            self.code = 1
+            self.assertFalse(self.mod.send("t", "b", self._cfg()))
+        self.assertIn("--send", calls[0])
+        self.assertIn("--badge", calls[0])
+        self.assertIn("nextbrief", calls[0])
+
+    def test_values_are_argv_entries_never_interpolated(self):
+        # The body is assembled from project files the engine only reads, so it
+        # is hostile by construction. There must be no shell for it to be
+        # hostile at, and each value must be its own entry.
+        seen = []
+
+        def fake_run(argv, **kw):
+            seen.append(argv)
+            self.assertNotIn("shell", kw)
+            return types.SimpleNamespace(returncode=0)
+
+        nasty = 'x"; rm -rf ~; echo "'
+        with mock.patch.object(self.mod.subprocess, "run", fake_run):
+            self.mod.send(nasty, nasty, self._cfg(), open_url="/tmp/BRIEF.html")
+        argv = seen[0]
+        self.assertIn(nasty, argv)
+        self.assertEqual(argv[argv.index("--title") + 1], nasty)
+        self.assertEqual(argv[argv.index("--open") + 1], "/tmp/BRIEF.html")
+
+    def test_a_hanging_notifier_never_costs_the_run(self):
+        # A notification is the least important thing in the pipeline; it must
+        # not be able to stall an unattended job.
+        def hang(argv, **kw):
+            raise subprocess.TimeoutExpired(argv, 1)
+
+        with mock.patch.object(self.mod.subprocess, "run", hang):
+            self.assertFalse(self.mod.send("t", "b", self._cfg()))
+
+    def test_a_broken_notifier_never_raises(self):
+        def boom(argv, **kw):
+            raise OSError("no such thing")
+
+        with mock.patch.object(self.mod.subprocess, "run", boom):
+            self.assertFalse(self.mod.send("t", "b", self._cfg()))
+
+    def test_auto_falls_back_when_cc_notify_is_absent(self):
+        from nextbrief import sinks
+
+        with mock.patch.object(sinks._cc_notify, "available", lambda cfg=None: False):
+            self.assertNotEqual(sinks.resolve_backend({}), "cc-notify")
+        with mock.patch.object(sinks._cc_notify, "available", lambda cfg=None: True):
+            self.assertEqual(sinks.resolve_backend({}), "cc-notify")
+
+    def test_an_explicit_backend_still_wins(self):
+        # Someone who asked for silence, or for a specific sink, must get it
+        # whatever else is installed.
+        from nextbrief import sinks
+
+        with mock.patch.object(sinks._cc_notify, "available", lambda cfg=None: True):
+            self.assertEqual(sinks.resolve_backend({"notify": {"backend": "none"}}), "none")
+            self.assertEqual(sinks.resolve_backend({"notify": {"backend": "macos"}}), "macos")

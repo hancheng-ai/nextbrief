@@ -122,9 +122,18 @@
   },
 
   "notify": {
-    // Where the notification goes. "auto" picks the first sink that works on this
-    // machine and degrades to no notification rather than failing the run.
-    "backend": "auto",            // auto | none | macos | libnotify
+    // Where the notification goes. "auto" prefers cc-notify where it is
+    // installed, then the platform default, and degrades to no notification
+    // rather than failing the run.
+    //
+    // cc-notify posts under this tool's OWN identity. macOS draws a banner's
+    // icon and its Notification Center grouping from the sending app, so every
+    // tool shelling out to a bare terminal-notifier shares one identity and
+    // piles into one group -- a nightly brief landing in with "session needs
+    // your permission". https://github.com/hancheng-ai/cc-notify
+    "backend": "auto",            // auto | none | cc-notify | macos | libnotify
+    // Only if it lives somewhere the search does not look; normally omitted.
+    // "cc_notify_path": "~/.claude/hooks/notify.py",
     // Silence rules. A system that tells you on time every day that nothing
     // happened gets muted in week three.
     //

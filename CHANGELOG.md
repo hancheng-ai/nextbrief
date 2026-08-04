@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Notifications can go through [cc-notify](https://github.com/hancheng-ai/cc-notify),
+  under nextbrief's own identity.** macOS draws a banner's icon and its
+  Notification Center grouping from the *sending* app, so shelling out to a bare
+  `terminal-notifier` means sending as `fr.julienxx.oss.terminal-notifier` — the
+  identity every other tool doing the same thing also uses — and a nightly brief
+  lands in one undifferentiated pile with everything else on the machine.
+
+  cc-notify had already solved that for itself, and grew a `--send` mode so other
+  local tools could too. `auto` now prefers it where it is installed and falls
+  back to the platform sink where it is not, which is most machines — so the
+  fallback is the ordinary path rather than the exceptional one.
+
+  Its exit code is the contract: `0` only when a banner was actually delivered.
+  That is what makes trying it first safe, because an unauthorized bundle id
+  fails *silently* on macOS, and a sink that reported success there would mute
+  the run without saying so.
+
+  Measured: `ai.hancheng.cc-notify.nextbrief` for the brief against
+  `ai.hancheng.cc-notify` for session events — distinct senders, separate groups.
+
 - **The brief says what is new, not only what is true.** One line under the
   header: *"Nothing has newly stalled or gone quiet since <the last run>"*, or the
   projects that have newly gone quiet or newly lost their next step, named.
