@@ -222,15 +222,39 @@ def _answer_expired(p, as_of=None, restate_after=None) -> bool:
         return False         # expiry switched off entirely
     if days <= 0:
         return True          # restate everything -- what `review --all` passes
-    stamped = p.get("asked_on")
-    if not stamped:
+    stamps = _stamps_of(p)
+    if not stamps:
         return True          # undated is unknown age, not fresh
-    try:
-        then = dt.date.fromisoformat(str(stamped))
-    except (TypeError, ValueError):
-        return True          # unparseable is also unknown age
     today = as_of or dt.date.today()
-    return (today - then).days >= days
+    # The OLDEST answer decides, which keeps behaviour identical to the single
+    # stamp this replaces. Per-field storage lands before per-field policy on
+    # purpose: migrating how a date is written and changing what it means are
+    # two failures, and debugging them together is a third.
+    ages = []
+    for value in stamps.values():
+        try:
+            ages.append((today - dt.date.fromisoformat(str(value))).days)
+        except (TypeError, ValueError):
+            return True      # unparseable is also unknown age
+    return bool(ages) and max(ages) >= days
+
+
+def _stamps_of(entry: Dict[str, Any]) -> Dict[str, str]:
+    """When each answer on this entry was given, as {field: ISO date}.
+
+    Accepts both shapes. A bare string is what every overlay written before this
+    existed contains, and it means "all of these answers were given that day" --
+    which was true, because they were all recorded in one pass. Reading it as a
+    stamp on every field is therefore a faithful migration rather than a guess,
+    and it needs no rewrite of anybody's file: the next `review` upgrades the
+    entry it touches and leaves the rest alone.
+    """
+    got = (entry or {}).get("asked_on")
+    if isinstance(got, dict):
+        return {k: v for k, v in got.items() if isinstance(v, str)}
+    if isinstance(got, str) and got:
+        return {q.key: got for q in QUESTIONS}
+    return {}
 
 
 def needs_annotating(snapshot: Dict[str, Any], self_ids=None, as_of=None,
@@ -477,7 +501,19 @@ def record_answers(ws: Workspace, answers: Dict[str, Dict[str, Any]],
         # Stamped so it can go stale. Without a date every answer is permanent,
         # and a permanent answer to "how much does this matter" is wrong more
         # often than it is right.
-        entry["asked_on"] = (asked_on or dt.date.today()).isoformat()
+        #
+        # Stamped PER FIELD, and only on the fields this call actually answered.
+        # One stamp per project cannot survive what comes next: the four
+        # questions go stale at different rates, and correcting a phase is not
+        # restating a strategy. A single date launders the cheap answer into the
+        # expensive one, so a field goes quietly dead while reporting itself
+        # fresh -- which is the Jira default-to-Medium failure reached from the
+        # other end.
+        stamp = (asked_on or dt.date.today()).isoformat()
+        stamps = dict(_stamps_of(entry))
+        for key in fields:
+            stamps[key] = stamp
+        entry["asked_on"] = stamps
         current[pid] = entry
 
     body = json.dumps({"asked_version": ASKED_VERSION, "projects": current},

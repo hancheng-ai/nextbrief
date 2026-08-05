@@ -460,10 +460,73 @@ class AnswersExpire(TempCase):
         self.assertEqual(
             self._asked(snap, as_of=dt.date(2026, 3, 16), restate_after=0), ["thing"])
 
-    def test_recording_stamps_the_date(self):
+    def test_recording_stamps_the_date_per_field(self):
         ws_dir = self.workspace()
         ws = resolve_workspace(str(ws_dir))
         annotate.record_answers(ws, {"orchard": {"ice": {"impact": 4}}},
                                 asked_on=dt.date(2026, 3, 16))
         got = annotate.load_annotations(ws)
-        self.assertEqual(got["orchard"]["asked_on"], "2026-03-16")
+        self.assertEqual(got["orchard"]["asked_on"], {"ice": "2026-03-16"})
+
+    def test_answering_one_field_does_not_restamp_another(self):
+        """The reason the stamp is per field at all.
+
+        The four questions go stale at different rates, and correcting a phase is
+        not restating a strategy. One date per project launders the cheap answer
+        into the expensive one, so a field goes quietly dead while reporting
+        itself fresh.
+        """
+        ws_dir = self.workspace()
+        ws = resolve_workspace(str(ws_dir))
+        annotate.record_answers(ws, {"orchard": {"ice": {"impact": 4}}},
+                                asked_on=dt.date(2025, 6, 1))
+        annotate.record_answers(ws, {"orchard": {"status": "active"}},
+                                asked_on=dt.date(2026, 3, 16))
+        got = annotate.load_annotations(ws)["orchard"]["asked_on"]
+        self.assertEqual(got["status"], "2026-03-16")
+        self.assertEqual(got["ice"], "2025-06-01",
+                         "answering the phase question refreshed the impact clock")
+
+    def test_an_overlay_written_before_this_still_reads(self):
+        """A bare string is what every overlay written before per-field stamps
+        contains, and it means "all of these were answered that day" -- which was
+        true, because one pass recorded them all. Nobody's file is rewritten; the
+        next `review` upgrades the entry it touches and leaves the rest alone.
+        """
+        old = {"asked_on": "2025-06-01"}
+        stamps = annotate._stamps_of(old)
+        self.assertEqual(set(stamps), {q.key for q in annotate.QUESTIONS})
+        self.assertTrue(all(v == "2025-06-01" for v in stamps.values()))
+
+    def test_a_legacy_string_stamp_still_expires(self):
+        """The migration has to preserve behaviour, not merely parse. An old
+        entry that was stale yesterday must not read as fresh today."""
+        p = self._project(asked_on="2025-06-01")
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), ["thing"])
+
+    def test_a_legacy_string_stamp_inside_the_window_stays_fresh(self):
+        """The other half. Without it the test above is satisfied by a migration
+        that reads every legacy entry as expired."""
+        p = self._project(asked_on="2026-03-01")
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
+
+    def test_the_oldest_field_decides_while_policy_is_still_shared(self):
+        """Per-field storage lands before per-field policy on purpose. Migrating
+        how a date is written and changing what it means are two failures, and
+        debugging them together is a third."""
+        p = self._project(asked_on={"ice": "2025-06-01", "status": "2026-03-16"})
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(
+            self._asked(snap, as_of=dt.date(2026, 3, 16)), ["thing"],
+            "a fresh phase answer masked a stale impact answer")
+
+    def test_every_field_fresh_is_not_re_asked(self):
+        p = self._project(asked_on={"ice": "2026-03-01", "status": "2026-03-16"})
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
