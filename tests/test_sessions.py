@@ -474,7 +474,9 @@ class AttributionRuleDirectly(SessionSensingCase):
         root = self.tmp / "root"
         (root / "orchard").mkdir(parents=True, exist_ok=True)
         build(store, root)
-        return sense.scan_sessions(str(root), projects, sessions_dir=str(store))
+        # (per-project blocks, sentinels). Only the blocks matter here; the
+        # sentinels have their own tests.
+        return sense.scan_sessions(str(root), projects, sessions_dir=str(store))[0]
 
     def test_a_sibling_sharing_a_name_prefix_is_outside_the_project(self):
         """Without the separator, `orchard` also claims `orchardry` -- a
@@ -728,6 +730,131 @@ class TheResourceAxis(SessionSensingCase):
         for project in digest.get("projects") or []:
             self.assertNotIn("tokens", json.dumps(project.get("facts") or {}),
                              "a per-project token magnitude reached the model")
+
+
+class CollapsingSentinels(SessionSensingCase):
+    """Proportions that move when a sensor breaks for part of its input.
+
+    A binary check cannot see partial breakage: "did the session sensor run?"
+    answers yes when it read 44 transcripts and understood 6. Each test here
+    breaks one thing for a SUBSET and asserts the matching ratio moves --
+    which is a different exercise from asserting it is 1.0 on a clean fixture,
+    and the only one that shows the number is load-bearing.
+    """
+
+    def sentinels(self, snap):
+        return snap["run"]["sensors"]["sessions"]
+
+    def test_a_healthy_store_reads_healthy(self):
+        """The control. Without it, every assertion below is satisfied by a
+        sentinel that is broken all the time."""
+        def build(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body=TokensPerProject.assistant(
+                                self, DAY_C, ws / "projects" / "orchard", "m1", out=5))
+
+        got = self.sentinels(self.sense_with(build))
+        self.assertEqual(got["envelope_coverage"], 1.0)
+        self.assertEqual(got["attribution_rate"], 1.0)
+        self.assertEqual(got["dedup_ratio"], 1.0)
+
+    def test_envelope_coverage_falls_when_a_subset_loses_its_usage_block(self):
+        """A format change that renames or drops the accounting fields. Half the
+        assistant records keep it; the sensor still 'runs', and reports success.
+        """
+        def build(store, ws):
+            orchard = ws / "projects" / "orchard"
+            good = TokensPerProject.assistant(self, DAY_C, orchard, "m1", out=5)
+            bare = json.dumps({
+                "type": "assistant", "cwd": str(orchard),
+                "timestamp": "2026-03-14T09:00:00.000Z",
+                "message": {"id": "m2"},          # no usage block at all
+            }) + "\n"
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=good + bare)
+
+        self.assertEqual(self.sentinels(self.sense_with(build))["envelope_coverage"], 0.5)
+
+    def test_attribution_rate_falls_when_work_moves_outside_the_registry(self):
+        def build(store, ws):
+            outside = self.tmp / "elsewhere"
+            outside.mkdir(parents=True, exist_ok=True)
+            body = (self.record(DAY_C, cwd=ws / "projects" / "orchard")
+                    + self.record(DAY_C, cwd=outside)
+                    + self.record(DAY_C, cwd=outside))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+
+        got = self.sentinels(self.sense_with(build))
+        self.assertEqual(got["attribution_rate"], round(1 / 3, 3))
+        self.assertEqual(got["records_dated"], 3)
+
+    def test_dedup_ratio_collapses_upward_when_the_key_stops_deduplicating(self):
+        """The one that fails in the dangerous direction.
+
+        A healthy store writes one response across several records, so the ratio
+        sits well below 1. If the key breaks it climbs toward 1.0 and every token
+        figure inflates -- silently, because more tokens looks like more work.
+        """
+        def build(store, ws):
+            orchard = ws / "projects" / "orchard"
+            shared = "".join(TokensPerProject.assistant(self, DAY_C, orchard, "m1", out=5)
+                             for _ in range(4))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=shared)
+
+        deduped = self.sentinels(self.sense_with(build))["dedup_ratio"]
+        self.assertEqual(deduped, 0.25, "four records for one message is one charge")
+
+        def distinct(store, ws):
+            orchard = ws / "projects" / "orchard"
+            body = "".join(
+                TokensPerProject.assistant(self, DAY_C, orchard, "m%d" % i, out=5)
+                for i in range(4))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+
+        self.assertEqual(self.sentinels(self.sense_with(distinct))["dedup_ratio"], 1.0)
+
+    def test_nothing_measured_is_null_and_not_a_clean_bill_of_health(self):
+        """The substitution these exist to catch, applied to themselves. A rate
+        with no denominator must not report 1.0, or a sensor that read nothing is
+        indistinguishable from one that read everything and found it perfect."""
+        def build(store, ws):
+            (store / self.slug_for(ws)).mkdir(parents=True, exist_ok=True)
+
+        got = self.sentinels(self.sense_with(build))
+        self.assertIsNone(got["envelope_coverage"])
+        self.assertIsNone(got["attribution_rate"])
+        self.assertIsNone(got["dedup_ratio"])
+
+    def test_the_sentinels_are_printed_not_merely_stored(self):
+        """They live under `run`, which `canonical()` strips, so `--check` can
+        neither be dirtied by them nor check them. A number nothing reads is a
+        number nobody sees move."""
+        ws = self.workspace()
+        store = self.tmp / "sessions"
+        store.mkdir(exist_ok=True)
+        self.transcript(store / self.slug_for(ws), "a.jsonl",
+                        body=TokensPerProject.assistant(
+                            self, DAY_C, ws / "projects" / "orchard", "m1", out=5))
+        cfg = load_jsonc(str(ws / "config.jsonc"))
+        cfg["sessions"] = {"dir": str(store)}
+        (ws / "config.jsonc").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        code, out, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        self.assertIn("envelope", out)
+        self.assertIn("dedup", out)
+
+    def test_the_sentinels_do_not_make_check_dirty(self):
+        """`canonical()` strips `run`, which is the whole reason they live there:
+        a health number that moved every night would make `--check` useless."""
+        def build(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body=TokensPerProject.assistant(
+                                self, DAY_C, ws / "projects" / "orchard", "m1", out=5))
+
+        snap = self.sense_with(build)
+        other = json.loads(json.dumps(snap))
+        other["run"]["sensors"]["sessions"]["dedup_ratio"] = 0.999
+        other["run"]["sensors"]["sessions"]["envelope_coverage"] = 0.1
+        self.assertEqual(sense.canonical(snap), sense.canonical(other))
 
 
 class TimestampParsing(unittest.TestCase):

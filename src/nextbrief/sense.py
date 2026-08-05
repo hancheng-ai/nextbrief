@@ -1143,6 +1143,15 @@ def summarise_attention(projects: Sequence[Dict[str, Any]],
     }
 
 
+def _sentinel(value: Optional[float]) -> str:
+    """A rate for the summary line, or `n/a` where nothing was measured.
+
+    Printing a bare `0.0` for "no denominator" would read as total failure, and
+    printing `1.0` would read as perfect health. Neither is what happened.
+    """
+    return "n/a" if value is None else "%.3f" % value
+
+
 def _session_acc() -> Dict[str, Any]:
     return {"session_files": 0, "last_active": None, "days": set(),
             "undated": 0, "records_elsewhere": 0}
@@ -1192,14 +1201,19 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
         return resolve
 
     per_project: Dict[str, Dict[str, Any]] = {}
-    base = expand(sessions_dir or DEFAULT_SESSIONS_DIR)
-    if not base.is_dir():
-        return per_project
 
     # One ledger for the whole scan, not one per file. Resuming a session replays
     # earlier records into a new transcript, so the same message is written to
     # more than one file and a per-file ledger would charge it twice.
     ledger = transcripts.TokenLedger()
+    stats = transcripts.ScanStats()
+
+    base = expand(sessions_dir or DEFAULT_SESSIONS_DIR)
+    if not base.is_dir():
+        # No store to read. The sentinels still go out, all of them null: a run
+        # that measured nothing must be distinguishable from one that measured
+        # everything and found it healthy.
+        return per_project, stats.as_dict(ledger.messages_charged)
 
     for d in sorted(base.iterdir()):
         if not d.is_dir():
@@ -1238,7 +1252,7 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
             per_project[home_pid]["session_files"] += 1
             try:
                 buckets, unplaced = transcripts.read_activity(
-                    f, resolver(home_pid), ledger)
+                    f, resolver(home_pid), ledger, stats)
             except OSError:
                 per_project[home_pid]["undated"] += 1
                 continue
@@ -1314,7 +1328,7 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
             # Tokens, never money. See `TokenLedger` for why there is no price
             # here and why the dedup key is the message rather than the request.
             out[pid]["tokens"] = tokens[pid]
-    return out
+    return out, stats.as_dict(ledger.messages_charged)
 
 
 # ---------------------------------------------------------------------------
@@ -1775,9 +1789,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     scc_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
     with timer.phase("sessions"):
-        sessions = scan_sessions(root, reg.get("projects", []),
-                                 (cfg.get("sessions") or {}).get("dir"),
-                                 as_of=as_of, windows=windows)
+        sessions, session_sentinels = scan_sessions(
+            root, reg.get("projects", []),
+            (cfg.get("sessions") or {}).get("dir"),
+            as_of=as_of, windows=windows)
     evidence_index: Dict[str, Dict[str, Any]] = {}
 
     def add_ev(source, kind, value=None):
@@ -2328,6 +2343,13 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "generator_version": __version__,
             # The wording the answers in this snapshot were given to.
             "asked_version": ASKED_VERSION,
+            # Proportions that collapse when a sensor breaks for part of its
+            # input. They live under `run` because they describe this execution
+            # rather than the portfolio -- which also means `canonical()` strips
+            # them, so they cannot make `--check` spuriously dirty, and cannot be
+            # checked by it either. That is the trade, and it is why `sense`
+            # prints them: a number nothing reads is a number nobody sees move.
+            "sensors": {"sessions": session_sentinels},
         },
         "registry_meta": reg.get("meta"),
         "projects": projects_out,
@@ -2670,6 +2692,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
              len(text) / 1024, len(dtext) / 1024))
     for t in snap["tool_missing"]:
         print("  optional tool missing: %s -- %s" % (t["tool"], t["why"]))
+
+    # Printed rather than merely stored. These live under `run`, which
+    # `canonical()` strips, so `--check` can neither be made dirty by them nor
+    # check them -- and a number nothing reads is a number nobody sees move.
+    # Printing them once a night is what turns a silent partial failure into
+    # something a person notices.
+    sess = ((snap["run"].get("sensors") or {}).get("sessions")) or {}
+    if sess.get("transcripts_read"):
+        print("  sessions: %d transcript(s), %d dated record(s) | "
+              "envelope %s | attributed %s | dedup %s"
+              % (sess["transcripts_read"], sess["records_dated"],
+                 _sentinel(sess["envelope_coverage"]),
+                 _sentinel(sess["attribution_rate"]),
+                 _sentinel(sess["dedup_ratio"])))
     timer.report(sys.stderr)
     return EXIT_OK
 

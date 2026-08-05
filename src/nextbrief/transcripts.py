@@ -77,6 +77,59 @@ def parse_utc_to_local(value: Any) -> Optional[dt.datetime]:
         return None
 
 
+class ScanStats:
+    """Proportions that collapse when a parser silently breaks for a subset.
+
+    A binary check cannot see partial breakage. "Did the session sensor run?"
+    answers yes when it read 44 transcripts and understood 6 of them, and that is
+    not a hypothetical -- it is the shape of every silent failure this format has
+    produced. A ratio answers the same question with a number that moves.
+
+    Each of these has a measured baseline of essentially 1.0 on a healthy store,
+    which is what makes a collapse unmistakable rather than a matter of judgement:
+
+    * ``envelope_coverage`` -- assistant records carrying a complete accounting
+      envelope. Measured 53,085 of 53,085. A format change that renames a field
+      takes this to zero while everything else still reports success.
+    * ``attribution_rate`` -- dated records that landed in a registered project.
+      Falls when the registry stops describing where the work happens, which is a
+      real state and not a bug, so this one is information rather than an alarm.
+    * ``dedup_ratio`` -- messages charged per usage-bearing record. Around 0.36
+      on a healthy store because one response is written across ~2.77 records.
+      **This one collapses upward.** If the dedup key breaks it climbs toward
+      1.0, and every token figure silently inflates by up to 2.7x.
+
+    A rate whose denominator is zero is ``None``, never 1.0. Nothing measured and
+    everything correct must not look identical -- that substitution is the
+    failure these exist to catch, and writing it into the sentinel itself would
+    be the joke telling itself.
+    """
+
+    def __init__(self) -> None:
+        self.transcripts_read = 0
+        self.records_dated = 0
+        self.records_attributed = 0
+        self.assistant_records = 0
+        self.usage_records = 0
+
+    @staticmethod
+    def _rate(numerator: int, denominator: int) -> Optional[float]:
+        if denominator <= 0:
+            return None
+        # Three places is enough to see a collapse and few enough that a
+        # rounding wobble does not read as a change worth investigating.
+        return round(numerator / denominator, 3)
+
+    def as_dict(self, messages_charged: int) -> Dict[str, Any]:
+        return {
+            "transcripts_read": self.transcripts_read,
+            "records_dated": self.records_dated,
+            "envelope_coverage": self._rate(self.usage_records, self.assistant_records),
+            "attribution_rate": self._rate(self.records_attributed, self.records_dated),
+            "dedup_ratio": self._rate(messages_charged, self.usage_records),
+        }
+
+
 def _usage_of(rec: Dict[str, Any]) -> Tuple[Optional[str], int, int]:
     """(message id, input tokens, output tokens) for one record.
 
@@ -160,6 +213,10 @@ class TokenLedger:
         prior[2] = max(prior[2], inp)
         prior[3] = max(prior[3], out)
 
+    @property
+    def messages_charged(self) -> int:
+        return len(self._charges)
+
     def totals(self) -> Iterator[Tuple[str, str, int, int]]:
         """(bucket, ISO day, input, output), one row per charged message."""
         for _mid, (bucket, day, inp, out) in sorted(self._charges.items()):
@@ -197,7 +254,8 @@ def iter_records(path: Path) -> Iterator[Tuple[dt.datetime, Optional[str], Dict[
 
 
 def read_activity(path: Path, resolve,
-                  ledger: Optional[TokenLedger] = None
+                  ledger: Optional[TokenLedger] = None,
+                  stats: Optional[ScanStats] = None
                   ) -> Tuple[Dict[str, Dict[str, Any]], int]:
     """({bucket: {"days": ..., "last": ...}}, records attributed to nothing).
 
@@ -229,8 +287,22 @@ def read_activity(path: Path, resolve,
     """
     buckets: Dict[str, Dict[str, Any]] = {}
     unattributed = 0
+    if stats is not None:
+        stats.transcripts_read += 1
     for when, cwd, rec in iter_records(path):
         bucket = resolve(cwd)
+        if stats is not None:
+            # Counted before the placement check, and the assistant tallies
+            # before the token one, so that a record which fails to place still
+            # registers in the denominators. Counting only what survived would
+            # give every rate a value of 1.0 by construction.
+            stats.records_dated += 1
+            if bucket is not None:
+                stats.records_attributed += 1
+            if rec.get("type") == "assistant":
+                stats.assistant_records += 1
+                if _usage_of(rec)[0] is not None:
+                    stats.usage_records += 1
         if bucket is None:
             unattributed += 1
             continue
