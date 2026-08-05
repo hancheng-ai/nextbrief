@@ -610,7 +610,55 @@ def _stage_interpret(ws: Workspace, cat: Optional[Catalog]) -> None:
         _err("warning: cannot write %s: %s" % (ws.brief_json, exc))
 
 
+def _ingest_adjustments(ws: Workspace) -> None:
+    """Fold any corrections the last brief dropped into the overlay.
+
+    Before sensing, because sensing lays the overlay over the registry -- a
+    correction read afterwards would not reach today's snapshot and would look
+    like it did nothing for a day.
+
+    The staleness stamp is checked against the LAST RENDERED brief, not against
+    today. Someone clicking this morning is answering the brief they have open,
+    which was written last night; comparing against today's date would refuse
+    every correction ever made. What it does refuse is a tab left open across
+    several runs, where the state has moved on since they looked.
+    """
+    from . import inbox  # local: keeps `sense` import-light
+    from .annotate import QUESTIONS, record_answers
+    from .render import last_run
+
+    latest = last_run(ws)
+    if not latest:
+        return                               # nothing has been rendered yet
+    stamp = str(latest.get("as_of") or "")[:10]
+    if not stamp:
+        return
+    try:
+        cfg = load_jsonc(ws.config_path)
+        reg = load_jsonc(ws.registry_path)
+    except (JSONCError, OSError):
+        return
+    drop = ((cfg.get("review") or {}).get("drop_dir")) or "~/Downloads"
+    ids = [p.get("id") for p in (reg.get("projects") or []) if p.get("id")]
+
+    accepted, refused = inbox.read_adjustments(
+        drop, QUESTIONS, ids, latest.get("status_contradicted") or [],
+        as_of=dt.date.fromisoformat(stamp) if stamp else None)
+    if accepted:
+        record_answers(ws, inbox.apply_adjustments(accepted))
+        print("run: applied %d correction(s) from %s" % (len(accepted), drop))
+    # Refusals are printed, never swallowed. Someone who clicked and saw nothing
+    # happen would reasonably conclude the control does not work.
+    for reason, count in sorted(refused.items()):
+        if count:
+            print("run: ignored %d correction(s): %s" % (count, reason))
+
+
 def cmd_run(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    try:
+        _ingest_adjustments(ws)
+    except Exception as exc:   # a dropped file must never cost somebody their brief
+        _err("warning: could not read corrections (%s); continuing" % exc)
     rc = _run_sense([])
     if rc != 0:
         return rc

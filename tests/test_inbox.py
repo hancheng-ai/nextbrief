@@ -15,8 +15,10 @@ import unittest
 
 from helpers import TempCase, make_project_entry, make_snapshot
 
-from nextbrief import annotate, html, inbox
+from nextbrief import annotate, cli, html, inbox
 from nextbrief.i18n import load_catalog
+from nextbrief.jsonc import load_jsonc
+from nextbrief.paths import resolve_workspace
 
 AS_OF = dt.date(2026, 3, 16)
 KNOWN = ("orchard", "kiln")
@@ -231,6 +233,95 @@ class TheControlThePageDraws(TempCase):
         got = self._html([self._p("quiet", days=400)])
         prefix = inbox.DROP_GLOB.split("*")[0]
         self.assertIn("'" + prefix, got)
+
+
+class TheRoundTrip(TempCase):
+    """A correction dropped by yesterday's brief, folded in by today's run.
+
+    Both halves have their own tests. This is the seam between them, which is
+    where a contract declared in two modules actually breaks.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws_root = self.workspace()
+        self.ws = resolve_workspace(str(self.ws_root))
+        self.drop = self.tmp / "drops"
+        self.drop.mkdir(parents=True, exist_ok=True)
+        cfg = load_jsonc(self.ws.config_path)
+        cfg["review"] = {"drop_dir": str(self.drop)}
+        (self.ws_root / "config.jsonc").write_text(
+            json.dumps(cfg, indent=2), encoding="utf-8")
+
+    def _run_record(self, as_of="2026-03-16", contradicted=("orchard",)):
+        (self.ws_root / "log").mkdir(parents=True, exist_ok=True)
+        (self.ws_root / "log" / "runs.jsonl").write_text(
+            json.dumps({"at": as_of + "T21:30:00", "as_of": as_of, "ok": True,
+                        "status_contradicted": list(contradicted)}) + "\n",
+            encoding="utf-8")
+
+    def _drop(self, stamp="2026-03-16", project="orchard", value="maintenance"):
+        (self.drop / ("nextbrief-adjust-%s-%s.json" % (stamp, project))).write_text(
+            json.dumps({"project": project, "field": "status", "value": value,
+                        "from_as_rendered": stamp}), encoding="utf-8")
+
+    def test_a_correction_reaches_the_overlay(self):
+        self._run_record()
+        self._drop()
+        cli._ingest_adjustments(self.ws)
+        got = annotate.load_annotations(self.ws)
+        self.assertEqual((got.get("orchard") or {}).get("status"), "maintenance")
+
+    def test_it_is_stamped_only_on_the_field_it_answered(self):
+        """The inline path must not refresh the impact clock. Correcting a phase
+        is not restating a strategy, and laundering one into the other is how a
+        field goes quietly dead while reporting itself fresh."""
+        self._run_record()
+        self._drop()
+        cli._ingest_adjustments(self.ws)
+        stamps = (annotate.load_annotations(self.ws).get("orchard") or {}).get("asked_on")
+        self.assertEqual(set(stamps or {}), {"status"},
+                         "an inline correction stamped a field it did not answer")
+
+    def test_a_correction_for_a_brief_that_is_no_longer_current_is_ignored(self):
+        """The tab was open across several runs. The state has moved on since
+        they looked, so the answer is about facts that no longer hold."""
+        self._run_record(as_of="2026-03-16")
+        self._drop(stamp="2026-03-10")
+        cli._ingest_adjustments(self.ws)
+        self.assertEqual(annotate.load_annotations(self.ws), {})
+
+    def test_a_correction_for_a_project_the_brief_did_not_flag_is_ignored(self):
+        """The never-originate rule, at the seam rather than in the unit.
+
+        `kiln` is a real project in the registry, so it passes the
+        known-projects check -- and the earlier round-trip tests cannot see this
+        at all, because they only ever drop for a project that is both known and
+        contradicted. Handing the whole registry through instead of the flagged
+        set is invisible until one is not the other.
+        """
+        self._run_record(contradicted=("orchard",))
+        self._drop(project="kiln")
+        cli._ingest_adjustments(self.ws)
+        self.assertEqual(annotate.load_annotations(self.ws), {},
+                         "a project the brief never flagged was corrected anyway")
+
+    def test_nothing_rendered_yet_means_nothing_to_apply(self):
+        """No run record: there is no brief anybody could have clicked, so a file
+        in the drop directory did not come from one."""
+        self._drop()
+        cli._ingest_adjustments(self.ws)
+        self.assertEqual(annotate.load_annotations(self.ws), {})
+
+    def test_an_unreadable_drop_never_costs_the_run(self):
+        """`cmd_run` catches, but the ingest should not be the thing that throws.
+        A brief that fails to build because somebody's downloads folder had an
+        odd file in it is a brief that stops being trusted."""
+        self._run_record()
+        (self.drop / "nextbrief-adjust-2026-03-16-x.json").write_text(
+            "\x00\xff not json", encoding="latin-1")
+        cli._ingest_adjustments(self.ws)
+        self.assertEqual(annotate.load_annotations(self.ws), {})
 
 
 if __name__ == "__main__":

@@ -2261,6 +2261,11 @@ def main(argv=None) -> int:
         # log that gets diffed.
         "neglected_ids": sorted(str(i) for i in (meta.get("neglected_ids") or ())),
         "stalled_ids": sorted(str(i) for i in (meta.get("stalled_ids") or ())),
+        # Which projects this brief drew a correction control on. Recorded rather
+        # than recomputed because the NEXT run has to know what THIS page offered
+        # -- by then the contradiction may have resolved, and a correction must
+        # still be accepted for the state the person was actually looking at.
+        "status_contradicted": list(meta.get("status_contradicted") or ()),
         "announced_neglected_ids": announced_after(latest, meta, "neglected", notified),
         "announced_stalled_ids": announced_after(latest, meta, "stalled", notified),
         "ok": True,          # <- success sentinel, must be the last thing written
