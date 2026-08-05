@@ -20,6 +20,7 @@ import unittest
 from helpers import make_project_entry, make_snapshot
 
 from nextbrief import priority, render
+from nextbrief.i18n import load_catalog
 
 POSITIONINGS = tuple(priority.DORMANCY_DAYS)
 IMPACTS = priority.IMPACT_LADDER
@@ -357,6 +358,104 @@ class TheWiringIntoClassify(unittest.TestCase):
         self.assertGreater(
             meta["scores"]["no_git"], meta["scores"]["with_git"],
             "a project that never had a repo was scored as having gone quiet")
+
+
+class WhenTheScaleStopsDiscriminating(unittest.TestCase):
+    """Every rating scale inflates.
+
+    Given four options and a portfolio they care about, people mark most things
+    critical. The result is not a wrong ordering but an ABSENT one dressed as a
+    ranking: once most projects share the top band, what decides the order is
+    `U + E` -- a deadline and how recently something was touched. That is a real
+    ordering of activity presented as an ordering of importance, which is worse
+    than no order at all because it is believable.
+    """
+
+    def test_a_spread_portfolio_still_ranks(self):
+        self.assertTrue(priority.ordering_discriminates([4, 3, 2, 1]))
+        self.assertTrue(priority.ordering_discriminates([4, 4, 2, 1]))
+
+    def test_a_portfolio_that_is_mostly_top_band_does_not(self):
+        self.assertFalse(priority.ordering_discriminates([4, 4, 4, 1]))
+        self.assertFalse(priority.ordering_discriminates([4, 4, 4, 4]))
+
+    def test_the_threshold_is_a_share_and_not_a_count(self):
+        """Three of five is 60% and allowed; three of four is 75% and is not. A
+        count would fire on a small portfolio that is simply small."""
+        self.assertTrue(priority.ordering_discriminates([4, 4, 4, 2, 1]))
+        self.assertFalse(priority.ordering_discriminates([4, 4, 4, 2]))
+
+    def test_it_is_the_top_band_that_matters_not_the_value_four(self):
+        """A portfolio where nothing is rated above 2 still discriminates if the
+        2s are a minority. The scale has not collapsed just because nobody used
+        its upper half."""
+        self.assertTrue(priority.ordering_discriminates([2, 1, 1, 1]))
+        self.assertFalse(priority.ordering_discriminates([2, 2, 2, 1]))
+
+    def test_unrated_projects_are_not_counted_either_way(self):
+        self.assertTrue(priority.ordering_discriminates([4, 1, None, None]))
+
+    def test_too_few_to_compare_makes_no_claim(self):
+        self.assertTrue(priority.ordering_discriminates([]))
+        self.assertTrue(priority.ordering_discriminates([4]))
+
+
+class TiesPrintAsTies(unittest.TestCase):
+    def test_equal_scores_are_grouped(self):
+        got = priority.tie_groups({"a": 18, "b": 18, "c": 10})
+        self.assertEqual(got, {18: ["a", "b"]})
+
+    def test_a_lone_score_is_not_a_tie(self):
+        self.assertEqual(priority.tie_groups({"a": 18, "b": 10}), {})
+
+    def test_unscored_projects_are_not_tied_with_each_other(self):
+        """`None` means nobody ranked them. Grouping them as equals would assert
+        a comparison that was never made."""
+        self.assertEqual(priority.tie_groups({"a": None, "b": None}), {})
+
+
+class SuppressionInPractice(unittest.TestCase):
+    def _p(self, pid, impact):
+        got = make_project_entry(pid=pid, ice={"impact": impact})
+        got["status"] = "active"
+        got["positioning"] = "platform"
+        got["evidence"] = dict(got["evidence"], days_since=1)
+        return got
+
+    def _meta(self, projects):
+        return render.classify(make_snapshot(projects=projects), [], {}, None, None)
+
+    def test_a_discriminating_portfolio_is_ordered_by_score(self):
+        meta = self._meta([self._p("low", 1), self._p("high", 5)])
+        self.assertFalse(meta["ordering_suppressed"])
+        self.assertEqual([p["id"] for p in meta["ranked"]], ["high", "low"])
+
+    def test_an_inflated_portfolio_is_listed_alphabetically_and_says_so(self):
+        """Alphabetical is not a fallback ranking -- it is the absence of one,
+        made visible. The flag is what stops the reader taking the order as a
+        judgement."""
+        meta = self._meta([self._p("zebra", 5), self._p("apple", 5),
+                           self._p("mango", 5), self._p("kiwi", 1)])
+        self.assertTrue(meta["ordering_suppressed"])
+        self.assertEqual([p["id"] for p in meta["ranked"]],
+                         ["apple", "kiwi", "mango", "zebra"])
+
+    def test_the_brief_prints_the_reason(self):
+        """A suppressed ordering that looks like an ordering is the failure this
+        avoids, so the page has to say it out loud."""
+        snap = make_snapshot(projects=[self._p("zebra", 5), self._p("apple", 5),
+                                       self._p("mango", 5), self._p("kiwi", 1)])
+        md, _ = render.render_brief(snap, {}, [], {}, {}, load_catalog("en"),
+                                    {"conflicts": []})
+        self.assertIn("Not ranked today", md)
+
+    def test_a_ranked_brief_stays_quiet(self):
+        """Rule 8. A line that appears on a healthy portfolio is one people learn
+        to skip, and then miss on the morning it matters."""
+        snap = make_snapshot(projects=[self._p("low", 1), self._p("high", 5)])
+        md, _ = render.render_brief(snap, {}, [], {}, {}, load_catalog("en"),
+                                    {"conflicts": []})
+        self.assertNotIn("Not ranked today", md)
 
 
 if __name__ == "__main__":

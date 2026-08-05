@@ -37,6 +37,7 @@
   "brief.next.decision": "**先取证据回答那个问题**（见下）",
   "brief.next.delegated": "→ {file}",
   "brief.next.stalled": "**停滞：无下一步**",
+  "brief.ordering.suppressed": "**今天不排序。** 多数项目都落在最高重要性档，排下去只会变成按截止日期和近期活跃度排，而不是按重要性 —— 用 `nextbrief review` 说清楚哪个更重要。",
   "brief.section.agent_queue": "Agent 今晚就能替你做的",
   "brief.section.automation_review": "自动化盘点（每周五）",
   "brief.section.decision_pending": "决策待定（不是「你在拖延」，是缺证据）",

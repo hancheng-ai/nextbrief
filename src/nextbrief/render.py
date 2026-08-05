@@ -833,9 +833,19 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
             uncommitted=bool((p.get("git") or [{}])[0].get("uncommitted")),
             has_repo_signal=p.get("git_declared") != "none",
         )
-    ranked = sorted(
-        rankable,
-        key=lambda p: (-(scores.get(str(p.get("id"))) or 0), str(p.get("id"))))
+    # Once most projects share the top impact band the ordering stops being an
+    # ordering of importance and becomes one of activity wearing importance's
+    # name -- which is worse than no order, because it is believable. So the
+    # ranking is withheld and the reason is printed.
+    discriminating = priority.ordering_discriminates(
+        [priority.impact_ordinal((p.get("ice") or {}).get("impact")) for p in rankable])
+    if discriminating:
+        ranked = sorted(
+            rankable,
+            key=lambda p: (-(scores.get(str(p.get("id"))) or 0), str(p.get("id"))))
+    else:
+        ranked = sorted(rankable, key=lambda p: str(p.get("id")))
+    ties = priority.tie_groups(scores) if discriminating else {}
 
 
     open_items = [b for b in backlog
@@ -896,6 +906,11 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
         # (nobody claimed it is competing), excluding it from the PAGE is not.
         "gated": gated,
         "scores": scores,
+        # Equal scores are reported as equal. Ordering them anyway invents a
+        # distinction the inputs do not contain, and a reader cannot tell an
+        # earned first place from an alphabetical one.
+        "ties": ties,
+        "ordering_suppressed": not discriminating,
         # An expedite lane holding two items is not an expedite lane. When it
         # overflows, the collision is what gets printed instead of a promotion.
         "urgency_collision": cliff_ids if colliding else [],
@@ -1063,6 +1078,16 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     #
     # Printed above the ordering rather than inside it, so it reads as context
     # for the list rather than as a term in it.
+    # ---- the ordering, when there is not one ---------------------------------
+    #
+    # Printed before anything that looks like a rank, because a reader who takes
+    # the table as a ranking and learns otherwise three sections later has
+    # already acted on it. The remedy is not a better formula -- it is for the
+    # person to say which of these actually matters more.
+    if meta.get("ordering_suppressed"):
+        L.append("> " + cat.t("brief.ordering.suppressed"))
+        L.append("")
+
     attention = snap.get("attention") or {}
     if attention.get("top_project"):
         # Looked up among the projects the page actually lists. The self-project

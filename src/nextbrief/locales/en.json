@@ -37,6 +37,7 @@
   "brief.next.decision": "**Go get the evidence that answers it** (below)",
   "brief.next.delegated": "→ {file}",
   "brief.next.stalled": "**stalled: no next step**",
+  "brief.ordering.suppressed": "**Not ranked today.** Most projects share the top importance band, so the order below would be decided by deadlines and recent activity rather than by what matters — say which of these outranks the others in `nextbrief review`.",
   "brief.section.agent_queue": "What an agent could do for you tonight",
   "brief.section.automation_review": "Automation review (Fridays)",
   "brief.section.decision_pending": "Awaiting a decision (not procrastination — missing evidence)",

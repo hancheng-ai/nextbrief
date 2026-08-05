@@ -182,6 +182,50 @@ def collides(inside_cliff_ids: Sequence[str]) -> bool:
     return len(inside_cliff_ids) > 1
 
 
+# When this share of ranked projects sits in the top impact band, the scale has
+# stopped saying anything and the ordering built on it is arithmetic rather than
+# judgement.
+INFLATION_SHARE = 0.6
+
+
+def ordering_discriminates(ordinals: Sequence[Optional[int]]) -> bool:
+    """Whether the stated importances still tell projects apart.
+
+    Every rating scale inflates. Given four options and a portfolio they care
+    about, people mark most things "critical" -- and the result is not a wrong
+    ordering but an absent one, dressed as a ranking. Once most projects share
+    the top band, what actually decides the order is `U + E`: a deadline and how
+    recently something was touched. That is a real ordering of *activity*
+    presented as an ordering of *importance*, which is worse than no order at
+    all, because it is believable.
+
+    So the brief stops ranking and says why. The remedy is not a better formula;
+    it is for the person to say which of these actually matters more, and a
+    ranking that quietly papers over the gap never prompts them to.
+
+    Below two projects there is nothing to discriminate between, and no claim.
+    """
+    rated = [o for o in ordinals if o is not None]
+    if len(rated) < 2:
+        return True
+    top = max(rated)
+    return (sum(1 for o in rated if o == top) / len(rated)) <= INFLATION_SHARE
+
+
+def tie_groups(scored: Dict[str, Optional[int]]) -> Dict[int, list]:
+    """Ids sharing a score, keyed by that score, ties of two or more only.
+
+    Equal scores print AS equal. Ordering them anyway invents a distinction the
+    inputs do not contain, and the reader cannot tell an earned first place from
+    an alphabetical one.
+    """
+    by_score: Dict[int, list] = {}
+    for pid, score in scored.items():
+        if score is not None:
+            by_score.setdefault(score, []).append(pid)
+    return {score: sorted(ids) for score, ids in by_score.items() if len(ids) > 1}
+
+
 def explain(impact: Any, positioning: Any, days_since: Optional[int],
             inside_cliff: bool = False, colliding: bool = False,
             uncommitted: bool = False,
