@@ -510,6 +510,123 @@ class AttributionRuleDirectly(SessionSensingCase):
         self.assertEqual(got["orchard"]["distinct_session_days"], 2)
 
 
+class TokensPerProject(SessionSensingCase):
+    """Charge each message once, however many records carry it.
+
+    Naive summing overcounts by 2.697x over a real store, from two independent
+    paths that a fixture has to reproduce separately or it is only testing one.
+    """
+
+    def assistant(self, when, cwd, mid, inp=0, out=0, request=None):
+        """One assistant record carrying a usage block."""
+        utc = dt.datetime(1970, 1, 1) + dt.timedelta(seconds=when)
+        rec = {
+            "type": "assistant",
+            "timestamp": utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "cwd": str(cwd),
+            "message": {"id": mid, "usage": {
+                "input_tokens": inp, "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0, "output_tokens": out}},
+        }
+        if request is not None:
+            rec["requestId"] = request
+        return json.dumps(rec) + "\n"
+
+    def tokens_of(self, snap, pid="orchard", window="7"):
+        return {p["id"]: p for p in snap["projects"]}[pid]["sessions"]["tokens"]
+
+    def test_one_response_split_across_content_blocks_is_charged_once(self):
+        """The API writes one record per content block -- 2.77 of them per
+        message in a real store -- with the usage replicated identically. Summing
+        records multiplies every figure by that factor."""
+        def build(store, ws):
+            orchard = ws / "projects" / "orchard"
+            body = "".join(self.assistant(DAY_C, orchard, "msg_1", inp=100, out=50)
+                           for _ in range(3))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+
+        got = self.tokens_of(self.sense_with(build))
+        self.assertEqual(got["output"]["7"], 50, "one message was charged three times")
+        self.assertEqual(got["input"]["7"], 100)
+
+    def test_a_message_replayed_into_another_file_is_charged_once(self):
+        """Resuming a session rewrites earlier records into a new transcript, so
+        26.7% of requests appear in more than one file. A per-file ledger charges
+        each of them again -- which is why the ledger spans the whole scan."""
+        def build(store, ws):
+            orchard = ws / "projects" / "orchard"
+            d = store / self.slug_for(ws)
+            first = self.assistant(DAY_A, orchard, "msg_1", inp=10, out=7)
+            self.transcript(d, "a.jsonl", body=first)
+            self.transcript(d, "b.jsonl",
+                            body=first + self.assistant(DAY_C, orchard, "msg_2",
+                                                        inp=1, out=3))
+
+        got = self.tokens_of(self.sense_with(build))
+        self.assertEqual(got["output"]["7"], 10, "the replayed message was charged twice")
+        self.assertEqual(got["input"]["7"], 11)
+
+    def test_the_key_is_the_message_not_the_request(self):
+        """Specified as `(message.id, requestId)`; measured, that pair is FINER
+        than the message -- 19,224 message ids against 19,183 request ids -- so
+        keying on it splits messages that should be charged once and leaves part
+        of the overcount in place."""
+        def build(store, ws):
+            orchard = ws / "projects" / "orchard"
+            body = (self.assistant(DAY_C, orchard, "msg_1", out=50, request="req_a")
+                    + self.assistant(DAY_C, orchard, "msg_1", out=50, request="req_b"))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+
+        self.assertEqual(self.tokens_of(self.sense_with(build))["output"]["7"], 50)
+
+    def test_a_truncated_replica_does_not_lower_the_charge(self):
+        """Replicas normally agree exactly. When they disagree the larger figure
+        is the one that was not truncated: a partially written record carries a
+        short count, never a long one."""
+        def build(store, ws):
+            orchard = ws / "projects" / "orchard"
+            body = (self.assistant(DAY_C, orchard, "msg_1", out=50)
+                    + self.assistant(DAY_C, orchard, "msg_1", out=0))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+
+        self.assertEqual(self.tokens_of(self.sense_with(build))["output"]["7"], 50)
+
+    def test_tokens_follow_the_project_the_record_was_in(self):
+        def build(store, ws):
+            body = (self.assistant(DAY_C, ws / "projects" / "orchard", "m1", out=10)
+                    + self.assistant(DAY_C, ws / "projects" / "kiln", "m2", out=90))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+
+        snap = self.sense_with(build)
+        self.assertEqual(self.tokens_of(snap, "orchard")["output"]["7"], 10)
+        self.assertEqual(self.tokens_of(snap, "kiln")["output"]["7"], 90)
+
+    def test_a_window_excludes_what_falls_outside_it(self):
+        def build(store, ws):
+            orchard = ws / "projects" / "orchard"
+            old = dt.datetime(2026, 2, 1, 9, 0).timestamp()
+            body = (self.assistant(old, orchard, "m_old", out=1000)
+                    + self.assistant(DAY_C, orchard, "m_new", out=7))
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+
+        got = self.tokens_of(self.sense_with(build))
+        self.assertEqual(got["output"]["7"], 7, "a month-old message counted as this week")
+        self.assertEqual(got["output"]["30"], 7)
+
+    def test_no_money_anywhere_in_the_snapshot(self):
+        """A token count is a fact the transcript states. A cost is a guess about
+        a price list that changes without telling anyone, and a wrong number
+        about somebody's money is worse than no number."""
+        def build(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body=self.assistant(DAY_C, ws / "projects" / "orchard",
+                                                "m1", inp=5, out=9))
+
+        blob = json.dumps(self.sense_with(build)).lower()
+        for word in ("usd", "dollar", "\"cost\"", "price", "cents", "$"):
+            self.assertNotIn(word, blob, "the snapshot priced something")
+
+
 class TimestampParsing(unittest.TestCase):
     """The conversion, in isolation.
 

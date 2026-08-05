@@ -1070,7 +1070,8 @@ def _session_acc() -> Dict[str, Any]:
 
 
 def scan_sessions(root, projects: Sequence[Dict[str, Any]],
-                  sessions_dir=None) -> Dict[str, Dict[str, Any]]:
+                  sessions_dir=None, as_of=None,
+                  windows: Sequence[int] = ()) -> Dict[str, Dict[str, Any]]:
     slug_to_pid: Dict[str, str] = {}
     # Registered project directories, longest first. A cwd is credited to the
     # deepest project that contains it, so a project nested inside another is
@@ -1116,6 +1117,11 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
     if not base.is_dir():
         return per_project
 
+    # One ledger for the whole scan, not one per file. Resuming a session replays
+    # earlier records into a new transcript, so the same message is written to
+    # more than one file and a per-file ledger would charge it twice.
+    ledger = transcripts.TokenLedger()
+
     for d in sorted(base.iterdir()):
         if not d.is_dir():
             continue
@@ -1152,7 +1158,8 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
             # the days below are counted wherever the work actually went.
             per_project[home_pid]["session_files"] += 1
             try:
-                buckets, unplaced = transcripts.read_activity(f, resolver(home_pid))
+                buckets, unplaced = transcripts.read_activity(
+                    f, resolver(home_pid), ledger)
             except OSError:
                 per_project[home_pid]["undated"] += 1
                 continue
@@ -1182,6 +1189,24 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
             if unplaced:
                 per_project[home_pid]["records_elsewhere"] += unplaced
 
+    # Tokens per project per window, from the deduplicated ledger. Counted here
+    # rather than in the loop above because a message may be charged from any
+    # file and only the finished ledger knows which sighting won.
+    tokens: Dict[str, Dict[str, Dict[str, int]]] = {}
+    if as_of is not None and windows:
+        cutoffs = {w: (as_of - dt.timedelta(days=w)).isoformat() for w in windows}
+        for pid in per_project:
+            tokens[pid] = {"input": {str(w): 0 for w in windows},
+                           "output": {str(w): 0 for w in windows}}
+        for bucket, day, inp, out_tok in ledger.totals():
+            got = tokens.get(bucket)
+            if got is None:
+                continue
+            for w in windows:
+                if day > cutoffs[w]:
+                    got["input"][str(w)] += inp
+                    got["output"][str(w)] += out_tok
+
     out = {}
     for pid, acc in per_project.items():
         # Work that landed outside every registered project is reported as its
@@ -1206,6 +1231,10 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
             # in, because that is the one a reader can act on.
             "records_unattributed": acc["records_elsewhere"],
         }
+        if pid in tokens:
+            # Tokens, never money. See `TokenLedger` for why there is no price
+            # here and why the dedup key is the message rather than the request.
+            out[pid]["tokens"] = tokens[pid]
     return out
 
 
@@ -1668,7 +1697,8 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
 
     with timer.phase("sessions"):
         sessions = scan_sessions(root, reg.get("projects", []),
-                                 (cfg.get("sessions") or {}).get("dir"))
+                                 (cfg.get("sessions") or {}).get("dir"),
+                                 as_of=as_of, windows=windows)
     evidence_index: Dict[str, Dict[str, Any]] = {}
 
     def add_ev(source, kind, value=None):

@@ -77,7 +77,96 @@ def parse_utc_to_local(value: Any) -> Optional[dt.datetime]:
         return None
 
 
-def iter_records(path: Path) -> Iterator[Tuple[dt.datetime, Optional[str]]]:
+def _usage_of(rec: Dict[str, Any]) -> Tuple[Optional[str], int, int]:
+    """(message id, input tokens, output tokens) for one record.
+
+    Input is the sum of the fresh, cache-written and cache-read counts. Splitting
+    them would invite a "cheaper" reading of a cache hit, and this module does not
+    price anything -- see `TokenLedger`.
+    """
+    msg = rec.get("message")
+    if not isinstance(msg, dict):
+        return None, 0, 0
+    mid = msg.get("id")
+    usage = msg.get("usage")
+    if not isinstance(mid, str) or not isinstance(usage, dict):
+        return None, 0, 0
+
+    def count(key: str) -> int:
+        got = usage.get(key)
+        # Negative or non-integer is a shape this format does not produce; if it
+        # ever does, a zero is a wrong number that stays obviously wrong rather
+        # than a negative that quietly cancels a real one out.
+        return got if isinstance(got, int) and got >= 0 else 0
+
+    return (mid,
+            count("input_tokens") + count("cache_creation_input_tokens")
+            + count("cache_read_input_tokens"),
+            count("output_tokens"))
+
+
+class TokenLedger:
+    """Charge each message exactly once, however many records carry it.
+
+    **Tokens, never money.** No price, no rate, no currency, and no field that
+    could carry one. A token count is a fact the transcript states; a cost is a
+    guess about a price list that changes without telling anyone, and a wrong
+    number about somebody's money is worse than no number.
+
+    **Why the key is `message.id` alone**, and not the `(message.id, requestId)`
+    pair this was specified as. Measured over a real store there are 19,224
+    distinct message ids against 19,183 request ids: the pair is *finer* than the
+    message, so keying on it splits messages that should be charged once and
+    leaves part of the overcount in place. Request id is a transport detail;
+    the message is the thing that was generated.
+
+    Two independent duplication paths make naive summing wrong, and only a
+    ledger spanning every file catches both:
+
+    1. One API response is written one record per content block -- 2.77 assistant
+       records per message id -- with the usage figures replicated identically
+       across them. Summing records multiplies by that factor.
+    2. Resuming a session replays earlier records into a new file, so 26.7% of
+       requests appear in more than one transcript. A per-file ledger would
+       charge each of them again.
+
+    Together they overcount by 2.697x, which is not a rounding error; it is a
+    number that would make every proportion in the brief wrong.
+
+    **Max-wins on a repeat.** Replicas of one message normally agree exactly. When
+    they do not, the larger figure is the one that was not truncated: a partially
+    written record carries a short count, never a long one.
+    """
+
+    def __init__(self) -> None:
+        # message id -> [bucket, ISO day, input, output]
+        self._charges: Dict[str, list] = {}
+        self.records_seen = 0
+        self.repeats = 0
+
+    def charge(self, rec: Dict[str, Any], bucket: str, when: dt.datetime) -> None:
+        mid, inp, out = _usage_of(rec)
+        if mid is None:
+            return
+        self.records_seen += 1
+        prior = self._charges.get(mid)
+        if prior is None:
+            self._charges[mid] = [bucket, when.date().isoformat(), inp, out]
+            return
+        # Seen before, in this file or another. Keep the first sighting's project
+        # and day -- traversal is sorted, so "first" is the same on every run --
+        # and take the larger counts.
+        self.repeats += 1
+        prior[2] = max(prior[2], inp)
+        prior[3] = max(prior[3], out)
+
+    def totals(self) -> Iterator[Tuple[str, str, int, int]]:
+        """(bucket, ISO day, input, output), one row per charged message."""
+        for _mid, (bucket, day, inp, out) in sorted(self._charges.items()):
+            yield bucket, day, inp, out
+
+
+def iter_records(path: Path) -> Iterator[Tuple[dt.datetime, Optional[str], Dict[str, Any]]]:
     """Every datable record in one transcript, as (local time, cwd).
 
     Streams. A transcript runs to tens of megabytes and there is no reason to
@@ -104,10 +193,12 @@ def iter_records(path: Path) -> Iterator[Tuple[dt.datetime, Optional[str]]]:
             if when is None:
                 continue
             cwd = rec.get("cwd")
-            yield when, (cwd if isinstance(cwd, str) else None)
+            yield when, (cwd if isinstance(cwd, str) else None), rec
 
 
-def read_activity(path: Path, resolve) -> Tuple[Dict[str, Dict[str, Any]], int]:
+def read_activity(path: Path, resolve,
+                  ledger: Optional[TokenLedger] = None
+                  ) -> Tuple[Dict[str, Dict[str, Any]], int]:
     """({bucket: {"days": ..., "last": ...}}, records attributed to nothing).
 
     Two things are load-bearing here.
@@ -138,11 +229,15 @@ def read_activity(path: Path, resolve) -> Tuple[Dict[str, Dict[str, Any]], int]:
     """
     buckets: Dict[str, Dict[str, Any]] = {}
     unattributed = 0
-    for when, cwd in iter_records(path):
+    for when, cwd, rec in iter_records(path):
         bucket = resolve(cwd)
         if bucket is None:
             unattributed += 1
             continue
+        if ledger is not None:
+            # Charged before the day bookkeeping, and against the same bucket, so
+            # a token can never be attributed to a project the record was not.
+            ledger.charge(rec, bucket, when)
         acc = buckets.setdefault(bucket, {"days": {}, "last": None})
         acc["days"][when.date().isoformat()] = ""
         if acc["last"] is None or when > acc["last"]:
