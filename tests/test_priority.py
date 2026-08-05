@@ -17,7 +17,9 @@ from __future__ import annotations
 import itertools
 import unittest
 
-from nextbrief import priority
+from helpers import make_project_entry, make_snapshot
+
+from nextbrief import priority, render
 
 POSITIONINGS = tuple(priority.DORMANCY_DAYS)
 IMPACTS = priority.IMPACT_LADDER
@@ -72,6 +74,46 @@ class TheEvidenceTermIsBounded(unittest.TestCase):
             d = priority.expected_dormancy(positioning)
             self.assertEqual(priority.evidence_step(9999, d, has_repo_signal=False), 0)
             self.assertEqual(priority.evidence_step(None, d), 0)
+
+
+class ANegativeAgeCannotEscapeTheBound(unittest.TestCase):
+    """A bug this project shipped, carried forward as a guard.
+
+    Under the multiplicative model `0.5 ** (days / half_life)` was bounded by 1.0
+    for days >= 0 and unbounded below it, so a file dated a year ahead -- a wrong
+    clock on a NAS, an archive unpacked with its original timestamps -- scored
+    477,911 against a normal maximum of 4. Silent, because nothing else reads
+    `days_since` as a number.
+
+    The additive model cannot produce that, but "cannot" is a claim and this is
+    the test of it.
+    """
+
+    def test_a_negative_age_is_read_as_today_rather_than_as_recent(self):
+        """Asserted as equality with today, not as "under the ceiling".
+
+        The first version of this test checked only that a future date scored no
+        higher than the ceiling -- which held with the clamp REMOVED, because an
+        unclamped negative simply falls into the "within D/4" rung and scores 2
+        instead of 3. Bounded either way, so the assertion could not fail and the
+        clamp it claimed to guard was untested.
+        """
+        for positioning in POSITIONINGS:
+            d = priority.expected_dormancy(positioning)
+            today = priority.evidence_step(0, d)
+            for ahead in (-1, -7, -365, -100000):
+                self.assertEqual(
+                    priority.evidence_step(ahead, d), today,
+                    "days_since=%s was not clamped to today" % ahead)
+
+    def test_no_value_of_days_since_leaves_the_band(self):
+        """Stated once as a property: nothing `days_since` can hold makes a score
+        exceed what its impact band allows."""
+        for days in (-10**6, -1, 0, 1, 10**6):
+            for positioning in POSITIONINGS:
+                got = priority.priority_score(5, positioning, days)
+                self.assertLessEqual(got, priority.BAND * len(IMPACTS) + priority.E_MAX)
+                self.assertGreaterEqual(got, priority.BAND * len(IMPACTS) + priority.E_MIN)
 
 
 class TheUrgencyCliffCrossesExactlyOneBand(unittest.TestCase):
@@ -188,6 +230,119 @@ class PositioningCalibratesRatherThanScores(unittest.TestCase):
                          priority.DORMANCY_FALLBACK)
         self.assertEqual(priority.expected_dormancy(None),
                          priority.DORMANCY_FALLBACK)
+
+
+class TheWiringIntoClassify(unittest.TestCase):
+    """What the formula sees once it is reading real snapshot entries.
+
+    Every test here is about a way the wiring can be right in isolation and wrong
+    in place -- which is where a replacement goes wrong, not in the arithmetic.
+    """
+
+    def _p(self, pid, impact=4, status="active", days=1, **over):
+        got = make_project_entry(pid=pid, ice={"impact": impact})
+        got["status"] = status
+        got["positioning"] = over.pop("positioning", "platform")
+        got["evidence"] = dict(got["evidence"], days_since=days)
+        got["git_declared"] = over.pop("git_declared", "declared")
+        got.update(over)
+        return got
+
+    def _meta(self, projects, outcomes=None):
+        snap = make_snapshot(projects=projects)
+        if outcomes is not None:
+            snap["outcomes"] = outcomes
+        return render.classify(snap, [], {}, None, None)
+
+    def test_only_an_active_project_is_ranked(self):
+        """Status gates rather than scores. It used to be a multiplier, which put
+        a frozen flagship into a numeric contest with an active experiment and
+        let the experiment win -- an ordering with two meanings."""
+        meta = self._meta([self._p("a", status="active"),
+                           self._p("b", status="maintenance"),
+                           self._p("c", status="frozen"),
+                           self._p("d", status="done")])
+        self.assertEqual([p["id"] for p in meta["ranked"]], ["a"])
+        self.assertEqual([p["id"] for p in meta["gated"]], ["b", "c", "d"])
+
+    def test_a_gated_project_is_listed_and_not_dropped(self):
+        """Excluding a project from the ORDERING is honest -- nobody claimed it is
+        competing. Excluding it from the PAGE is the bug the split exists to
+        avoid."""
+        meta = self._meta([self._p("a"), self._p("z", status="frozen")])
+        listed = {p["id"] for p in meta["ranked"] + meta["gated"]}
+        self.assertEqual(listed, {"a", "z"})
+
+    def test_a_higher_stated_impact_outranks_recent_activity(self):
+        meta = self._meta([self._p("busy_but_minor", impact=1, days=0),
+                           self._p("important_but_quiet", impact=5, days=40)])
+        self.assertEqual([p["id"] for p in meta["ranked"]][0], "important_but_quiet")
+
+    def test_a_lone_deadline_promotes_and_two_cancel(self):
+        """The expedite quota. If two projects are urgent on the same morning,
+        promoting both says nothing about which to start."""
+        dated = {"date": "2026-03-20", "label": "ship", "in_lead_window": True,
+                 "overdue": False, "days_until": 4}
+        # `calm` is a rung above and has gone quiet, so the promotion is legible.
+        # With both freshly worked the two land on exactly 18 -- a real tie, and
+        # the correct one: the cliff is worth one band, so it reaches parity with
+        # the rung above rather than passing it.
+        one = self._meta([self._p("urgent", impact=1, days=1, deadlines=[dated]),
+                          self._p("calm", impact=2, days=200)])
+        self.assertEqual([p["id"] for p in one["ranked"]][0], "urgent")
+        self.assertEqual(one["urgency_collision"], [])
+
+        two = self._meta([self._p("urgent", impact=1, days=1, deadlines=[dated]),
+                          self._p("also", impact=1, days=1, deadlines=[dated]),
+                          self._p("calm", impact=2, days=200)])
+        self.assertEqual([p["id"] for p in two["ranked"]][0], "calm",
+                         "a collision still promoted somebody")
+        self.assertEqual(two["urgency_collision"], ["also", "urgent"])
+
+    def test_the_cliff_reaches_parity_with_the_rung_above_not_past_it(self):
+        """The tie the fixture above deliberately avoids, asserted on purpose.
+
+        An urgent project one rung down, equally fresh, ties rather than wins.
+        That is the bound working: urgency is worth one band, and a band is
+        exactly what it buys.
+        """
+        dated = {"date": "2026-03-20", "label": "ship", "in_lead_window": True,
+                 "overdue": False, "days_until": 4}
+        meta = self._meta([self._p("urgent", impact=1, days=1, deadlines=[dated]),
+                           self._p("calm", impact=2, days=1)])
+        self.assertEqual(meta["scores"]["urgent"], meta["scores"]["calm"])
+
+    def test_urgency_comes_from_served_outcomes_too(self):
+        """The regression this nearly shipped with.
+
+        A project is on the hook for its own deadlines AND for the dated outcomes
+        it serves. Reading only the former drops the urgency of every project
+        whose commitment is shared -- which is exactly the kind a portfolio has,
+        since a shared date is declared once as an outcome precisely so it is not
+        duplicated into three registry entries.
+        """
+        outcome = {"id": "launch", "kind": "dated", "date": "2026-03-20",
+                   "in_lead_window": True, "overdue": False, "done": False}
+        meta = self._meta(
+            [self._p("serves_it", impact=1, days=1, serves=["launch"]),
+             self._p("calm", impact=2, days=200)],
+            outcomes=[outcome])
+        self.assertEqual([p["id"] for p in meta["ranked"]][0], "serves_it",
+                         "a project on the hook for a shared date got no urgency")
+
+    def test_no_git_is_not_punished_as_dormancy(self):
+        """Asserted on the scores, not on the order.
+
+        Ordering alone cannot see this: with the distinction removed both
+        projects score identically and the tie breaks alphabetically, which put
+        the right answer first for the wrong reason.
+        """
+        meta = self._meta([self._p("with_git", impact=4, days=200),
+                           self._p("no_git", impact=4, days=200,
+                                   git_declared="none")])
+        self.assertGreater(
+            meta["scores"]["no_git"], meta["scores"]["with_git"],
+            "a project that never had a repo was scored as having gone quiet")
 
 
 if __name__ == "__main__":

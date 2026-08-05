@@ -252,12 +252,10 @@ truncations and all:
 
 | Project | Signal | Evidence | Next |
 |---|---|---|---|
-| Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page a new con |
 | Orchard API | ⏸ **awaiting a decision** | 4 commits/30d · last commit 2026-03-14 · 4 files/7d · 7 active days/30d | **Go get the evidence that answers it** (below) |
 | Lantern Site | 🌤 warm | 2 commits/30d · last commit 2026-03-06 · 5 active days/30d |  |
+| Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page a new con |
 | Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 1 files/7d · 3 active days/30d | **stalled: no next step** |
-| Kiln | 🔥 hot | 1 commits/30d · last commit 2026-03-14 · 1 files/7d · 1 active days/30d | → OPERATIONS_LOG.md |
-| Quarry | ❄️ dormant | last commit 2025-12-05 · **2 uncommitted** | **stalled: no next step** |
 
 ## Awaiting a decision (not procrastination — missing evidence)
 - **Orchard API** — Per-tenant schemas, or stay on a shared schema with a tenant_id column?

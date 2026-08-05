@@ -46,6 +46,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional
 
+from . import priority
 from .annotate import QUESTIONS, pending_count, question_targets
 from .frontmatter import parse_frontmatter
 from .fs import append_jsonl, append_text, rewrite_fields, write_text
@@ -866,6 +867,29 @@ def section(lines: List[str], marks: List[dict], key: str, title: str) -> None:
     lines.append("## " + title)
 
 
+# The order the non-rankable phases are listed in. Not a ranking -- a reading
+# order, weakest claim on your attention last.
+GATED_ORDER = {"maintenance": 0, "frozen": 1, "done": 2}
+
+
+def _inside_cliff(p, outcomes=None) -> bool:
+    """Whether a dated commitment has entered its lead window, or passed.
+
+    A cliff, not a ramp. Cost of delay on a fixed date is zero until the latest
+    start, so a days-remaining term would raise every dated project every morning
+    with no new evidence -- a warning that fires daily for a harmless reason.
+
+    Through `_dated_commitments`, which is the part that is easy to get wrong: a
+    project is on the hook for its own deadlines AND for the dated outcomes it
+    serves. Reading only the former drops the urgency of every project whose
+    commitment is shared, which is exactly the kind a portfolio has.
+    """
+    for d in _dated_commitments(p, outcomes):
+        if d.get("overdue") or d.get("in_lead_window"):
+            return True
+    return False
+
+
 def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     """Decide, once, which projects are stalled / neglected / awaiting a decision.
 
@@ -883,9 +907,46 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     # above it -- about a project no one ever rated.
     judged = [p for p in projects if is_judged(p)]
     unjudged = [p for p in projects if not is_judged(p)]
-    ranked = sorted(judged,
-                    key=lambda p: (-score_project(p, cfg, outcomes), str(p.get("id"))))
     unjudged.sort(key=lambda p: str(p.get("id")))
+
+    # Status GATES rather than scores.
+    #
+    # It used to be a multiplier, which put a frozen flagship into a numeric
+    # contest against an active experiment and let the experiment win. But phase
+    # and importance are not commensurable: "we have deliberately stopped this"
+    # is not a weaker version of "this matters", it is a different statement, and
+    # multiplying one by the other produces an ordering with two meanings.
+    #
+    # So only `active` is ranked. The rest are listed -- never dropped, which is
+    # the bug this split exists to avoid -- with their phase said out loud.
+    rankable = [p for p in judged if (status_of(p) or "active") == "active"]
+    gated = [p for p in judged if (status_of(p) or "active") != "active"]
+    gated.sort(key=lambda p: (GATED_ORDER.get(status_of(p), 9), str(p.get("id"))))
+
+    # The expedite quota, which is portfolio-wide and therefore cannot live in a
+    # per-project score. If two projects are inside their cliff on the same
+    # morning, promoting both says nothing about which to start -- so neither is
+    # promoted, and the collision itself becomes the line the brief prints.
+    in_cliff = [p for p in rankable if _inside_cliff(p, outcomes)]
+    colliding = len(in_cliff) > 1
+    cliff_ids = sorted(str(p.get("id")) for p in in_cliff)
+
+    scores = {}
+    for p in rankable:
+        scores[str(p.get("id"))] = priority.priority_score(
+            (p.get("ice") or {}).get("impact"),
+            p.get("positioning"),
+            (p.get("evidence") or {}).get("days_since"),
+            inside_cliff=_inside_cliff(p, outcomes),
+            colliding=colliding,
+            # `git` is a LIST of repositories, one per declared path -- the same
+            # idiom `classify` uses below for the frozen-with-uncommitted check.
+            uncommitted=bool((p.get("git") or [{}])[0].get("uncommitted")),
+            has_repo_signal=p.get("git_declared") != "none",
+        )
+    ranked = sorted(
+        rankable,
+        key=lambda p: (-(scores.get(str(p.get("id"))) or 0), str(p.get("id"))))
 
 
     open_items = [b for b in backlog
@@ -941,6 +1002,14 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
 
     return {
         "ranked": ranked,
+        # Judged, but excluded from the ordering by their declared phase. Listed
+        # rather than dropped: excluding a project from the ORDERING is honest
+        # (nobody claimed it is competing), excluding it from the PAGE is not.
+        "gated": gated,
+        "scores": scores,
+        # An expedite lane holding two items is not an expedite lane. When it
+        # overflows, the collision is what gets printed instead of a promotion.
+        "urgency_collision": cliff_ids if colliding else [],
         "unjudged": unjudged,
         "decision_pending": decision_pending,
         "waiting_on_work": waiting_on_work,
