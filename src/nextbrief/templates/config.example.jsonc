@@ -44,26 +44,37 @@
   },
 
   "scoring": {
-    // score = impact * (floor + (1-floor)*0.5^(days/half_life))
-    //         * deadline_boost * status_weight
+    // score = 8*I + U + E    -- added, never multiplied.
+    //
+    //   I  the impact ordinal, 1..4, from the one question `review` asks.
+    //   U  an urgency step, 0 or 8, only inside a dated commitment's lead
+    //      window. A cliff and not a ramp: cost of delay on a fixed date is
+    //      zero until the latest start, so a days-remaining term would raise
+    //      every dated project every morning with no new evidence.
+    //   E  an evidence tie-break in -3..+3 over sensed activity, and nothing
+    //      more. Commit volume is sunk cost; scoring on it makes the brief a
+    //      mirror that tells you to work on what you are already working on.
+    //
+    // Multiplying was the previous design and the reason for this one: a decay
+    // term spanning 40x destroyed a 4x impact input, so `impact 4 x 0.025` lost
+    // to `impact 1 x 1.0` ten to one. Adding bounds each term by construction --
+    // E alone can never cross a band, U + E crosses exactly one and never two.
     //
     // `impact` is the only part of `ice` the score reads. `confidence` and
     // `effort` still parse and are ignored: keeping them live meant a registry
     // that declared all three scored by a different rule than one answered
     // through `review`, and an ordering with two definitions is not an ordering.
-    "half_life_days": 21,
-    "decay_floor": 0.3,           // the floor exists because pure decay buries exactly the work you are avoiding
-    // Phase, not importance. Importance is `ice.impact` and is the base above;
-    // this says how much a project's phase should damp it. `done` is 0 rather
-    // than a small number -- a finished project should leave the ranking, not
-    // sit at the bottom of it.
-    "status_weight": {
-      "active": 1.0,
-      "maintenance": 0.6,
-      "frozen": 0.3,
-      "done": 0.0
-    },
-    "deadline_boost_max": 3.0
+    //
+    // Nothing here is tunable, deliberately. Every number above is load-bearing
+    // for the band arithmetic, and a config key that lets you break a proof is
+    // not a setting.
+    //
+    // `status` no longer weights the score. It GATES: only an active project is
+    // ranked, and the rest are listed with their phase said out loud. A frozen
+    // flagship should not lose a numeric contest to an active experiment,
+    // because "we have deliberately stopped this" is not a weaker form of "this
+    // matters" -- and `positioning` sets expected dormancy rather than entering
+    // the score at all.
   },
 
   "neglect": {

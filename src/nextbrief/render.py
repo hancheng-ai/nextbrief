@@ -56,7 +56,7 @@ from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 from .sense import status_of
 
 __all__ = [
-    "main", "classify", "render_brief", "score_project", "declared_impact",
+    "main", "classify", "render_brief", "declared_impact",
     "evidence_phrase",
     "check_evidence", "gate_maps", "gated_text", "md_cell", "non_goal_flag",
     "enforce_write_permissions", "should_notify", "write_day_log", "append_jsonl",
@@ -104,27 +104,6 @@ CAP_DEFAULTS = {
     "brief_max_lines": 100,
 }
 LIMIT_DEFAULTS = {"max_open_items_total": 40, "max_open_per_project": 5}
-SCORING_DEFAULTS = {
-    "half_life_days": 21, "decay_floor": 0.3, "deadline_boost_max": 3.0,
-    # Phase, not importance. Importance is `ice.impact` and is the base; this
-    # says how much a project's phase should damp it. `done` is 0.0 rather than a
-    # small number: a finished project should leave the ranking, not linger at
-    # the bottom of it.
-    "status_weight": {"active": 1.0, "maintenance": 0.6, "frozen": 0.3, "done": 0.0},
-    # There is deliberately no `tier_weight` fallback here, and the absence is
-    # the point. It sat in this dict with a comment promising it was "read only
-    # when `status_weight` is absent" -- a promise no line of code kept, because
-    # `scoring_of` merges these defaults first, so `status_weight` is never
-    # absent and the branch was unreachable by construction.
-    #
-    # It cannot be written, either. `tier` said two things at once: the old table
-    # weighed `flagship` 1.3 and `active` 1.0, and both migrate to the single
-    # status `active`. There is no answer to what that weight should now be,
-    # which is the ambiguity the split existed to end. A config still naming it
-    # is reported by `sense` rather than translated -- see `retired_config_key`.
-}
-
-
 def caps_of(cfg) -> Dict[str, Any]:
     merged = dict(CAP_DEFAULTS)
     merged.update((cfg or {}).get("caps") or {})
@@ -137,26 +116,10 @@ def limits_of(cfg) -> Dict[str, Any]:
     return merged
 
 
-def scoring_of(cfg) -> Dict[str, Any]:
-    """Shipped defaults with the workspace's ``scoring`` block laid over them.
-
-    Nested tables merge key by key rather than being replaced wholesale. A config
-    that names one phase -- ``"status_weight": {"frozen": 0.5}`` -- means "that one
-    is heavier", not "the other three cease to exist"; under a flat update they
-    silently fell back to the 1.0 default and every non-flagship project quietly
-    changed weight. The failure is invisible in the config file, which still reads
-    as though it says one thing.
-    """
-    merged = dict(SCORING_DEFAULTS)
-    for key, value in ((cfg or {}).get("scoring") or {}).items():
-        base = merged.get(key)
-        if isinstance(base, dict) and isinstance(value, dict):
-            nested = dict(base)
-            nested.update(value)
-            merged[key] = nested
-        else:
-            merged[key] = value
-    return merged
+# There is deliberately no `scoring` config block. Every number in the
+# priority formula is load-bearing for its band arithmetic -- E alone cannot
+# cross a band, U + E crosses exactly one -- and a setting that lets you break
+# a proof is not a setting. See `nextbrief.priority`.
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +645,7 @@ def is_judged(p) -> bool:
     observed from absent; collapsing the third into the second is the error.
 
     Only `impact` is tested, because it is the only axis the score reads. The
-    other two parse from a registry and are ignored -- see `score_project`.
+    other two parse from a registry and are ignored -- see `priority`.
     """
     return declared_impact(p) is not None
 
@@ -733,80 +696,6 @@ def _age_days(value):
     """
     number = _number(value)
     return None if number is None else max(0.0, number)
-
-
-def score_project(p, cfg, outcomes=None):
-    """Rank a project that has been judged. Callers must check `is_judged` first.
-
-    Scoring an unjudged project is meaningless rather than merely imprecise:
-    every term below multiplies a human's stated importance, and there is no
-    number that stands in for one that was never given.
-    """
-    # The base is the declared importance and nothing else.
-    #
-    # It used to be ``(impact x confidence) / effort``, with 3s standing in for
-    # the two axes `review` does not ask about. That kept hand-written
-    # three-axis registries scoring exactly as before -- and produced two
-    # incompatible regimes in one list. A reviewed project scored its impact; a
-    # hand-written one scored impact x confidence / effort, so a flagship rated 5
-    # and divided by effort 5 ranked below an active project rated 4 and divided
-    # by 2. The larger project lost for being large, which is the precise failure
-    # `annotate.py` cites as the reason effort stopped being asked at all.
-    #
-    # Both axes remain readable in a registry and are ignored here. Keeping them
-    # live to honour old files is what made the ordering incoherent, and an
-    # ordering that mixes two definitions is not an ordering.
-    base = declared_impact(p) or 0.0
-
-    days = _age_days((p.get("evidence") or {}).get("days_since"))
-    sc = scoring_of(cfg)
-    floor = sc["decay_floor"]
-    if days is None:
-        # No readable evidence at all -- no commit, no file mtime, no session.
-        # This used to score 1.0, the *maximum* freshness term, so a directory
-        # nobody had touched ranked exactly as though it had been worked on this
-        # morning. Absence of evidence was being read as evidence of activity.
-        #
-        # It was close to unreachable while every project was hand-declared. Once
-        # discovery began adopting whatever sits in the root, empty and
-        # unreadable directories became ordinary, and so did the inversion.
-        # Unknown recency now earns no recency credit; the floor still keeps the
-        # project on the page, which is the whole point of having a floor.
-        decay = 0.0
-    else:
-        decay = 0.5 ** (days / float(sc["half_life_days"]))
-    # ★ Why the floor: pure decay buries exactly the thing you are avoiding.
-    decay_term = floor + (1.0 - floor) * decay
-
-    boost = 1.0
-    for d in _dated_commitments(p, outcomes):
-        # Coerced on the way in for the same reason `_age_days` is: `sense` now
-        # validates these at the registry boundary, and this function still has
-        # to read a `snapshot.json` written before it did. `days_until` is signed
-        # -- an overdue commitment is negative and that is the whole point -- so
-        # only the window is floored.
-        until = _number(d.get("days_until"))
-        lead = _age_days(d.get("lead_days"))
-        if until is not None and until < 0:
-            boost = max(boost, 1.0 + sc["deadline_boost_max"])
-        elif d.get("in_lead_window") and lead and until is not None:
-            frac = (lead - until) / float(lead)
-            boost = max(boost, 1.0 + sc["deadline_boost_max"] * max(0.0, frac))
-
-    # An undeclared status weighs 1.0 rather than nothing: `review` has simply
-    # not asked yet, and a project should not be demoted for a question nobody
-    # put to its owner. What an undeclared status does withhold is a *verdict* --
-    # see `classify` -- because saying "you have neglected this" requires knowing
-    # it was supposed to be moving.
-    # Through `status_of`, so that a snapshot written before the split still
-    # renders. `render` re-reads an existing snapshot.json without re-sensing --
-    # without the fallback an upgrade would silently stop producing verdicts on
-    # every workspace that had not re-sensed yet, which is the quietest possible
-    # regression.
-    weights = sc.get("status_weight") or {}
-    phase = status_of(p)
-    tw = weights.get(phase, 1.0) if phase else 1.0
-    return base * decay_term * boost * tw
 
 
 # ---------------------------------------------------------------------------

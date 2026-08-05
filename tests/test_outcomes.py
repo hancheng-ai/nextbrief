@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from helpers import AS_OF, TempCase, base_registry, capture, make_project_entry
+from helpers import AS_OF, TempCase, base_registry, capture, make_project_entry, make_snapshot
 
 from nextbrief import render, sense
 
@@ -129,76 +129,86 @@ class Shapes(TempCase):
 
 
 class Ranking(unittest.TestCase):
-    """score_project's arithmetic, exercised directly."""
+    """A dated outcome reaches the ranking through the urgency cliff.
 
-    def dated(self, days_until, lead=30):
-        return {"id": "o", "kind": "dated", "days_until": days_until,
-                "lead_days": lead, "in_lead_window": 0 <= days_until <= lead,
-                "overdue": days_until < 0}
+    Exercised through `classify` rather than through a scoring function, because
+    that is now the only way the answer is reachable -- and because the thing
+    worth protecting is the behaviour, not the arithmetic that happens to
+    produce it.
+    """
+
+    def dated(self, days_until, lead=30, **over):
+        got = {"id": "o", "kind": "dated", "days_until": days_until,
+               "lead_days": lead, "in_lead_window": 0 <= days_until <= lead,
+               "overdue": days_until < 0, "date": "2026-03-19"}
+        got.update(over)
+        return got
+
+    def _p(self, pid, **over):
+        got = make_project_entry(pid=pid, ice={"impact": 4})
+        got["status"] = "active"
+        got["positioning"] = "platform"
+        got["evidence"] = dict(got["evidence"], days_since=1)
+        got.update(over)
+        return got
+
+    def scores(self, projects, outcomes=()):
+        snap = make_snapshot(projects=list(projects))
+        snap["outcomes"] = list(outcomes)
+        return render.classify(snap, [], {}, None, None)["scores"]
 
     def test_a_served_dated_outcome_lifts_a_contributor(self):
-        cfg = {}
-        plain = make_project_entry(tier="active")
-        serving = make_project_entry(tier="active", serves=["o"])
-        outs = {"o": self.dated(3)}
-        self.assertGreater(render.score_project(serving, cfg, outs),
-                           render.score_project(plain, cfg, outs))
+        got = self.scores([self._p("plain"), self._p("serving", serves=["o"])],
+                          [self.dated(3)])
+        self.assertGreater(got["serving"], got["plain"])
 
     def test_it_lifts_exactly_as_much_as_an_equivalent_own_deadline(self):
-        # The win is that the date is declared once and cites one handle -- not
-        # that contributors are treated differently from a project that wrote the
-        # deadline into its own entry.
-        cfg = {}
-        own = make_project_entry(tier="active", deadlines=[
+        """The win is that the date is declared once and cites one handle -- not
+        that contributors are treated differently from a project that wrote the
+        deadline into its own entry."""
+        own = self._p("own", deadlines=[
             {"date": "2026-03-19", "label": "d", "days_until": 3, "lead_days": 30,
              "hard": True, "in_lead_window": True, "overdue": False}])
-        served = make_project_entry(tier="active", serves=["o"])
-        self.assertAlmostEqual(render.score_project(own, cfg, {}),
-                               render.score_project(served, cfg, {"o": self.dated(3)}))
+        served = self._p("served", serves=["o"])
+        # Scored in separate portfolios: together they would be two projects
+        # inside the cliff on one morning, which is a collision and correctly
+        # promotes neither.
+        a = self.scores([own], [])
+        b = self.scores([served], [self.dated(3)])
+        self.assertEqual(a["own"], b["served"])
 
-    def test_an_overdue_outcome_boosts_like_an_overdue_deadline(self):
-        cfg = {}
-        served = make_project_entry(tier="active", serves=["o"])
-        far = render.score_project(served, cfg, {"o": self.dated(300)})
-        late = render.score_project(served, cfg, {"o": self.dated(-5)})
-        self.assertGreater(late, far)
+    def test_an_overdue_outcome_lifts_like_an_overdue_deadline(self):
+        far = self.scores([self._p("s", serves=["o"])], [self.dated(300)])
+        late = self.scores([self._p("s", serves=["o"])], [self.dated(-5)])
+        self.assertGreater(late["s"], far["s"])
 
-    def test_a_finished_outcome_stops_boosting(self):
-        # An outcome whose date has passed is `overdue`, which takes the maximum
-        # boost -- right for one you missed, permanent nonsense for one you met.
-        # The engine cannot tell those apart. `done` is the human saying which.
-        cfg = {}
-        served = make_project_entry(tier="active", serves=["o"])
-        missed = dict(self.dated(-5))
-        met = dict(missed, done=True)
-        self.assertGreater(render.score_project(served, cfg, {"o": missed}),
-                           render.score_project(served, cfg, {"o": met}))
+    def test_a_finished_outcome_stops_lifting(self):
+        """An outcome whose date has passed is `overdue`, which takes the lift --
+        right for one you missed, permanent nonsense for one you met. The engine
+        cannot tell those apart; `done` is the human saying which."""
+        missed = self.scores([self._p("s", serves=["o"])], [self.dated(-5)])
+        met = self.scores([self._p("s", serves=["o"])], [self.dated(-5, done=True)])
+        self.assertGreater(missed["s"], met["s"])
         # And a met commitment leaves the project scoring as if it served nothing.
-        self.assertEqual(render.score_project(served, cfg, {"o": met}),
-                         render.score_project(make_project_entry(tier="active"), cfg, {}))
+        self.assertEqual(met["s"], self.scores([self._p("s")], [])["s"])
 
     def test_a_compounding_outcome_changes_no_score(self):
-        # No date to be near, and a constant for "long-term counts extra" would
-        # be an uncitable number on a page that requires citations.
-        cfg = {}
-        plain = make_project_entry(tier="active")
-        serving = make_project_entry(tier="active", serves=["o"])
-        outs = {"o": {"id": "o", "kind": "compounding"}}
-        self.assertEqual(render.score_project(serving, cfg, outs),
-                         render.score_project(plain, cfg, outs))
+        """No date to be near, and a constant standing in for "long-term counts
+        extra" would be an uncitable number on a page that requires citations."""
+        got = self.scores([self._p("plain"), self._p("serving", serves=["o"])],
+                          [{"id": "o", "kind": "compounding"}])
+        self.assertEqual(got["serving"], got["plain"])
 
     def test_serving_nothing_is_unaffected_by_outcomes_existing(self):
-        cfg = {}
-        p = make_project_entry(tier="active")
-        self.assertEqual(render.score_project(p, cfg, {"o": self.dated(1)}),
-                         render.score_project(p, cfg, None))
+        with_outcome = self.scores([self._p("p")], [self.dated(1)])
+        without = self.scores([self._p("p")], [])
+        self.assertEqual(with_outcome["p"], without["p"])
 
     def test_a_dangling_serves_id_does_not_raise(self):
-        # sense records it as parse_failed, but render must survive a snapshot
-        # that predates the outcome being removed from the registry.
-        cfg = {}
-        p = make_project_entry(tier="active", serves=["gone"])
-        self.assertGreater(render.score_project(p, cfg, {}), 0.0)
+        """sense records it as parse_failed, but render must survive a snapshot
+        that predates the outcome being removed from the registry."""
+        got = self.scores([self._p("p", serves=["gone"])], [])
+        self.assertGreater(got["p"], 0)
 
 
 if __name__ == "__main__":

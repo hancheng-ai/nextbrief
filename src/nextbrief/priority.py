@@ -84,9 +84,23 @@ def impact_ordinal(value: Any) -> Optional[int]:
     a project answered "least important" -- it is one nobody has ranked, and the
     caller's job is to list it rather than to rank it.
     """
+    # `registry.jsonc` invites hand-editing and nothing validates `ice`, so a
+    # string, a bool or a NaN reaches here. Raising would cost the whole brief on
+    # the unattended path, which is the opposite of failing open -- so each is
+    # read as "nobody has said", which is what it is.
+    #
+    # `bool` is excluded before the float conversion because `True` is an `int`
+    # and would otherwise rank as the weakest real answer. NaN is excluded
+    # because it compares false against everything: the nearest-rung search below
+    # would silently return the first rung rather than no rung, which is a
+    # fabricated judgement rather than an absent one.
+    if isinstance(value, bool):
+        return None
     try:
         got = float(value)
     except (TypeError, ValueError):
+        return None
+    if got != got or got in (float("inf"), float("-inf")):
         return None
     # Snap to the nearest rung. Ties go to the lower rung: reading an ambiguous
     # number as the more important of two options is how a scale inflates.

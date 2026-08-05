@@ -192,6 +192,20 @@ class UnjudgedIsNotZero(unittest.TestCase):
             self.assertIsNone(priority.impact_ordinal(value))
             self.assertIsNone(priority.priority_score(value, "flagship", 1))
 
+    def test_the_shapes_a_hand_edited_registry_can_hold(self):
+        """`registry.jsonc` invites hand-editing and nothing validates `ice`.
+
+        Each of these must read as "nobody has said" rather than raise, because
+        raising costs the whole brief on the unattended path. Two are subtler
+        than they look: `True` is an `int` and would otherwise rank as the
+        weakest real answer, and NaN compares false against everything, so the
+        nearest-rung search returns the FIRST rung -- a fabricated judgement
+        rather than an absent one.
+        """
+        for bad in ("high", float("nan"), float("inf"), float("-inf"), True, False, []):
+            self.assertIsNone(priority.impact_ordinal(bad), repr(bad))
+            self.assertIsNone(priority.priority_score(bad, "platform", 0), repr(bad))
+
 
 class ReadingAHandWrittenNumber(unittest.TestCase):
     def test_every_offered_answer_maps_to_its_own_rung(self):

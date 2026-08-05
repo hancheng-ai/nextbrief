@@ -27,7 +27,7 @@ from helpers import (
     write_snapshot,
 )
 
-from nextbrief import render, sense
+from nextbrief import priority, render, sense
 from nextbrief.i18n import load_catalog
 
 
@@ -396,138 +396,12 @@ class FirstBriefAdvice(RenderCase):
         self.assertEqual(sorted(named - known), [])
 
 
-class Ranking(unittest.TestCase):
-    def test_the_decay_floor_keeps_the_avoided_work_visible(self):
-        cfg = {}
-        fresh = make_project_entry()
-        stale = make_project_entry(
-            evidence={"best_kind": "commit", "best_date": "2025-06-01", "days_since": 288,
-                      "signal": "dormant", "caveat_code": None, "caveat": None}
-        )
-        # Pure exponential decay would bury the stale project entirely; the floor
-        # is what stops the tool from quietly agreeing with your avoidance.
-        self.assertGreater(render.score_project(stale, cfg), 0.0)
-        self.assertGreater(render.score_project(fresh, cfg), render.score_project(stale, cfg))
-        self.assertGreater(
-            render.score_project(stale, cfg) / render.score_project(fresh, cfg), 0.25
-        )
-
-    def test_no_readable_evidence_does_not_score_as_freshly_worked(self):
-        # `days_since is None` means no commit, no file mtime, no session -- an
-        # empty or unreadable directory. It used to take decay = 1.0, the maximum
-        # freshness term, so absence of evidence read as evidence of activity and
-        # an untouched directory ranked level with one worked on this morning.
-        # Near-unreachable while every project was declared by hand; ordinary once
-        # discovery started adopting whatever sits in the root.
-        cfg = {}
-        blank = make_project_entry(
-            evidence={"best_kind": None, "best_date": None, "days_since": None,
-                      "signal": "unknown", "caveat_code": None, "caveat": None}
-        )
-        fresh = make_project_entry(
-            evidence={"best_kind": "commit", "best_date": "2026-03-16", "days_since": 0,
-                      "signal": "hot", "caveat_code": None, "caveat": None}
-        )
-        self.assertLess(render.score_project(blank, cfg), render.score_project(fresh, cfg))
-        # Still on the page, though: the floor exists so that what you are
-        # avoiding stays visible, and "unreadable" is not a reason to vanish.
-        self.assertGreater(render.score_project(blank, cfg), 0.0)
-
-    def test_a_future_dated_project_cannot_outrank_a_worked_one(self):
-        # `days_since` is an age, and an age is not negative. It could be: sense
-        # subtracted a file's date from `as_of` with no floor, and the recency
-        # contest picks the SMALLEST age -- so one file dated in the future won
-        # the contest outright and carried a negative age into the scorer.
-        #
-        # `0.5 ** (days / half_life)` is bounded by 1.0 for days >= 0 and
-        # unbounded below it. A file a year ahead scored 477911 against a normal
-        # maximum of 4: five orders of magnitude, from a wrong clock on a NAS or
-        # an archive unpacked with its original timestamps. Silent, because
-        # nothing else in the brief reads `days_since` as a number.
-        cfg = {}
-        worked_today = make_project_entry(
-            evidence={"best_kind": "commit", "best_date": "2026-03-16", "days_since": 0,
-                      "signal": "hot", "caveat_code": None, "caveat": None}
-        )
-        ceiling = render.score_project(worked_today, cfg)
-        for ahead in (-1, -7, -365, -100000):
-            future = make_project_entry(
-                evidence={"best_kind": "file_mtime", "best_date": "2027-03-16",
-                          "days_since": ahead, "signal": "hot",
-                          "caveat_code": None, "caveat": None}
-            )
-            self.assertLessEqual(
-                render.score_project(future, cfg), ceiling,
-                "days_since=%s scored above a project worked on today" % ahead)
-
-    def test_the_decay_term_is_bounded_for_every_shape_days_since_can_take(self):
-        # The property, stated once: nothing `days_since` can hold makes the score
-        # exceed what impact alone allows. Tomorrow's parser bug is caught here
-        # rather than in a brief that puts the wrong project first for a week.
-        cfg = {}
-        # Read from the entry rather than written here: impact is the base the
-        # decay term multiplies, so the ceiling is whatever the fixture declares.
-        # Hard-coding it makes the test assert on the fixture instead of on the
-        # property.
-        impact = float(make_project_entry()["ice"]["impact"])
-        for days in (None, -100000, -365, -1, 0, 1, 21, 365, 100000,
-                     "not a number", True, float("nan")):
-            p = make_project_entry(
-                evidence={"best_kind": "commit", "best_date": "2026-03-16",
-                          "days_since": days, "signal": "hot",
-                          "caveat_code": None, "caveat": None}
-            )
-            score = render.score_project(p, cfg)
-            self.assertGreaterEqual(score, 0.0, "days_since=%r went negative" % (days,))
-            self.assertLessEqual(score, impact, "days_since=%r exceeded impact" % (days,))
-
-    def test_a_partial_status_weight_does_not_delete_the_other_statuses(self):
-        # A flat dict update replaced the whole nested table, so naming one
-        # status silently reset the other three to the 1.0 fallback -- invisible
-        # in the config file, which still reads as though it changed one number.
-        cfg = {"scoring": {"status_weight": {"frozen": 0.5}}}
-        merged = render.scoring_of(cfg)
-        self.assertEqual(merged["status_weight"]["frozen"], 0.5)
-        self.assertEqual(merged["status_weight"]["maintenance"], 0.6)
-        self.assertEqual(merged["status_weight"]["done"], 0.0)
-        # Scalars still replace wholesale.
-        self.assertEqual(render.scoring_of({"scoring": {"decay_floor": 0.1}})["decay_floor"], 0.1)
-
-    def test_a_retired_tier_weight_changes_nothing_and_is_not_resurrected(self):
-        # It used to sit in SCORING_DEFAULTS under a comment promising it was
-        # "read only when `status_weight` is absent". No line of code kept that
-        # promise: `scoring_of` merges the defaults first, so `status_weight` was
-        # never absent and the branch could not be reached.
-        #
-        # Nor can the promise be kept. The old table weighed `flagship` 1.3 and
-        # `active` 1.0 and both migrate to the one status `active`, so there is
-        # no weight a translation could pick -- which is the ambiguity that split
-        # `tier` in the first place. `sense` reports the key instead; see
-        # `test_sense.RetiredConfigKeys`.
-        merged = render.scoring_of({"scoring": {"tier_weight": {"flagship": 99.0}}})
-        self.assertNotIn("tier_weight", render.SCORING_DEFAULTS)
-        self.assertEqual(merged["status_weight"]["active"], 1.0)
-
-    def test_an_overdue_deadline_outranks_a_fresher_project(self):
-        cfg = {}
-        overdue = make_project_entry(
-            tier="active",
-            evidence={"best_kind": "commit", "best_date": "2026-01-01", "days_since": 74,
-                      "signal": "dormant", "caveat_code": None, "caveat": None},
-            deadlines=[{"date": "2026-03-01", "label": "cutover", "days_until": -15,
-                        "lead_days": 14, "hard": True, "in_lead_window": False,
-                        "overdue": True}],
-        )
-        self.assertGreater(
-            render.score_project(overdue, cfg), render.score_project(make_project_entry(tier="active"), cfg)
-        )
-
-    def test_ranking_ties_break_on_id_not_on_dict_order(self):
-        a = make_project_entry(pid="alpha")
-        b = make_project_entry(pid="beta")
-        snap = make_snapshot(projects=[b, a])
-        meta = render.classify(snap, [], {})
-        self.assertEqual([p["id"] for p in meta["ranked"]], ["alpha", "beta"])
+# The old multiplicative scorer's tests lived here. Every property they held
+# -- the decay floor keeping avoided work visible, absent evidence not reading
+# as fresh, a future date not outranking work done today, the term staying
+# bounded for every shape `days_since` can take, and an overdue commitment
+# outranking a fresher project -- is now proved exhaustively over the whole
+# input space in tests/test_priority.py rather than sampled here.
 
 
 class Containment(TempCase):
@@ -1048,10 +922,17 @@ class WhatIsNotRanked(TempCase):
             make_project_entry(pid="x", tier=None, ice={"impact": 1})))
 
     def test_scoring_no_longer_invents_an_impact(self):
-        """The whole point. Absent impact must not read as the midpoint."""
+        """The whole point. Absent impact must not read as the midpoint.
+
+        `None`, not zero: a project nobody ranked is not one ranked lowest, and a
+        low position is itself a claim about a project no one ever rated.
+        """
+        self.assertIsNone(priority.priority_score(None, "platform", 0))
         blank = make_project_entry(pid="blank", tier="active", ice=None)
         blank["evidence"] = dict(blank["evidence"], days_since=0)
-        self.assertEqual(render.score_project(blank, {}), 0.0)
+        meta = render.classify(make_snapshot([blank]), [], {})
+        self.assertEqual(meta["scores"], {})
+        self.assertEqual([x["id"] for x in meta["unjudged"]], ["blank"])
 
     def test_an_unrated_project_says_so_rather_than_showing_a_signal(self):
         blank = make_project_entry(pid="blank", tier=None, ice=None)
@@ -1081,7 +962,8 @@ class WhatIsNotRanked(TempCase):
         for bad in ("high", float("nan"), float("inf"), True, []):
             p = make_project_entry(pid="x", tier="active", ice={"impact": bad})
             self.assertFalse(render.is_judged(p), bad)
-            self.assertEqual(render.score_project(p, {}), 0.0)
+            self.assertIsNone(priority.priority_score(
+                p["ice"]["impact"], "platform", 0))
 
     def test_nan_never_reaches_the_sort_key(self):
         """NaN compares false against everything, so one of them makes the
@@ -1122,10 +1004,16 @@ class WhatIsNotRanked(TempCase):
         self.assertEqual(busy["evidence"]["signal"], "hot")
 
     def test_a_done_project_leaves_the_ranking(self):
+        """A finished project should leave the ordering, not sit at the bottom of
+        it. Status gates now rather than scaling, so it is not scored at all --
+        and it is still listed, with its phase said out loud."""
         done = make_project_entry(pid="done", ice={"impact": 5})
         done["status"] = "done"
         done["evidence"] = dict(done["evidence"], days_since=0)
-        self.assertEqual(render.score_project(done, {}), 0.0)
+        meta = render.classify(make_snapshot([done]), [], {})
+        self.assertEqual(meta["ranked"], [])
+        self.assertEqual([x["id"] for x in meta["gated"]], ["done"])
+        self.assertEqual(meta["scores"], {})
 
 
 class NotificationEndToEnd(RenderCase):

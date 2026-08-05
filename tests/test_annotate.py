@@ -14,7 +14,7 @@ import unittest
 
 from helpers import AS_OF, TempCase, capture, make_project_entry, make_snapshot, write_snapshot
 
-from nextbrief import annotate, cli, render, sense
+from nextbrief import annotate, cli, priority, render, sense
 from nextbrief.annotate import (
     ANNOTATIONS_NAME,
     apply_annotations,
@@ -130,14 +130,20 @@ class WhatIsAskedAndWhatIsNot(unittest.TestCase):
             self.assertIn(q.target, ("ice", "project"), q.field)
             self.assertIn(q.kind, ("choice", "date"), q.field)
 
-    def test_an_impact_only_answer_scores_as_itself(self):
-        """The reason nothing in score_project had to change: with confidence
-        and effort defaulting to 3, base collapses to (impact x 3) / 3."""
-        for want in (1, 2, 4, 5):
-            # tier "active" is weight 1.0, so the base is the only factor left.
-            p = make_project_entry(tier="active", ice={"impact": want})
-            p["evidence"] = dict(p["evidence"], days_since=0)
-            self.assertAlmostEqual(render.score_project(p, {}), float(want), places=6)
+    def test_every_offered_answer_lands_on_its_own_rung(self):
+        """`review` asks importance and nothing else, so the four answers it
+        offers must map to four distinct bands -- otherwise two answers a person
+        distinguished are collapsed by the scorer that reads them."""
+        rungs = [priority.impact_ordinal(q) for q in (1, 2, 4, 5)]
+        self.assertEqual(rungs, [1, 2, 3, 4])
+        self.assertEqual(sorted(set(rungs)), rungs, "two answers share a band")
+
+    def test_the_answers_the_questions_offer_are_the_ladder_the_scorer_reads(self):
+        """The two are declared in different modules, so nothing but a test stops
+        them drifting apart -- and drift would be silent, since an unrecognised
+        value simply snaps to the nearest rung."""
+        offered = tuple(value for value, _label in annotate.QUESTIONS[0].choices)
+        self.assertEqual(offered, priority.IMPACT_LADDER)
 
 
 class RewordingInvalidatesOldAnswers(TempCase):

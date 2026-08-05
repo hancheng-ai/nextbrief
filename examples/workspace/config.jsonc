@@ -31,20 +31,10 @@
   },
 
   "scoring": {
-    // score = impact * (floor + (1-floor)*0.5^(days/half_life))
-    //         * deadline_boost * status_weight
-    //
-    // `impact` is the only part of `ice` the score reads. `confidence` and
-    // `effort` still parse and are ignored.
-    "half_life_days": 21,
-    "decay_floor": 0.3,           // the floor exists because pure decay buries exactly the work you are avoiding
-    "status_weight": {
-      "active": 1.0,
-      "maintenance": 0.6,
-      "frozen": 0.3,
-      "done": 0.0
-    },
-    "deadline_boost_max": 3.0
+    // score = 8*I + U + E -- added, never multiplied, and not configurable.
+    // Every number in it is load-bearing for the band arithmetic, and a setting
+    // that lets you break a proof is not a setting. `status` gates rather than
+    // weighting; `positioning` sets expected dormancy rather than scoring.
   },
 
   "neglect": {
