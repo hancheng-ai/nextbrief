@@ -520,19 +520,74 @@ class AnswersExpire(TempCase):
         snap["run"]["asked_version"] = annotate.ASKED_VERSION
         self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
 
-    def test_the_oldest_field_decides_while_policy_is_still_shared(self):
-        """Per-field storage lands before per-field policy on purpose. Migrating
-        how a date is written and changing what it means are two failures, and
-        debugging them together is a third."""
+    def test_a_stale_impact_brings_a_project_back(self):
+        """A fresh phase answer must not mask a stale strategy answer. That
+        laundering is what one stamp per project made possible."""
         p = self._project(asked_on={"ice": "2025-06-01", "status": "2026-03-16"})
         snap = make_snapshot([p])
         snap["run"]["asked_version"] = annotate.ASKED_VERSION
         self.assertEqual(
-            self._asked(snap, as_of=dt.date(2026, 3, 16)), ["thing"],
-            "a fresh phase answer masked a stale impact answer")
+            self._asked(snap, as_of=dt.date(2026, 3, 16)), ["thing"])
 
     def test_every_field_fresh_is_not_re_asked(self):
         p = self._project(asked_on={"ice": "2026-03-01", "status": "2026-03-16"})
         snap = make_snapshot([p])
         snap["run"]["asked_version"] = annotate.ASKED_VERSION
         self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
+
+    def test_an_ancient_phase_answer_alone_does_not_re_ask(self):
+        """The timer was wrong in both directions and this is the harmless one.
+
+        Re-asking about a maintenance project answered correctly 181 days ago is
+        a warning that fires for a reason that is not a reason -- and the miss
+        that actually costs something, a project abandoned last week, is one no
+        calendar can see. Phase is re-asked when the evidence contradicts it.
+        """
+        p = self._project(asked_on={"ice": "2026-03-01", "status": "2020-01-01"})
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
+
+    def test_an_ancient_deadline_answer_alone_does_not_re_ask(self):
+        """A date expires at its own date, which is the only honest expiry a date
+        has. Asking again because the ANSWER is old says nothing about whether
+        the date has passed."""
+        p = self._project(asked_on={"ice": "2026-03-01", "deadline": "2020-01-01"})
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
+
+    def test_a_stale_positioning_brings_a_project_back(self):
+        """Kept on the timer with impact, and for the same reason: these are the
+        two fields inline correction is forbidden to touch, so nothing else
+        refreshes them and a timer is the only thing that can."""
+        p = self._project(asked_on={"ice": "2026-03-01", "positioning": "2025-06-01"})
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), ["thing"])
+
+    def test_asking_for_everything_overrides_every_field(self):
+        """`review --all` is the person asking rather than the timer, so the
+        per-field policy does not get to refuse them."""
+        p = self._project(asked_on={"status": "2026-03-16", "deadline": "2026-03-16"})
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        self.assertEqual(
+            self._asked(snap, as_of=dt.date(2026, 3, 16), restate_after=0), ["thing"])
+
+    def test_an_explicit_window_applies_to_untimed_fields_too(self):
+        """The test above cannot see this: `restate_after=0` short-circuits at a
+        guard above the per-field loop, so it never reaches the override at all.
+
+        A POSITIVE window is what exercises it -- someone passing
+        `--restate-after 30` is asking for everything older than thirty days,
+        including the fields the default policy leaves untimed.
+        """
+        p = self._project(asked_on={"status": "2026-01-01"})
+        snap = make_snapshot([p])
+        snap["run"]["asked_version"] = annotate.ASKED_VERSION
+        # Default policy: phase carries no timer, so nothing is due.
+        self.assertEqual(self._asked(snap, as_of=dt.date(2026, 3, 16)), [])
+        # Asked explicitly: 74 days old is past a 30-day window.
+        self.assertEqual(
+            self._asked(snap, as_of=dt.date(2026, 3, 16), restate_after=30), ["thing"])

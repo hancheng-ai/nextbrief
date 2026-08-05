@@ -153,6 +153,31 @@ ASKED_VERSION = 3
 # an absent impact as 3.
 RESTATE_AFTER_DAYS = 180
 
+# One timer for four questions was wrong in both directions at once, so this
+# splits it rather than shortening it. The stamp keys are the ones
+# `record_answers` writes -- impact lands in `ice`, the rest under their own name.
+#
+#   ice / positioning   180 days. Budget-class judgements, genuinely re-decided
+#                       about twice a year. These are also exactly the fields
+#                       inline correction is forbidden to touch, so nothing else
+#                       refreshes them and a timer is the only thing that can.
+#
+#   status              NO timer. A calendar cannot know this. Re-asking about a
+#                       maintenance project answered correctly 181 days ago is a
+#                       warning that fires for a harmless reason, and saying
+#                       nothing about one abandoned last week is the miss that
+#                       actually costs something. It is re-asked when the
+#                       evidence contradicts it, not when the date rolls over.
+#
+#   deadline            NO timer. It expires at its own date, which is the only
+#                       honest expiry a date has.
+RESTATE_AFTER_BY_FIELD = {
+    "ice": RESTATE_AFTER_DAYS,
+    "positioning": RESTATE_AFTER_DAYS,
+    "status": None,
+    "deadline": None,
+}
+
 # Effort is asked by nobody and derived by nothing.
 #
 # It was derived from file count, described as "the axis where a human guess is
@@ -226,17 +251,25 @@ def _answer_expired(p, as_of=None, restate_after=None) -> bool:
     if not stamps:
         return True          # undated is unknown age, not fresh
     today = as_of or dt.date.today()
-    # The OLDEST answer decides, which keeps behaviour identical to the single
-    # stamp this replaces. Per-field storage lands before per-field policy on
-    # purpose: migrating how a date is written and changing what it means are
-    # two failures, and debugging them together is a third.
+
+    # Only the TIMED fields can bring a project back. A phase answered last week
+    # and a phase answered last year are equally current as far as the calendar
+    # is concerned, because the calendar is not what makes a phase wrong.
+    #
+    # An explicit `restate_after` overrides every field -- that is `review --all`
+    # and `--restate-after`, where the person is asking rather than the timer.
     ages = []
-    for value in stamps.values():
+    for field, value in stamps.items():
+        limit = days if restate_after is not None else RESTATE_AFTER_BY_FIELD.get(
+            field, RESTATE_AFTER_DAYS)
+        if limit is None:
+            continue
         try:
-            ages.append((today - dt.date.fromisoformat(str(value))).days)
+            age = (today - dt.date.fromisoformat(str(value))).days
         except (TypeError, ValueError):
-            return True      # unparseable is also unknown age
-    return bool(ages) and max(ages) >= days
+            return True      # unparseable is unknown age
+        ages.append(age >= limit)
+    return any(ages)
 
 
 def _stamps_of(entry: Dict[str, Any]) -> Dict[str, str]:
