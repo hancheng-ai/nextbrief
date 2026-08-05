@@ -62,7 +62,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import __version__
+from . import __version__, transcripts
 from .annotate import ASKED_VERSION, apply_annotations, load_annotations
 from .discovery import discover
 from .frontmatter import parse_frontmatter
@@ -1049,9 +1049,19 @@ def git_hotspots(top, pathspec: Sequence[str], as_of: dt.date, limit: int = 5,
 
 
 # ---------------------------------------------------------------------------
-# Agent session activity -- stat only, never parsed
-# (a single session log runs to tens of megabytes, and its mtime already is the
-#  last-activity time we want)
+# Agent session activity -- read from the transcript, not from its mtime
+#
+# This used to stat and never open, on the reasoning that "a session log runs to
+# tens of megabytes, and its mtime already is the last-activity time we want".
+# The second half of that was false. Measured over a real store: 96% of
+# transcripts END on a record carrying no timestamp -- a title rewrite, a mode
+# change, a file-history snapshot -- so the mtime was timing metadata churn
+# rather than conversation. It invented 8 session-days that never happened and
+# missed 27 that did, and skew reached 42 days.
+#
+# The first half was true and is handled in `transcripts`, which streams with a
+# byte prefilter rather than loading a file. See that module for what may and may
+# not leave a transcript.
 # ---------------------------------------------------------------------------
 
 def scan_sessions(root, projects: Sequence[Dict[str, Any]],
@@ -1080,37 +1090,51 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
         if not best:
             continue
         pid = best[1]
-        acc = per_project.setdefault(pid, {"session_files": 0, "last_active": None, "days": set()})
+        acc = per_project.setdefault(pid, {"session_files": 0, "last_active": None,
+                                           "days": set(), "undated": 0})
         try:
             entries = list(d.iterdir())
         except OSError:
             continue
-        for f in entries:
+        # Sorted so the traversal order is the same on every filesystem. Nothing
+        # below depends on order, and that is exactly why it must not vary --
+        # an order-dependent bug here would surface as a non-reproducible
+        # snapshot rather than as a failing test.
+        for f in sorted(entries):
             if f.suffix != ".jsonl":
                 continue
-            try:
-                st = f.stat()        # stat only. Never open.
-            except OSError:
-                continue
+            # A transcript that exists is a session that happened, whatever the
+            # engine can read out of it. Counting it here and its dates below
+            # keeps "there was a session" separate from "here is when".
             acc["session_files"] += 1
-            ts = st.st_mtime
-            if acc["last_active"] is None or ts > acc["last_active"]:
-                acc["last_active"] = ts
-            acc["days"].add(dt.date.fromtimestamp(ts).isoformat())
+            try:
+                last, days, _read = transcripts.read_activity(f)
+            except OSError:
+                acc["undated"] += 1
+                continue
+            if not days:
+                # Readable, but carrying no parseable timestamp. Counted, never
+                # named: `parse_failed` reaches digest.json and then the model,
+                # and a transcript path is an absolute path on somebody's
+                # machine. The count is the honest part; the path is the leak.
+                acc["undated"] += 1
+                continue
+            acc["days"].update(days)
+            if last is not None and (acc["last_active"] is None or last > acc["last_active"]):
+                acc["last_active"] = last
 
     out = {}
     for pid, acc in per_project.items():
+        last = acc["last_active"]
         out[pid] = {
             "session_files": acc["session_files"],
-            "last_active": (
-                dt.datetime.fromtimestamp(acc["last_active"]).replace(microsecond=0).isoformat()
-                if acc["last_active"] else None
-            ),
-            "last_active_date": (
-                dt.date.fromtimestamp(acc["last_active"]).isoformat()
-                if acc["last_active"] else None
-            ),
+            "last_active": last.replace(microsecond=0).isoformat() if last else None,
+            "last_active_date": last.date().isoformat() if last else None,
             "distinct_session_days": len(acc["days"]),
+            # Makes the day count readable as the floor it is. A run that could
+            # not date 4 of 5 transcripts and one that dated them all both used
+            # to report a number with no way to tell them apart.
+            "transcripts_without_dates": acc["undated"],
         }
     return out
 

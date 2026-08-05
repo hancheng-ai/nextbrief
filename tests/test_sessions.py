@@ -33,7 +33,7 @@ from helpers import (
     write_snapshot,
 )
 
-from nextbrief import render, sense
+from nextbrief import render, sense, transcripts
 from nextbrief.jsonc import load_jsonc
 
 # Three separated days inside the sensing window, so a day count of 3 is
@@ -42,7 +42,11 @@ DAY_A = dt.datetime(2026, 3, 11, 9, 0).timestamp()
 DAY_B = dt.datetime(2026, 3, 12, 9, 0).timestamp()
 DAY_C = dt.datetime(2026, 3, 14, 9, 0).timestamp()
 
-TRANSCRIPT = '{"type":"user"}\n'
+# Every fixture transcript is given an mtime that CONTRADICTS its content, on a
+# day no test ever asserts. So a test that passes is passing on what the file
+# says rather than on when it was last touched -- which is the entire subject of
+# the change these fixtures cover.
+WRONG_MTIME = dt.datetime(2026, 3, 2, 9, 0).timestamp()
 
 
 class SessionSensingCase(TempCase):
@@ -63,11 +67,27 @@ class SessionSensingCase(TempCase):
     def slug_for(self, ws, rel="orchard"):
         return sense.slugify_path(ws / "projects" / rel)
 
-    def transcript(self, directory, name, when):
+    def record(self, when):
+        """One transcript line, timestamped in UTC with a trailing Z.
+
+        Written the way the real format writes it, because the trailing Z is the
+        part the floor interpreter's `fromisoformat` refuses.
+        """
+        utc = dt.datetime(1970, 1, 1) + dt.timedelta(seconds=when)
+        return json.dumps({
+            "type": "user",
+            "timestamp": utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        }) + "\n"
+
+    def transcript(self, directory, name, *days, **kw):
+        """A transcript whose CONTENT says it ran on each of `days`."""
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / name
-        path.write_text(TRANSCRIPT, encoding="utf-8")
-        set_mtime(path, when)
+        body = kw.get("body")
+        if body is None:
+            body = "".join(self.record(d) for d in days)
+        path.write_text(body, encoding="utf-8")
+        set_mtime(path, WRONG_MTIME)
         return path
 
     def sessions_of(self, snap, pid="orchard"):
@@ -199,6 +219,117 @@ class WhatCounts(SessionSensingCase):
                          dt.date.fromtimestamp(DAY_C).isoformat())
         self.assertTrue(sessions["last_active"].startswith(
             dt.date.fromtimestamp(DAY_C).isoformat()))
+
+
+class ContentBeatsMtime(SessionSensingCase):
+    """When the file says one thing and the filesystem says another.
+
+    Measured over a real store, the filesystem was the one lying: 96% of
+    transcripts end on a record carrying no timestamp -- a title rewrite, a mode
+    change -- so the mtime was timing metadata churn rather than conversation. It
+    invented 8 session-days that never happened and missed 27 that did.
+    """
+
+    def test_the_day_comes_from_the_content_not_the_mtime(self):
+        def build(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl", DAY_C)
+
+        sessions = self.sessions_of(self.sense_with(build))
+        self.assertEqual(sessions["last_active_date"],
+                         dt.date.fromtimestamp(DAY_C).isoformat())
+        self.assertNotEqual(sessions["last_active_date"],
+                            dt.date.fromtimestamp(WRONG_MTIME).isoformat())
+
+    def test_one_transcript_spanning_two_days_counts_two(self):
+        """The defect no timestamp can fix.
+
+        A third of real transcripts run past midnight, and one mtime can only
+        ever mark one day. This is the half of the undercount that survives even
+        a perfectly accurate last-modified time.
+        """
+        def build(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl", DAY_A, DAY_B)
+
+        sessions = self.sessions_of(self.sense_with(build))
+        self.assertEqual(sessions["session_files"], 1)
+        self.assertEqual(sessions["distinct_session_days"], 2)
+
+    def test_a_transcript_with_no_timestamps_is_a_session_with_no_dates(self):
+        """Readable, and carrying nothing datable.
+
+        It still happened, so it counts as a session file; it dates nothing, so
+        it contributes no day; and the count of such files is published, because
+        a run that could not date four transcripts and one that dated them all
+        must not report the same number with no way to tell them apart.
+        """
+        def build(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body='{"type":"file-history-snapshot"}\n')
+
+        sessions = self.sessions_of(self.sense_with(build))
+        self.assertEqual(sessions["session_files"], 1)
+        self.assertEqual(sessions["distinct_session_days"], 0)
+        self.assertEqual(sessions["transcripts_without_dates"], 1)
+        self.assertIsNone(sessions["last_active_date"])
+
+    def test_a_torn_line_costs_that_line_and_not_the_file(self):
+        """A transcript is appended to while this runs, so the last line may be
+        half-written. Failing open on the record is the difference between
+        losing a message and losing a day."""
+        def build(store, ws):
+            good = self.record(DAY_C)
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body=good + '{"type":"user","timestamp":"2026-')
+
+        sessions = self.sessions_of(self.sense_with(build))
+        self.assertEqual(sessions["distinct_session_days"], 1)
+        self.assertEqual(sessions["last_active_date"],
+                         dt.date.fromtimestamp(DAY_C).isoformat())
+
+    def test_no_transcript_path_reaches_the_digest(self):
+        """`parse_failed` is copied into digest.json, which the model reads and
+        which becomes a git-tracked page. A transcript path is an absolute path
+        on somebody's machine, so the count is published and the path is not."""
+        def build(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body='{"type":"mode"}\n')
+
+        snap = self.sense_with(build)
+        blob = json.dumps(snap)
+        self.assertNotIn(".jsonl", blob,
+                         "a transcript filename escaped into the snapshot")
+        for entry in snap.get("parse_failed") or []:
+            self.assertNotIn(".jsonl", json.dumps(entry))
+
+
+class TimestampParsing(unittest.TestCase):
+    """The conversion, in isolation.
+
+    Every timestamp in a transcript is UTC with a literal trailing Z. Every date
+    elsewhere in the package is naive local. Both halves of that are tested here
+    because a mistake in either is a silent off-by-one-day, not an exception.
+    """
+
+    def test_a_trailing_z_parses(self):
+        """`datetime.fromisoformat` raises on this string on the floor
+        interpreter and accepts it from 3.11. Since every real timestamp carries
+        the Z, using it would have parsed nothing at all on 3.9 -- reporting a
+        project with no sessions rather than an error."""
+        got = transcripts.parse_utc_to_local("2026-03-14T09:00:00.000Z")
+        self.assertIsNotNone(got)
+
+    def test_utc_is_converted_to_local_rather_than_taken_verbatim(self):
+        expect = dt.datetime.fromtimestamp(
+            (dt.datetime(2026, 3, 14, 9, 0) - dt.datetime(1970, 1, 1)).total_seconds())
+        self.assertEqual(transcripts.parse_utc_to_local("2026-03-14T09:00:00.000Z"),
+                         expect)
+
+    def test_fractional_seconds_are_optional(self):
+        self.assertIsNotNone(transcripts.parse_utc_to_local("2026-03-14T09:00:00Z"))
+
+    def test_junk_returns_none_rather_than_raising(self):
+        for junk in (None, "", "yesterday", 17, {"t": 1}, "2026-03-14T09:00:00+05:00"):
+            self.assertIsNone(transcripts.parse_utc_to_local(junk), junk)
 
 
 class TheCitationHandle(SessionSensingCase):
