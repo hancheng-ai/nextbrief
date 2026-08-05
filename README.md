@@ -457,6 +457,18 @@ nextbrief done <id>      mark it done          nextbrief drop <id>   drop it
 nextbrief ls             list every open item
 nextbrief prune          list items worth revisiting
 
+nextbrief projects       one line per project: signal, phase, last evidence
+nextbrief describe <id> "<one sentence>"
+                         say what a project is. Always declared, never guessed —
+                         no file on disk states a project's purpose
+                         (--capability "<text>": what it could also serve)
+nextbrief review         answer the questions only you can answer (--all, --prompt, --web)
+
+nextbrief context        what each project is, for other tools to read
+                         (--json: print state/inventory.json verbatim)
+nextbrief permissions    print the pre-approval rules an agent needs
+                         (--merge-into FILE: write them into a settings file)
+
 nextbrief init [dir]     create a workspace     (-y, --no-scan)
 ```
 

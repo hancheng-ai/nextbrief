@@ -338,6 +338,18 @@ nextbrief done <id>      完成            nextbrief drop <id>   弃掉
 nextbrief ls             列出所有在办条目
 nextbrief prune          列出值得回头看看的条目
 
+nextbrief projects       每个项目一行：信号、阶段、最近一次证据
+nextbrief describe <id> "<一句话>"
+                         说明这个项目是什么。只接受声明，从不猜测 ——
+                         磁盘上没有任何文件写着一个项目的目的
+                         （--capability "<文本>"：它还能服务于什么）
+nextbrief review         回答只有你能回答的问题（--all、--prompt、--web）
+
+nextbrief context        每个项目是什么，供其它工具读取
+                         （--json：原样打印 state/inventory.json）
+nextbrief permissions    打印 agent 需要的预授权规则
+                         （--merge-into FILE：写进某个 settings 文件）
+
 nextbrief init [dir]     创建 workspace   （-y、--no-scan）
 ```
 

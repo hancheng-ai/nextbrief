@@ -369,3 +369,44 @@ class ReleaseHistory(unittest.TestCase):
                 self.assertIn(cited, known,
                               "README release table cites %s, which the CHANGELOG "
                               "does not have" % cited)
+
+
+class EveryCommandIsDocumented(unittest.TestCase):
+    """The reverse direction: the docs already promise nothing the code lacks,
+    and this checks the code offers nothing the docs never mention.
+
+    A subcommand nobody can find is a subcommand nobody uses. The failure is
+    silent by construction -- `--help` lists it, so it looks documented to anyone
+    who already knows it is there, and invisible to everyone else.
+
+    Both languages, because a reader of one is not served by the other. The
+    translations diverge under exactly this pressure: an English section gets
+    added and its counterpart does not, and nothing notices until somebody reads
+    the shorter file looking for a command that is not in it.
+    """
+
+    def _commands(self):
+        src = (REPO_ROOT / "src" / "nextbrief" / "cli.py").read_text(encoding="utf-8")
+        # From the dispatch table, which is what `main` actually resolves. Read
+        # from the source rather than by importing and walking argparse, so that
+        # a command registered but never wired up still counts as missing.
+        names = sorted(set(re.findall(r'"([a-z0-9-]+)": cmd_', src)))
+        self.assertGreater(len(names), 10, "the command table stopped parsing")
+        return names
+
+    def _documents(self, doc, name):
+        text = (REPO_ROOT / doc).read_text(encoding="utf-8")
+        # Mentioned as a command, not merely as an English word. `open`, `do`,
+        # `show` and `log` are all ordinary prose, and matching them bare would
+        # make this test pass on any README containing a sentence.
+        return re.search(r"(nextbrief|nb)[^\n`]{0,40}\b%s\b" % re.escape(name), text)
+
+    def test_readme_documents_every_command(self):
+        missing = [n for n in self._commands() if not self._documents("README.md", n)]
+        self.assertEqual(missing, [], "README.md never mentions: %s" % " ".join(missing))
+
+    def test_the_chinese_readme_documents_every_command(self):
+        missing = [n for n in self._commands()
+                   if not self._documents("README.zh.md", n)]
+        self.assertEqual(missing, [],
+                         "README.zh.md never mentions: %s" % " ".join(missing))
