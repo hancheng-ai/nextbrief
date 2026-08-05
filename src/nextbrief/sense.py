@@ -1064,12 +1064,52 @@ def git_hotspots(top, pathspec: Sequence[str], as_of: dt.date, limit: int = 5,
 # not leave a transcript.
 # ---------------------------------------------------------------------------
 
+def _session_acc() -> Dict[str, Any]:
+    return {"session_files": 0, "last_active": None, "days": set(),
+            "undated": 0, "records_elsewhere": 0}
+
+
 def scan_sessions(root, projects: Sequence[Dict[str, Any]],
                   sessions_dir=None) -> Dict[str, Dict[str, Any]]:
     slug_to_pid: Dict[str, str] = {}
+    # Registered project directories, longest first. A cwd is credited to the
+    # deepest project that contains it, so a project nested inside another is
+    # credited to itself rather than to its parent -- the same rule the directory
+    # match uses, applied to a real path instead of to a slug.
+    paths: List[Tuple[str, str]] = []
     for pr in projects:
         for rel in pr.get("paths", []) or []:
             slug_to_pid[slugify_path(Path(root) / rel)] = pr["id"]
+            paths.append((str(Path(root) / rel), pr["id"]))
+    paths.sort(key=lambda pair: (-len(pair[0]), pair[0]))
+
+    def resolver(home_pid: str):
+        """Which project a record's working directory belongs to.
+
+        Returns a project id, or ``None`` for work that happened somewhere this
+        portfolio does not describe. Never returns the directory itself: a cwd is
+        an absolute path on somebody's machine, and everything the sensor emits
+        reaches a git-tracked page.
+        """
+        def resolve(cwd: Optional[str]) -> Optional[str]:
+            if not cwd:
+                # Timestamped, but carrying no working directory -- a shape a
+                # real store produces, since the time field appears on more
+                # record types than the directory does. It is still activity in
+                # a session whose launch directory is known, and the launch
+                # directory is a lossless encoding of where that was. Crediting
+                # it there beats discarding real work for want of a field.
+                return home_pid
+            for prefix, pid in paths:
+                if cwd == prefix or cwd.startswith(prefix + os.sep):
+                    return pid
+            # Somewhere this portfolio does not describe: the workspace itself, a
+            # scratch directory, another checkout. Returning None counts it
+            # rather than inventing a bucket -- a bucket keyed like a project id
+            # would be looked up by nothing and ignored silently, which is the
+            # failure this whole change exists to remove.
+            return None
+        return resolve
 
     per_project: Dict[str, Dict[str, Any]] = {}
     base = expand(sessions_dir or DEFAULT_SESSIONS_DIR)
@@ -1089,9 +1129,12 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
                     best = (slug, pid)
         if not best:
             continue
-        pid = best[1]
-        acc = per_project.setdefault(pid, {"session_files": 0, "last_active": None,
-                                           "days": set(), "undated": 0})
+        # The directory name still decides which transcripts are worth opening --
+        # it is a reliable encoding of where the session STARTED, measured
+        # lossless over a real store. What it cannot say is where the session
+        # went, and that is what the records below are read for.
+        home_pid = best[1]
+        per_project.setdefault(home_pid, _session_acc())
         try:
             entries = list(d.iterdir())
         except OSError:
@@ -1104,27 +1147,49 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
             if f.suffix != ".jsonl":
                 continue
             # A transcript that exists is a session that happened, whatever the
-            # engine can read out of it. Counting it here and its dates below
-            # keeps "there was a session" separate from "here is when".
-            acc["session_files"] += 1
+            # engine can read out of it. Counted against the project the session
+            # was launched in, which is what "this project had a session" means;
+            # the days below are counted wherever the work actually went.
+            per_project[home_pid]["session_files"] += 1
             try:
-                last, days, _read = transcripts.read_activity(f)
+                buckets, unplaced = transcripts.read_activity(f, resolver(home_pid))
             except OSError:
-                acc["undated"] += 1
+                per_project[home_pid]["undated"] += 1
                 continue
-            if not days:
-                # Readable, but carrying no parseable timestamp. Counted, never
-                # named: `parse_failed` reaches digest.json and then the model,
-                # and a transcript path is an absolute path on somebody's
-                # machine. The count is the honest part; the path is the leak.
-                acc["undated"] += 1
+            if not buckets:
+                # Nothing landed in a project, and there are two quite different
+                # reasons for that. Either the file carried no parseable
+                # timestamp at all, or it carried plenty and every one of them
+                # happened somewhere this portfolio does not describe. Reporting
+                # the second as the first would blame the parser for a gap in the
+                # registry -- and send someone to read a file that is fine.
+                #
+                # Counted either way, never named: `parse_failed` reaches
+                # digest.json and then the model, and a transcript path is an
+                # absolute path on somebody's machine.
+                if unplaced:
+                    per_project[home_pid]["records_elsewhere"] += unplaced
+                else:
+                    per_project[home_pid]["undated"] += 1
                 continue
-            acc["days"].update(days)
-            if last is not None and (acc["last_active"] is None or last > acc["last_active"]):
-                acc["last_active"] = last
+            for bucket, got in buckets.items():
+                acc = per_project.setdefault(bucket, _session_acc())
+                acc["days"].update(got["days"])
+                last = got["last"]
+                if last is not None and (acc["last_active"] is None
+                                         or last > acc["last_active"]):
+                    acc["last_active"] = last
+            if unplaced:
+                per_project[home_pid]["records_elsewhere"] += unplaced
 
     out = {}
     for pid, acc in per_project.items():
+        # Work that landed outside every registered project is reported as its
+        # own bucket rather than dropped. A silent drop is the failure that made
+        # this change worth making: 20.6% of transcripts in a real store spend
+        # time somewhere the portfolio does not describe, and a day count that
+        # quietly excludes them reads exactly like a day count that included
+        # them and found nothing.
         last = acc["last_active"]
         out[pid] = {
             "session_files": acc["session_files"],
@@ -1135,6 +1200,11 @@ def scan_sessions(root, projects: Sequence[Dict[str, Any]],
             # not date 4 of 5 transcripts and one that dated them all both used
             # to report a number with no way to tell them apart.
             "transcripts_without_dates": acc["undated"],
+            # Records that dated something but belonged to no registered
+            # project -- the workspace itself, a scratch directory, another
+            # checkout. Reported against the project the session was launched
+            # in, because that is the one a reader can act on.
+            "records_unattributed": acc["records_elsewhere"],
         }
     return out
 

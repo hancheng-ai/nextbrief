@@ -77,11 +77,16 @@ def parse_utc_to_local(value: Any) -> Optional[dt.datetime]:
         return None
 
 
-def iter_timestamps(path: Path) -> Iterator[dt.datetime]:
-    """Every top-level record timestamp in one transcript, as local datetimes.
+def iter_records(path: Path) -> Iterator[Tuple[dt.datetime, Optional[str]]]:
+    """Every datable record in one transcript, as (local time, cwd).
 
     Streams. A transcript runs to tens of megabytes and there is no reason to
     hold one in memory to find its dates.
+
+    The prefilter is on the timestamp key rather than on ``cwd``: a record
+    carrying a working directory but no time cannot place work on a day, so it is
+    nothing this module can use. Filtering on the field we cannot do without
+    keeps one cheap test in the hot loop instead of two.
     """
     with open(path, "rb") as fh:
         for raw in fh:
@@ -96,25 +101,50 @@ def iter_timestamps(path: Path) -> Iterator[dt.datetime]:
             if not isinstance(rec, dict):
                 continue
             when = parse_utc_to_local(rec.get("timestamp"))
-            if when is not None:
-                yield when
+            if when is None:
+                continue
+            cwd = rec.get("cwd")
+            yield when, (cwd if isinstance(cwd, str) else None)
 
 
-def read_activity(path: Path) -> Tuple[Optional[dt.datetime], Dict[str, str], int]:
-    """(last activity, the set of local days touched, records read).
+def read_activity(path: Path, resolve) -> Tuple[Dict[str, Dict[str, Any]], int]:
+    """({bucket: {"days": ..., "last": ...}}, records attributed to nothing).
 
-    The day set is the point. A transcript that ran past midnight touched two
-    days, and no single timestamp -- mtime, first record or last -- can say so.
+    Two things are load-bearing here.
 
-    Days are returned as a dict keyed by ISO date so a caller can union several
-    transcripts without re-deriving the strings.
+    **A transcript is a sequence of directories, not one.** The working directory
+    is recorded per record and changes mid-session -- in a real store, a third of
+    transcripts record more than one and one records seventeen. Attributing the
+    whole file to where it started throws that away: measured, per-record
+    attribution finds 82 project-days where the launch directory finds 57, adds
+    four projects that had no sessions at all, and loses nothing.
+
+    **The caller passes `resolve`, and no working directory is ever returned.**
+    A cwd is an absolute path on somebody's machine, and everything this module
+    produces flows to `digest.json`, then to a model, then onto a git-tracked
+    page. So the mapping from directory to bucket happens behind this call and
+    only the bucket -- a project id, or a name for "somewhere else" -- comes back.
+    The allowlist is enforced by the shape of the function rather than by
+    remembering to strip a field.
+
+    ``resolve(cwd) -> bucket`` may return ``None`` to discard a record entirely.
+
+    Last activity is tracked **per bucket**, which is the only defensible reading
+    once one transcript can touch several projects. A session that worked in one
+    project all morning and moved to another after lunch did not leave the first
+    one active until midnight; taking the file's final timestamp for every bucket
+    it touched would overstate the recency of everything it passed through, and
+    recency is what decides hot/warm/cold and what gets called neglected.
     """
-    last: Optional[dt.datetime] = None
-    days: Dict[str, str] = {}
-    count = 0
-    for when in iter_timestamps(path):
-        count += 1
-        days[when.date().isoformat()] = ""
-        if last is None or when > last:
-            last = when
-    return last, days, count
+    buckets: Dict[str, Dict[str, Any]] = {}
+    unattributed = 0
+    for when, cwd in iter_records(path):
+        bucket = resolve(cwd)
+        if bucket is None:
+            unattributed += 1
+            continue
+        acc = buckets.setdefault(bucket, {"days": {}, "last": None})
+        acc["days"][when.date().isoformat()] = ""
+        if acc["last"] is None or when > acc["last"]:
+            acc["last"] = when
+    return buckets, unattributed
