@@ -928,6 +928,23 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
         "decision_ids": {p.get("id") for p in decision_pending},
         "stalled_ids": {p.get("id") for p in stalled},
         "neglected_ids": {p.get("id") for p in neglected},
+        # Where an inline correction is legitimate: the engine has printed an
+        # observation that contradicts the declared phase, so a control offering
+        # to fix the phase is answering a question the page already asked.
+        #
+        # Both verdicts here ARE that contradiction. "Neglected" is only ever
+        # said of an active project, and means it has been quiet far longer than
+        # active implies. "Stalled" on a frozen project means uncommitted work is
+        # sitting in something declared parked. Either way the engine is saying
+        # "this does not look like what you told me", and the cheapest possible
+        # answer is that the declaration moved on and nobody updated it.
+        #
+        # Nothing else qualifies. A control anywhere else would be a form, and a
+        # form in a document nobody opened to fill in is answered carelessly or
+        # not at all.
+        "status_contradicted": sorted(
+            {str(p.get("id")) for p in neglected}
+            | {str(p.get("id")) for p in stalled if status_of(p) == "frozen"}),
     }
 
 

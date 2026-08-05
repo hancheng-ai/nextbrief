@@ -142,6 +142,9 @@ ul.plain li{margin:5px 0}
 .toggle{position:fixed;top:14px;right:14px;z-index:9}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
 .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
+select.adj{font:inherit;font-size:11.5px;margin-left:6px;padding:1px 4px;border-radius:5px;border:1px solid var(--line);background:var(--card);color:var(--dim);cursor:pointer;max-width:9.5em}
+select.adj:hover{border-color:var(--accent);color:var(--accent)}
+select.adj.adj-done{border-color:var(--ok);color:var(--ok)}
 """
 
 # %s is the localised "copied" label, injected as a JSON string literal.
@@ -149,6 +152,21 @@ JS = """
 function cp(b,t){navigator.clipboard.writeText(t).then(function(){
   var o=b.textContent;b.textContent=%s;b.classList.add('copied');
   setTimeout(function(){b.textContent=o;b.classList.remove('copied')},1400);});}
+/* A correction, written to disk the only way a file:// page can: <a download>
+   of a Blob. No server, no permission prompt, no network -- which is why this
+   works on a laptop that is offline and a tool that is unpaid for.
+   `from_as_rendered` is the staleness guard; the reader refuses a payload whose
+   stamp no longer matches the world. */
+function adj(sel,pid,asof){
+  if(!sel.value)return;
+  var b=new Blob([JSON.stringify({project:pid,field:'status',value:sel.value,
+    from_as_rendered:asof},null,2)],{type:'application/json'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(b);
+  a.download='nextbrief-adjust-'+asof+'-'+pid+'.json';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+  sel.classList.add('adj-done');sel.title=sel.options[sel.selectedIndex].text;}
 (function(){var r=document.documentElement,k='nextbrief-theme',s=localStorage.getItem(k);
  if(s)r.setAttribute('data-theme',s);
  document.getElementById('th').onclick=function(){
@@ -192,6 +210,34 @@ def _attr(s: str) -> str:
     return e(str(s).replace("\\", "\\\\").replace("'", "\\'"))
 
 
+def _adjust_control(pid: str, as_of, cat: Catalog) -> str:
+    """The one inline correction: change a phase the evidence contradicts.
+
+    A `<select>` and nothing else. There is no submit button because there is
+    nothing to submit to -- this page is opened over ``file://`` with no server,
+    no session and no API, and it has to keep working with the machine offline.
+    Choosing a value downloads a small JSON file, and the next run reads it.
+
+    The payload carries the brief's own `as_of`. A tab left open for three days
+    is answering a question about a state that has since changed, and the reader
+    of these files refuses one whose stamp no longer matches -- so a correction
+    is never applied to facts the person never saw.
+
+    Values come from the same question `review` asks, so a phase corrected here
+    and a phase answered there are the same statement.
+    """
+    options = "".join(
+        '<option value="%s">%s</option>' % (e(str(value)), e(cat.t(label)))
+        for q in QUESTIONS if q.field == "status"
+        for value, label in q.choices)
+    return (
+        "<select class=adj title='%s' data-p='%s' "
+        "onchange=\"adj(this,'%s','%s')\">"
+        "<option value=''>%s</option>%s</select>"
+        % (e(cat.t("html.adjust.title")), e(pid), e(pid), e(as_of.isoformat()),
+           e(cat.t("html.adjust.prompt")), options))
+
+
 def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
                 notes: Optional[dict] = None, meta: Optional[dict] = None) -> str:
     """Render BRIEF.html.
@@ -221,6 +267,7 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
     by_id = {b.get("id"): b for b in backlog}
     self_ids = meta["self_ids"]
     dec_ids, stall_ids, neg_ids = meta["decision_ids"], meta["stalled_ids"], meta["neglected_ids"]
+    contradicted = set(meta.get("status_contradicted") or ())
 
     o: List[str] = []
     A = o.append
@@ -353,9 +400,26 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
             nxt = "<code>%s</code> %s" % (e(na[0].get("id")), e(na[0].get("title")))
         elif pid in stall_ids:
             nxt = md_inline(cat.t("brief.next.stalled"))
+        # The one inline correction there is, and only where the engine has just
+        # said something that contradicts the declared phase. It sits in the
+        # signal cell, next to the verdict that prompts it, because that is what
+        # makes it a correction rather than a form: the question and the reason
+        # for asking it are in the same place.
+        # Escaped BEFORE the control is appended, never after. The cell used to
+        # be escaped at the format string, and moving markup into it means the
+        # escaping has to move too.
+        #
+        # Defence in depth rather than a live guard: `sig` is built from catalog
+        # strings with numeric interpolation, so nothing hostile can reach it
+        # today, and a mutation removing this `e()` passes the suite. Kept
+        # because the next person to put a snapshot value in a signal label will
+        # not think about escaping, and the cost of it being here is nothing.
+        cell = e(sig)
+        if str(pid) in contradicted:
+            cell += _adjust_control(str(pid), as_of, cat)
         A("<tr><td class=pname>%s</td><td class='sig %s'>%s</td>"
           "<td class=facts>%s</td><td>%s</td></tr>"
-          % (e(p.get("name", "")), cls, e(sig), md_inline(_facts(p, cat)), nxt))
+          % (e(p.get("name", "")), cls, cell, md_inline(_facts(p, cat)), nxt))
     A("</tbody></table></div>")
 
     # ---------- awaiting a decision ----------

@@ -139,6 +139,8 @@
   "evidence.session_days.compact": "{count} 会话日",
   "evidence.uncommitted": "**{count} 个未提交**",
   "evidence.unknown_date": "未知",
+  "html.adjust.prompt": "阶段？",
+  "html.adjust.title": "它已经很久不像在推进了 —— 说明它现在到底是什么状态，下次运行就会读到",
   "html.banner.dropped": "**{count} 条陈述因证据无法核验被丢弃**，未渲染。见 `{path}`。",
   "html.banner.late": "本次运行比计划（{slot}）晚 {hours} 小时，活动窗口已按实际时刻重算。",
   "html.banner.reverted": "**{count} 处越权字段改动已回滚**。见 `{path}`。",

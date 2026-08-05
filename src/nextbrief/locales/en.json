@@ -139,6 +139,8 @@
   "evidence.session_days.compact": "{count} session days",
   "evidence.uncommitted": "**{count} uncommitted**",
   "evidence.unknown_date": "unknown",
+  "html.adjust.prompt": "phase?",
+  "html.adjust.title": "This has not looked active for a while — say what it really is, and the next run will pick it up",
   "html.banner.dropped": "**Dropped {count} claim(s)** whose evidence would not check out; they are not shown. See `{path}`.",
   "html.banner.late": "This run is {hours}h later than its {slot} slot; activity windows were recomputed against the real time.",
   "html.banner.reverted": "**Reverted {count} out-of-bounds field edit(s).** See `{path}`.",

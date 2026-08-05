@@ -13,9 +13,10 @@ import datetime as dt
 import json
 import unittest
 
-from helpers import TempCase
+from helpers import TempCase, make_project_entry, make_snapshot
 
-from nextbrief import annotate, inbox
+from nextbrief import annotate, html, inbox
+from nextbrief.i18n import load_catalog
 
 AS_OF = dt.date(2026, 3, 16)
 KNOWN = ("orchard", "kiln")
@@ -158,6 +159,78 @@ class TheAllowlistIsNarrowOnPurpose(unittest.TestCase):
         asked = {q.field for q in annotate.QUESTIONS}
         for field in inbox.ADJUSTABLE_FIELDS:
             self.assertIn(field, asked)
+
+
+class TheControlThePageDraws(TempCase):
+    """The emitting half. What matters is WHERE it appears, not that it works.
+
+    A control beside a verdict is answering a question the page already asked. A
+    control anywhere else is a form, and a form in a document nobody opened to
+    fill in is answered carelessly or not at all.
+    """
+
+    def _p(self, pid, days, status="active", **over):
+        got = make_project_entry(pid=pid, ice={"impact": 4})
+        got["status"] = status
+        got["evidence"] = dict(got["evidence"], days_since=days)
+        got.update(over)
+        return got
+
+    def _html(self, projects):
+        snap = make_snapshot(projects=projects)
+        return html.render_html(snap, {}, [], {}, {}, load_catalog("en"),
+                                {"conflicts": []})
+
+    def test_a_contradicted_project_gets_the_control(self):
+        """Neglected is only ever said of an ACTIVE project, and means it has
+        been quiet far longer than active implies. The engine is saying "this
+        does not look like what you told me"."""
+        got = self._html([self._p("quiet", days=400)])
+        self.assertIn("adj(this,'quiet'", got)
+
+    def test_a_healthy_project_gets_no_control(self):
+        """Rule 8, applied to a widget. A control on every row is furniture, and
+        furniture is not read."""
+        got = self._html([self._p("busy", days=1)])
+        self.assertNotIn("adj(this,", got)
+
+    def test_the_payload_carries_the_briefs_own_date(self):
+        """The staleness guard is only as good as the stamp. If the page emitted
+        today's date instead of the brief's, a three-day-old tab would look
+        current and the guard would never fire."""
+        got = self._html([self._p("quiet", days=400)])
+        self.assertIn("adj(this,'quiet','2026-03-16')", got)
+
+    def test_the_values_offered_are_the_ones_review_asks(self):
+        """A phase corrected here and a phase answered in `review` have to be the
+        same statement, or the ingest refuses its own page's output."""
+        got = self._html([self._p("quiet", days=400)])
+        for value, _label in [q for q in annotate.QUESTIONS
+                              if q.field == "status"][0].choices:
+            self.assertIn('value="%s"' % value, got)
+
+    def test_a_hostile_project_name_is_still_escaped(self):
+        """Adding markup to a row must not disturb the escaping around it.
+
+        Scoped to what it actually proves: the NAME cell. The signal cell is also
+        escaped, and that escaping is defence in depth rather than a live guard --
+        `sig` is built from catalog strings with numeric interpolation, so a
+        mutation removing it passes this suite. Claiming otherwise here would be
+        a guard that cannot fail dressed as one that can.
+        """
+        got = self._html([self._p("quiet", days=400,
+                                  name="<script>alert(1)</script>")])
+        self.assertNotIn("<script>alert(1)</script>", got)
+        self.assertIn("&lt;script&gt;", got)
+        self.assertIn("adj(this,'quiet'", got, "the control was lost entirely")
+
+    def test_the_control_writes_a_file_the_reader_will_look_for(self):
+        """Two halves of one contract, declared in different modules. If the page
+        names its download anything else, the ingest never sees it -- and the
+        failure is silent on both sides."""
+        got = self._html([self._p("quiet", days=400)])
+        prefix = inbox.DROP_GLOB.split("*")[0]
+        self.assertIn("'" + prefix, got)
 
 
 if __name__ == "__main__":
