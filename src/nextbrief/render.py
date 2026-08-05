@@ -1096,6 +1096,28 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     L.append("> " + " | ".join(head))
     L.append("")
 
+    # ---- where the effort went ----------------------------------------------
+    #
+    # A resource line, kept off the priority axis on purpose. Effort spent is not
+    # importance -- the project that consumed the most is frequently the one that
+    # is stuck -- so this says how lopsided the week was and stops there. It
+    # names no quantity, and nothing in it reaches the ranking.
+    #
+    # Printed above the ordering rather than inside it, so it reads as context
+    # for the list rather than as a term in it.
+    attention = snap.get("attention") or {}
+    if attention.get("top_project"):
+        # Looked up among the projects the page actually lists. The self-project
+        # is excluded from the brief, and naming it here would point a reader at
+        # a row that is not there.
+        top = next((p for p in tracked if p.get("id") == attention["top_project"]), None)
+        if top is not None:
+            L.append("> " + cat.t("brief.attention.share",
+                                  pct=attention["top_share_pct"],
+                                  project=top.get("name") or attention["top_project"],
+                                  days=attention["window_days"]))
+            L.append("")
+
     # ---- what is new since the last run -------------------------------------
     #
     # The counts above say what is true; this says what changed, which is the

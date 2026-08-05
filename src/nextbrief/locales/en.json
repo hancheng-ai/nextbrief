@@ -14,6 +14,7 @@
   "brief.action.who_default": "you",
   "brief.agent.human_left": "   — left for you: {text}",
   "brief.agent.item": "`{id}` {title}{human}",
+  "brief.attention.share": "**{pct}%** of the last {days} days of model output went to **{project}** — effort, not importance",
   "brief.automation.summary": "Of {total} open: **{hook} hookable**, {skill} at the skill layer (one human step left), {explore} still exploratory, {unknown} unassessed; **{human_perm} need credentials or authorisation and will always be yours to do**.",
   "brief.banner.backlog_full": "⚠ The backlog is at its hard ceiling of {max}. **Nothing new may be created today.** Run `{command}` and clear some out.",
   "brief.banner.late": "⚠ This run is {hours}h later than its {slot} slot; activity windows were recomputed against the real time.",

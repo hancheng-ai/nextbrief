@@ -627,6 +627,109 @@ class TokensPerProject(SessionSensingCase):
             self.assertNotIn(word, blob, "the snapshot priced something")
 
 
+class TheResourceAxis(SessionSensingCase):
+    """Effort spent, kept off the axis that decides what matters.
+
+    The project that consumed the most tokens is frequently the one that is
+    stuck. A ranking that rewarded consumption would promote thrashing and bury
+    the work that went smoothly, so this is a share and never a size, and nothing
+    in it reaches the score.
+    """
+
+    def attention(self, snap):
+        return snap.get("attention")
+
+    # Arguments read as proportions; the tokens written are a multiple of them,
+    # so a raw count can never coincide with the percentage it produces. Without
+    # this, `out=90` yields both 90 tokens and 90%, and swapping the share for
+    # the count passes every assertion.
+    SCALE = 7
+
+    def two_projects(self, orchard_out, kiln_out, when=DAY_C):
+        def build(store, ws):
+            body = ""
+            if orchard_out:
+                body += TokensPerProject.assistant(
+                    self, when, ws / "projects" / "orchard", "m_o",
+                    out=orchard_out * self.SCALE)
+            if kiln_out:
+                body += TokensPerProject.assistant(
+                    self, when, ws / "projects" / "kiln", "m_k",
+                    out=kiln_out * self.SCALE)
+            self.transcript(store / self.slug_for(ws), "a.jsonl", body=body)
+        return build
+
+    def test_a_lopsided_week_is_reported_as_a_share(self):
+        got = self.attention(self.sense_with(self.two_projects(10, 90)))
+        self.assertEqual(got["top_project"], "kiln")
+        self.assertEqual(got["top_share_pct"], 90)
+        self.assertEqual(got["basis"], "output_tokens")
+
+    def test_an_even_split_says_nothing(self):
+        """Naming a leader in a 52/48 split invents an imbalance that is not
+        there, and a line that appears every day is a line nobody reads.
+
+        This is why an absolute floor cannot be the only test: at two projects,
+        "more than half" is very nearly "whichever one is ahead".
+        """
+        self.assertIsNone(self.attention(self.sense_with(self.two_projects(52, 48))))
+
+    def test_two_projects_need_three_quarters_not_merely_a_majority(self):
+        """The threshold scales with how many projects were measured, because an
+        even split does. 70/30 across two is a normal week; the same 70% across
+        five would be the whole story."""
+        self.assertIsNone(self.attention(self.sense_with(self.two_projects(70, 30))))
+        self.assertIsNotNone(self.attention(self.sense_with(self.two_projects(80, 20))))
+
+    def test_a_single_project_is_not_lopsided_against_itself(self):
+        self.assertIsNone(self.attention(self.sense_with(self.two_projects(100, 0))))
+
+    def test_the_block_carries_no_token_magnitude(self):
+        """A share is actionable; a magnitude invites ranking by it. If a count
+        ever appears here, somebody will sort on it.
+
+        Asserted as an exact key set rather than by looking for particular
+        numbers. The first version of this test checked that the fixture's token
+        values were absent and got them wrong, so adding a raw count to the block
+        survived it -- a guard that could not fail.
+        """
+        got = self.attention(self.sense_with(self.two_projects(10, 90)))
+        self.assertEqual(
+            set(got),
+            {"window_days", "top_project", "top_share_pct", "projects_measured", "basis"},
+            "a field was added to the attention block; if it is a count, it must not be")
+
+    def test_tokens_do_not_move_the_ranking(self):
+        """The load-bearing guard. Two projects with identical declared impact
+        and identical evidence, one having consumed nine times the output: the
+        order must not change, because nothing about consumption is importance.
+        """
+        heavy = self.sense_with(self.two_projects(10, 90))
+        light = self.sense_with(self.two_projects(90, 10))
+        order = lambda snap: [p["id"] for p in snap["projects"]]  # noqa: E731
+        self.assertEqual(order(heavy), order(light),
+                         "project order changed with token consumption")
+
+    def test_the_digest_gets_the_share_and_not_the_counts(self):
+        """Handing stage 2 a token magnitude per project invites it to rank by
+        consumption. The asymmetry is the only part that crosses the boundary."""
+        ws = self.workspace()
+        store = self.tmp / "sessions"
+        store.mkdir(exist_ok=True)
+        self.two_projects(10, 90)(store, ws)
+        cfg = load_jsonc(str(ws / "config.jsonc"))
+        cfg["sessions"] = {"dir": str(store)}
+        (ws / "config.jsonc").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        digest = json.loads((ws / "state" / "digest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual((digest.get("attention") or {}).get("top_share_pct"), 90)
+        for project in digest.get("projects") or []:
+            self.assertNotIn("tokens", json.dumps(project.get("facts") or {}),
+                             "a per-project token magnitude reached the model")
+
+
 class TimestampParsing(unittest.TestCase):
     """The conversion, in isolation.
 

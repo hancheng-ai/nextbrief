@@ -1064,6 +1064,85 @@ def git_hotspots(top, pathspec: Sequence[str], as_of: dt.date, limit: int = 5,
 # not leave a transcript.
 # ---------------------------------------------------------------------------
 
+# How lopsided a split has to be before it is worth a line.
+#
+# Two thresholds, because one cannot work. An absolute floor alone calls a 52/48
+# week between two projects "lopsided", which it plainly is not. A relative test
+# alone -- some multiple of an even share -- fires on a portfolio of twenty
+# projects where the leader took 9%, which is also nothing. So the leader has to
+# clear both: half of everything, AND half again as much as an even split would
+# have given it.
+#
+#   2 projects   even 50%   ->  needs 75%
+#   3 projects   even 33%   ->  needs 50%
+#   5+ projects  even <=20% ->  needs 50% (the floor binds)
+ATTENTION_SHARE_FLOOR = 0.5
+ATTENTION_EVEN_MULTIPLE = 1.5
+
+
+def summarise_attention(projects: Sequence[Dict[str, Any]],
+                        windows: Sequence[int]) -> Optional[Dict[str, Any]]:
+    """Where the model's output went, as a **share** and never as a magnitude.
+
+    This is a resource axis, deliberately kept off the priority axis. Effort
+    spent is not importance: the project that consumed the most tokens is
+    frequently the one that is stuck, and a ranking that rewarded consumption
+    would promote thrashing and bury the work that went smoothly. So nothing
+    here is a score term, nothing here is comparable across projects as a size,
+    and `score_project` never sees it.
+
+    What survives is the one shape a share can honestly carry -- asymmetry.
+    "Two thirds of this week's output went to one project" is a fact about the
+    distribution that a reader can act on, and it says nothing about whether
+    that project deserved it.
+
+    Returns ``None`` when there is no story: nothing measured, only one project
+    with any output, or a split flat enough that naming a leader would invent an
+    imbalance that is not there.
+    """
+    if not windows:
+        return None
+    window = 7 if 7 in windows else max(windows)
+    key = str(window)
+
+    shares = []
+    for p in projects:
+        tokens = (p.get("sessions") or {}).get("tokens") or {}
+        got = (tokens.get("output") or {}).get(key)
+        if isinstance(got, int) and got > 0:
+            shares.append((got, p["id"]))
+    if len(shares) < 2:
+        # One project cannot be lopsided against itself, and a portfolio with a
+        # single active project has nothing to allocate.
+        #
+        # Redundant with the threshold below, which at one project demands 150%
+        # of the total and so can never be met -- stated here anyway because the
+        # reason is a sentence and the arithmetic is not. Anyone tempted to
+        # delete this line should delete this line, and not the threshold.
+        return None
+
+    shares.sort(key=lambda pair: (-pair[0], pair[1]))
+    total = sum(count for count, _ in shares)
+    top_count, top_id = shares[0]
+    share = top_count / total
+    even = 1.0 / len(shares)
+    if share < max(ATTENTION_SHARE_FLOOR, ATTENTION_EVEN_MULTIPLE * even):
+        return None
+
+    return {
+        "window_days": window,
+        "top_project": top_id,
+        # Rounded to whole percent. The precision beyond that is noise, and a
+        # figure like 61.7% invites a reader to compare it against last week's
+        # as though the difference meant something.
+        "top_share_pct": int(round(share * 100)),
+        "projects_measured": len(shares),
+        # Named so nobody reads the share as a quantity. There is no token count
+        # in this block and that is the point.
+        "basis": "output_tokens",
+    }
+
+
 def _session_acc() -> Dict[str, Any]:
     return {"session_files": 0, "last_active": None, "days": set(),
             "undated": 0, "records_elsewhere": 0}
@@ -2235,6 +2314,8 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     for e in evidence_index.values():
         e["kinds"] = sorted(e["kinds"])   # idempotence: never depend on visit order
 
+    attention = summarise_attention(projects_out, windows)
+
     return {
         "schema_version": 2,
         "run": {
@@ -2250,6 +2331,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         },
         "registry_meta": reg.get("meta"),
         "projects": projects_out,
+        "attention": attention,
         "outcomes": outcomes_out,
         "watch": watch_out,
         "infra": reg.get("infra"),
@@ -2389,6 +2471,12 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         "caps": cfg["caps"],
         "limits": cfg["limits"],
         "projects": projs,
+        # The share, and deliberately not the counts it came from. Handing stage 2
+        # a token magnitude per project invites it to rank by consumption, and
+        # consumption is not importance -- the project that burned the most is
+        # often the one that is stuck. The asymmetry is the only part a reader
+        # can act on, so it is the only part that crosses this boundary.
+        "attention": snap.get("attention"),
         "outcomes": snap.get("outcomes") or [],
         "backlog": load_backlog_summary(ws),
         "watch": snap.get("watch"),

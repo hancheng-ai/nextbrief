@@ -14,6 +14,7 @@
   "brief.action.who_default": "你",
   "brief.agent.human_left": "　—— 人只剩：{text}",
   "brief.agent.item": "`{id}` {title}{human}",
+  "brief.attention.share": "过去 {days} 天 **{pct}%** 的模型输出花在 **{project}** 上 —— 这是投入，不是重要性",
   "brief.automation.summary": "{total} 条在办中——**{hook} 条可固化成 hook**、{skill} 条停在 skill 层（人只剩 1 步）、{explore} 条还在探索、{unknown} 条未评估；其中 **{human_perm} 条含凭据/授权类步骤，永久只能你做**。",
   "brief.banner.backlog_full": "⚠ backlog 已达硬上限 {max} 条，**今天禁止新建任何条目**。跑 `{command}` 清一轮。",
   "brief.banner.late": "⚠ 本次运行比计划（{slot}）晚 {hours} 小时，活动窗口已按实际时刻重算。",
