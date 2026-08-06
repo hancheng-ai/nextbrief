@@ -1956,7 +1956,34 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                         base = rel.strip("/")
                         for m in find_private_paths(Path(root) / rel, gs):
                             private_here.append((base + "/" + m).strip("/") if m else base)
-            excludes = own_ex + [d for d in sorted(set(private_here)) if d not in own_ex]
+            # The engine's own output is not the project's work in progress.
+            #
+            # `walk_project` already hides it from the activity count, for the
+            # reason `engine_output_globs` gives: declaring the workspace as one
+            # of your own projects is supported and suggested by the template, and
+            # leaving the products in makes "the brief ran" read as "the brief
+            # made progress" -- the one project that can never go stale, because
+            # the thing measuring it touches it every night.
+            #
+            # That reasoning never reached git, so the same files came back as
+            # UNCOMMITTED instead. Three consequences, every one of them quiet: a
+            # parked workspace was reported stalled for holding changes the engine
+            # itself wrote; the evidence term read +3 for a repository nobody had
+            # touched; and `check` could never settle, because each run dirtied
+            # the project it had just finished measuring.
+            #
+            # Expressed as exclusions rather than as globs because that is what
+            # git speaks -- `exclude_subpaths` already becomes `:(exclude)` and
+            # already reaches `git status`.
+            engine_ex = []
+            for rel in paths:
+                for glob in engine_output_globs(ws, (Path(root) / rel).resolve()):
+                    trimmed = glob[:-3] if glob.endswith("/**") else glob
+                    engine_ex.append((rel.strip("/") + "/" + trimmed).strip("/"))
+            excludes = (own_ex
+                        + [d for d in engine_ex if d not in own_ex]
+                        + [d for d in sorted(set(private_here))
+                           if d not in own_ex and d not in engine_ex])
             with timer.phase("git_facts"):
                 repos = git_facts(root, paths, as_of, exclude_subpaths=excludes,
                                   toplevel_cache=toplevel_cache,

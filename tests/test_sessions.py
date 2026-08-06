@@ -26,8 +26,11 @@ from helpers import (
     TempCase,
     base_registry,
     capture,
+    git_commit_all,
+    git_init,
     make_snapshot,
     read_jsonl,
+    requires_git,
     set_mtime,
     write_brief_json,
     write_snapshot,
@@ -970,6 +973,69 @@ class CheckSurvivesAnActiveSession(SessionSensingCase):
         self.assertEqual(set(got), {"distinct_session_days", "last_active_date",
                                     "session_files", "transcripts_without_dates",
                                     "records_unattributed"})
+
+
+class TheEngineDoesNotDirtyItsOwnProject(TempCase):
+    """A workspace declared as one of your own projects.
+
+    The registry template suggests exactly that, so a brief nobody reads is
+    eventually reported as neglected by itself. It only works if the nightly
+    run's products stay out of what it measures -- and `walk_project` already
+    hides them from the activity count for that reason.
+
+    Git never got the message. `BRIEF.md`, `BRIEF.html` and `log/` came back as
+    UNCOMMITTED, so the tool reported work in progress that the tool had written,
+    and `check` could not settle: every run dirtied the project it had just
+    measured.
+    """
+
+    @requires_git
+    def test_the_brief_and_logs_are_not_counted_as_uncommitted(self):
+        ws = self.workspace(with_git=False)
+        # The workspace is its own git repository AND a registered project, which
+        # is the configuration the template proposes.
+        git_init(ws)
+        (ws / "README.md").write_text("# pm\n", encoding="utf-8")
+        git_commit_all(ws)
+
+        reg = load_jsonc(str(ws / "registry.jsonc"))
+        reg["defaults"] = dict(reg.get("defaults") or {}, root=".")
+        reg["projects"] = [{"id": "self", "name": "Workspace", "paths": ["."],
+                            "status": "active", "ice": {"impact": 4}}]
+        (ws / "registry.jsonc").write_text(json.dumps(reg, indent=2), encoding="utf-8")
+        git_commit_all(ws)
+
+        # TWO runs, and the second is the one under test.
+        #
+        # `git_facts` runs before the snapshot is written, so on a fresh workspace
+        # the engine's output does not exist yet and the repository is genuinely
+        # clean whatever the exclusion does. The bug only appears from the second
+        # run onward, when `BRIEF.md`, `state/` and `log/` already exist, are
+        # tracked, and get rewritten. A one-run fixture cannot see it -- the first
+        # version of this test was exactly that, and passed with the fix removed.
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        capture(render.main, ["--workspace", str(ws), "--no-notify"])
+        git_commit_all(ws)          # the engine's output is now tracked and clean
+
+        # `render` appends a record to log/runs.jsonl every time, so the second
+        # run genuinely rewrites tracked engine output. Sensing alone would not:
+        # with `--as-of` pinned the snapshot is byte-identical and the write is
+        # skipped, leaving the repository clean and the test unable to fail.
+        code, _, err = capture(render.main, ["--workspace", str(ws), "--no-notify"])
+        self.assertEqual(code, 0, err)
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        me = {p["id"]: p for p in snap["projects"]}.get("self")
+        self.assertIsNotNone(me, "the workspace was not sensed as a project")
+
+        # `sense` has just written state/ and log/ into this repository.
+        self.assertTrue((ws / "state" / "snapshot.json").is_file())
+        dirty = (me.get("git") or [{}])[0].get("uncommitted")
+        self.assertEqual(
+            dirty, 0,
+            "the engine counted its own output as the project's uncommitted work")
 
 
 class TimestampParsing(unittest.TestCase):
