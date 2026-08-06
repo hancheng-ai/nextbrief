@@ -857,6 +857,121 @@ class CollapsingSentinels(SessionSensingCase):
         self.assertEqual(sense.canonical(snap), sense.canonical(other))
 
 
+class CheckSurvivesAnActiveSession(SessionSensingCase):
+    """`check` must not fire because an agent kept working.
+
+    Token counts and the last-active timestamp move on every assistant turn, and
+    they live in `projects[]`, which `canonical()` keeps. So a workspace whose
+    owner uses agent sessions -- the entire audience -- reported "out of date"
+    seconds after every run, permanently. `check || run` degraded to `run`, and
+    `check` stopped being able to say anything at all.
+
+    Sharper than that: running `nextbrief check` from inside an agent session
+    writes to that session's transcript, so the check moved the number it was
+    about to compare. It could not settle even in principle.
+    """
+
+    def _snapshot(self, build, ws=None, store=None):
+        ws = ws or self.workspace()
+        store = store or (self.tmp / "sessions")
+        store.mkdir(exist_ok=True)
+        build(store, ws)
+        cfg = load_jsonc(str(ws / "config.jsonc"))
+        cfg["sessions"] = {"dir": str(store)}
+        (ws / "config.jsonc").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        return json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8")), ws, store
+
+    def test_more_tokens_in_the_same_day_does_not_make_check_dirty(self):
+        """The exact shape of the regression: the session kept going, the day did
+        not change, and nothing a reader sees is different."""
+        def first(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body=TokensPerProject.assistant(
+                                self, DAY_C, ws / "projects" / "orchard", "m1",
+                                inp=100, out=50))
+
+        before, ws, store = self._snapshot(first)
+
+        # The same session, a few turns later: more records, more tokens, same day.
+        d = store / self.slug_for(ws)
+        body = (d / "a.jsonl").read_text(encoding="utf-8")
+        for i in range(2, 6):
+            body += TokensPerProject.assistant(
+                self, DAY_C + 60 * i, ws / "projects" / "orchard", "m%d" % i,
+                inp=9999, out=7777)
+        (d / "a.jsonl").write_text(body, encoding="utf-8")
+        set_mtime(d / "a.jsonl", WRONG_MTIME)
+
+        code, _, err = capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        after = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(after["projects"], "the fixture produced no projects")
+        self.assertEqual(
+            sense.canonical(before), sense.canonical(after),
+            "a session that kept running made `check` report the brief out of date")
+
+    def test_the_tokens_really_did_move(self):
+        """Without this the test above is satisfied by a fixture that changed
+        nothing -- which is how a churn guard quietly stops guarding."""
+        def first(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl",
+                            body=TokensPerProject.assistant(
+                                self, DAY_C, ws / "projects" / "orchard", "m1", out=50))
+
+        before, ws, store = self._snapshot(first)
+        d = store / self.slug_for(ws)
+        (d / "a.jsonl").write_text(
+            (d / "a.jsonl").read_text(encoding="utf-8")
+            + TokensPerProject.assistant(self, DAY_C + 600,
+                                         ws / "projects" / "orchard", "m2", out=4321),
+            encoding="utf-8")
+        set_mtime(d / "a.jsonl", WRONG_MTIME)
+        capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        after = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+
+        def out7(snap):
+            p = {x["id"]: x for x in snap["projects"]}["orchard"]
+            return ((p.get("sessions") or {}).get("tokens") or {}).get("output", {}).get("7")
+
+        self.assertNotEqual(out7(before), out7(after),
+                            "the fixture did not actually add any tokens")
+
+    def test_a_new_day_of_work_still_makes_check_dirty(self):
+        """The other half. Excluding the churning fields must not deafen `check`
+        to a session fact that DOES reach the page -- a day count is printed."""
+        def first(store, ws):
+            self.transcript(store / self.slug_for(ws), "a.jsonl", DAY_A)
+
+        before, ws, store = self._snapshot(first)
+        d = store / self.slug_for(ws)
+        (d / "a.jsonl").write_text(
+            (d / "a.jsonl").read_text(encoding="utf-8") + self.record(DAY_C),
+            encoding="utf-8")
+        set_mtime(d / "a.jsonl", WRONG_MTIME)
+        capture(sense.main, ["--workspace", str(ws), "--as-of", AS_OF])
+        after = json.loads((ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+
+        self.assertNotEqual(
+            sense.canonical(before), sense.canonical(after),
+            "a second day of work went unnoticed by `check`")
+
+    def test_the_day_count_and_date_are_still_compared(self):
+        """Named explicitly, so that widening the exclusion list later has to
+        break a test rather than quietly widen what `check` ignores."""
+        sess = {"distinct_session_days": 3, "last_active_date": "2026-03-14",
+                "last_active": "2026-03-14T09:00:00", "session_files": 2,
+                "tokens": {"output": {"7": 1}}, "transcripts_without_dates": 0,
+                "records_unattributed": 0}
+        got = json.loads(sense.canonical(
+            {"projects": [{"id": "x", "sessions": sess}]}))["projects"][0]["sessions"]
+        self.assertEqual(set(got), {"distinct_session_days", "last_active_date",
+                                    "session_files", "transcripts_without_dates",
+                                    "records_unattributed"})
+
+
 class TimestampParsing(unittest.TestCase):
     """The conversion, in isolation.
 

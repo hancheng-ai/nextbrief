@@ -2400,6 +2400,12 @@ def load_backlog_summary(ws: Workspace) -> List[Dict[str, Any]]:
             "human_confirmed": fm.get("human_confirmed"),
             "source_doc": src.get("doc") if isinstance(src, dict) else None,
             "estimate_min": fm.get("estimate_min"),
+            # Carried so the model can see a suggestion that is already standing
+            # and not make it a second time. Before the brief listed these, a
+            # proposal was write-only in both directions: nobody read it, and the
+            # thing that wrote it could not see it either.
+            "proposed_status": fm.get("proposed_status"),
+            "deferred_until": fm.get("deferred_until"),
         })
     return out
 
@@ -2510,14 +2516,56 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
     }
 
 
+# Session fields that move without anything a reader would notice moving.
+#
+# `check` answers one question -- would re-running change what you READ? -- so
+# what belongs in the comparison is what reaches the page. These two do not:
+#
+#   tokens        magnitudes, and deliberately never printed. 2.4 keeps them off
+#                 the priority axis and out of the digest precisely so nobody
+#                 ranks by them; only the derived `attention` share is visible,
+#                 and that moves when the LEADER changes, which is rare.
+#   last_active   a second-granularity timestamp. The page reads
+#                 `last_active_date`, which stays and still catches a day rolling
+#                 over.
+#
+# They are excluded because they change on every assistant turn. Any workspace
+# whose owner uses agent sessions -- which is the entire audience -- would
+# otherwise report "out of date" seconds after a run, forever. A check that
+# always fires tells you nothing, and `check || run` degrades to `run`.
+#
+# Sharper than that: running `nextbrief check` from inside an agent session
+# writes to that session's transcript, so the check moves the number it is about
+# to compare. It could not settle even in principle.
+CHURNING_SESSION_FIELDS = ("tokens", "last_active")
+
+
 def canonical(snap: Dict[str, Any]) -> str:
     """A generated artifact minus the wall clock, for idempotence comparison.
 
-    Used on both the snapshot and the digest: `run` is the only block either one
+    Used on both the snapshot and the digest: `run` is the block either one
     carries that legitimately differs between two runs of the same inputs.
+
+    `projects[].sessions` is filtered rather than dropped. The day counts and the
+    last-active DATE are exactly the session facts that reach the brief, so they
+    have to stay comparable; it is the continuously-moving magnitudes beside them
+    that must not.
     """
     c = dict(snap)
     c.pop("run", None)
+
+    projects = c.get("projects")
+    if isinstance(projects, list):
+        pruned = []
+        for p in projects:
+            sess = p.get("sessions") if isinstance(p, dict) else None
+            if isinstance(sess, dict) and any(k in sess for k in CHURNING_SESSION_FIELDS):
+                p = dict(p)
+                p["sessions"] = {k: v for k, v in sess.items()
+                                 if k not in CHURNING_SESSION_FIELDS}
+            pruned.append(p)
+        c["projects"] = pruned
+
     return json.dumps(c, ensure_ascii=False, sort_keys=True, indent=2)
 
 
