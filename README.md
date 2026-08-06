@@ -278,6 +278,12 @@ truncations and all:
 | Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page a new con |
 | Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 1 files/7d · 3 active days/30d | **stalled: no next step** |
 
+## Waiting for your confirmation
+> An agent thinks these are finished. It is not allowed to say so, only to suggest it -- so nothing happens until you answer.
+- **NA-0003** Write the getting-started page a new contributor can follow unaided -- proposed: done
+  - why: handbook/getting-started.md now covers all four checklist steps and was last edited 2026-03-12
+  - agree: `nextbrief done NA-0003` · disagree: `nextbrief ok NA-0003` clears the suggestion and leaves it open
+
 ## Awaiting a decision (not procrastination — missing evidence)
 - **Orchard API** — Per-tenant schemas, or stay on a shared schema with a tenant_id column?
   - Evidence that would settle it: p95 query latency per tenant at current row counts, for the ten largest tenants
@@ -475,8 +481,16 @@ nextbrief log [-n N]     show the last few runs
 nextbrief do <id>        open an agent session in the right directory  (-y: don't ask)
 nextbrief show <id>      print one item in full
 nextbrief ok <id>        confirm an item: it is real, and written the way you meant it
-nextbrief done <id>      mark it done          nextbrief drop <id>   drop it
-nextbrief ls             list every open item
+nextbrief done <id>      close it, and record what actually happened
+                         (--summary "<text>", --future-work "<text>" — repeatable)
+nextbrief drop <id>      drop it. The file stays, and so does its git history
+nextbrief defer <id> --until <date|"what you are waiting on">
+                         park it. It comes back into the brief on its own
+                         (--reason "<why>", --cancel to bring it back now)
+nextbrief followup <id>  list a closed item's future work
+                         (--promote N, --all: turn them into backlog items)
+nextbrief closed [proj]  what each project finished, and what it left behind (--full)
+nextbrief ls             list every open item   (--deferred: what is parked, and until when)
 nextbrief prune          list items worth revisiting
 
 nextbrief projects       one line per project: signal, phase, last evidence
@@ -517,10 +531,61 @@ pass over your project documents. You have not nodded at them yet.
 - Not confirming does not delete anything. It only sinks in the ranking over time.
 - `nextbrief drop <id>` if you disagree. The file stays; so does its git history.
 
-`ok` / `done` / `drop` **commit immediately**, and that is not bookkeeping. Gate 3
-diffs backlog files against `git HEAD`. If your `done` is sitting uncommitted in the
-working tree, the gate cannot tell "the owner closed this" from "an agent quietly
-wrote `done`" — and it will revert *your* action.
+`ok` / `done` / `drop` / `defer` **commit immediately**, and that is not bookkeeping.
+Gate 3 diffs backlog files against `git HEAD`. If your `done` is sitting uncommitted
+in the working tree, the gate cannot tell "the owner closed this" from "an agent
+quietly wrote `done`" — and it will revert *your* action.
+
+### Closing an item without losing what it knew
+
+The moment an item stops being open is the moment it carries the most information,
+and the last moment anyone is in a position to say so. `nextbrief done` therefore
+asks two questions, and takes an empty answer to either:
+
+- **`summary`** — what *actually* happened. Frequently not what the title says: an
+  item reading "run 3 probes" whose truth was "migrated all of them" leaves behind
+  a false history if only the status is recorded.
+- **`future_work`** — what closing it turned up that does not belong to it.
+  `nextbrief followup <id> --promote N` turns any entry into a real backlog item
+  carrying `discovered_from` back to where it came from, and writes the new id
+  beside the entry so a follow-up nobody picked up stays visible.
+
+Both land in the item's own file, under a `SECTION:CLOSING` block. There is no new
+store: a closed item stays in `backlog/` forever and is already in git.
+`nextbrief closed [project]` reads them back.
+
+Two questions, not five. A form that costs more than it returns is answered with
+Enter inside a fortnight, and empty fields look like findings.
+
+### Deferring: still true, just not now
+
+`done` and `drop` were the only two ways an item could leave the page, and the
+commonest thing that actually happens to work is neither. Recording "not this
+quarter" as `drop` writes a falsehood somebody has to rebuild later; leaving it
+open keeps it competing for a place it cannot win.
+
+```bash
+nextbrief defer NA-0006 --until 2026-09-01
+nextbrief defer NA-0006 --until "after VirtualTutor ships" --reason "downstream is not ready"
+```
+
+`--until` is required, and that is the safety property: **a deferral that never
+returns is a drop nobody recorded.** A date is taken as the date. Anything else is
+taken as the condition you are waiting on — a perfectly good reason and a useless
+trigger — so the item is given a review date as well (`defer.review_after_days`,
+default 30) and comes back to be looked at again.
+
+Nothing is written to bring it back. The engine reads the date, so a workspace
+nobody ran for a fortnight still shows everything that came due meanwhile, and the
+brief names them the morning they return.
+
+### `proposed_status`: the suggestion an agent is allowed to make
+
+An agent may never move an item into a terminal status. When it believes something
+is finished it writes `proposed_status: done` instead — and the brief lists those
+under **waiting for your confirmation**, with the commands that answer them.
+`done` or `drop` agrees; `ok` disagrees and clears the suggestion. Either way the
+field is cleared, so the brief asks once rather than every morning.
 
 ## Configuration
 

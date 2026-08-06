@@ -167,14 +167,24 @@ the attempt.
 | an agent may write | an agent may not write |
 |---|---|
 | `updated_date` | `priority`, `is_next_action` |
-| `status: open ↔ waiting` | `status: done`, `status: dropped` |
+| `status: open ↔ waiting` | `status: done`, `dropped`, `deferred` |
 | `proposed_status` (a suggestion) | `human_confirmed` |
 | the notes section | acceptance-criteria checkboxes |
 
-The prohibition on terminal statuses is the load-bearing one. A missed item
-resurfaces tomorrow; a falsely closed item never resurfaces at all, and you stop
-looking for it. Nothing automated may close anything — it may only propose, and
-a human confirms.
+The prohibition on statuses that take an item off the page is the load-bearing
+one. A missed item resurfaces tomorrow; a falsely closed item never resurfaces at
+all, and you stop looking for it. `deferred` is in that list for the same reason
+and not because it is terminal — it is not — but because parking something has
+the same effect on the reader, in a word that does not look like a closure.
+Nothing automated may take an item off the page; it may only propose, and a human
+confirms.
+
+`proposed_status` is the proposal channel, and until 0.2.0 nothing read it: the
+prompt asked for restraint and the restraint went into a file nobody reopened, so
+the safe action and the silent one were the same action. The renderer now
+collects standing proposals into a **waiting for your confirmation** section in
+both artifacts, with the commands that answer them, and `nextbrief done` / `drop`
+/ `ok` clear the field — so the question is asked once rather than every morning.
 
 Because the baseline is `git HEAD`, human edits must be committed as they are
 made. Otherwise the gate cannot tell "the owner marked this done" from "an agent

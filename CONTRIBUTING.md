@@ -162,10 +162,19 @@ strains one, say so in the PR rather than working around it quietly.
    [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains why at length. Do not
    move a check from the renderer into the prompt to make output prettier.
 
-4. **No agent sets a terminal status.** Nothing automated may write `done` or
-   `dropped`. It may write `proposed_status`, which a human confirms. A false
-   completion is far more expensive than a missed one, because the missed one
-   comes back tomorrow and the false one never does.
+4. **No agent takes an item off the page.** Nothing automated may write `done`,
+   `dropped` or `deferred`. It may write `proposed_status`, which a human
+   confirms. A false completion is far more expensive than a missed one, because
+   the missed one comes back tomorrow and the false one never does — and parking
+   an item has the same effect on the reader as closing it, in a word that does
+   not look like a closure.
+
+   The other half of that rule is newer and just as load-bearing: **a proposal
+   channel nothing reads is worse than no channel at all**, because the safe
+   action becomes the silent one. `proposed_status` is collected into the brief's
+   "waiting for your confirmation" section and cleared when a human answers. If
+   you add another thing an agent may only *suggest*, put the reader-facing half
+   in the same commit.
 
 5. **The engine writes nothing outside the workspace.** It reads your projects;
    it writes only its own directory. This is what makes it safe to point at

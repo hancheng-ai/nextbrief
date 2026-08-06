@@ -56,11 +56,18 @@ def build_once():
     (work / "scripts").mkdir()
     shutil.copytree(REPO_ROOT / "src" / "nextbrief", work / "src" / "nextbrief")
     shutil.copy2(BUILD_SCRIPT, work / "scripts" / BUILD_SCRIPT.name)
+    # Scrubbed here as well as inside the script, because this runs from
+    # setUpClass -- before TempCase.setUp has redirected anything -- and so
+    # inherits the developer's real environment. A machine that exports
+    # NEXTBRIEF_OUT had its own BRIEF.md overwritten by this test, which is the
+    # one thing a build is never allowed to touch.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("NEXTBRIEF_")}
+    env["PYTHON"] = sys.executable
     proc = subprocess.run(
         ["bash", str(work / "scripts" / BUILD_SCRIPT.name)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env=dict(os.environ, PYTHON=sys.executable),
+        env=env,
         timeout=600,
     )
     _BUILT["path"] = work / "dist" / "nextbrief.pyz"

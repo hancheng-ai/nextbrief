@@ -50,6 +50,20 @@ from .frontmatter import parse_frontmatter
 from .fs import rewrite_fields, write_outside_workspace, write_text
 from .i18n import Catalog, load_catalog
 from .inventory import INVENTORY_NAME
+from .items import (
+    DEFERRED,
+    Closing,
+    FutureWork,
+    days_until_due,
+    is_live,
+    is_parked,
+    new_item_text,
+    next_item_id,
+    parse_closing,
+    record_promotion,
+    slug,
+    upsert_closing,
+)
 from .jsonc import JSONCError, load_jsonc
 from .launch import LaunchError, build_context, tr
 from .paths import ENV_OUT, ENV_WORKSPACE, Workspace, WorkspaceError, expand, resolve_workspace
@@ -62,8 +76,6 @@ ENV_AGENT = "NEXTBRIEF_AGENT"
 EXIT_OK = 0
 EXIT_FAIL = 1
 EXIT_USAGE = 2
-
-OPEN_STATUSES = ("open", "waiting", "in_progress")
 
 DESCRIPTION = """\
 A daily brief across every project you own, where every claim is checked
@@ -83,8 +95,11 @@ commands:
   do <id>      open an agent session in the right directory, context already loaded
   show <id>    print one item in full
   ok <id>      confirm an item: it is real, and written the way you meant it
-  done <id>    mark it done
+  done <id>    close it, and record what actually happened
   drop <id>    drop it (the file stays, and so does its git history)
+  defer <id>   park it until a date; it comes back on its own
+  followup     turn a closed item's future work into backlog items
+  closed       what each project has finished, and what it left behind
   ls           list every open item
   prune        list items worth revisiting, with what to do about them
 
@@ -350,6 +365,21 @@ def _commit_human(ws: Workspace, path: Path, action: str, item_id: str) -> bool:
     return True
 
 
+def _durability_problem(ws: Workspace) -> Tuple[Optional[str], Optional[str]]:
+    """``(gap, error)`` -- whether this edit can be made to stick, asked BEFORE
+    anything is written or anybody is prompted.
+
+    A gap is "there is no baseline, so nothing will revert this either"; an error
+    is "git is here but cannot commit under your name", which means the next run
+    would undo whatever we write. Split out of ``_mark`` so a command that asks
+    questions can find out it is doomed before it asks them.
+    """
+    gap = _baseline_gap(ws)
+    if gap is not None:
+        return gap, None
+    return None, _identity_problem(ws)
+
+
 def _mark(
     ws: Workspace,
     cat: Optional[Catalog],
@@ -357,7 +387,16 @@ def _mark(
     fields: Dict[str, Any],
     action: str,
     message: str,
+    body: Any = None,
 ) -> int:
+    """Write frontmatter fields (and optionally rewrite the body), then commit.
+
+    ``body`` is a callable taking the file's current text and returning its
+    replacement. It runs inside the same write-then-commit sequence as the
+    fields, so a closing record and the ``status: done`` that occasions it land
+    in one commit -- two commits would mean a window in which the item is closed
+    and the reason is not yet in the baseline.
+    """
     path = _find_item(ws, item_id, cat)
     if path is None:
         return EXIT_FAIL
@@ -365,16 +404,36 @@ def _mark(
     # Order matters: check that the edit can be made durable before making it. A
     # written-but-uncommitted field is reverted by the next run, so writing first
     # and discovering the problem afterwards destroys the user's own action.
-    gap = _baseline_gap(ws)
-    if gap is None:
-        problem = _identity_problem(ws)
-        if problem is not None:
-            _err(problem)
-            return EXIT_FAIL
+    gap, problem = _durability_problem(ws)
+    if problem is not None:
+        _err(problem)
+        return EXIT_FAIL
 
     fields = dict(fields)
     fields["updated_date"] = dt.date.today().isoformat()
+    # An agent's proposal has now been answered, whichever way. Left standing it
+    # would be re-asked every morning forever, and a question that survives its
+    # own answer trains people to ignore the section it lives in. Only written
+    # when the field is actually there, so the common case does not accumulate a
+    # `proposed_status: null` line on every item anyone ever touches.
     try:
+        current, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError:
+        current = None
+    if current and current.get("proposed_status"):
+        fields["proposed_status"] = None
+
+    # Never append a null. Clearing a field the file does not have would write
+    # `deferred_when: null` onto every item anyone ever touches -- frontmatter
+    # that documents nothing except which commands have been run on it.
+    fields = {k: v for k, v in fields.items()
+              if v is not None or (current or {}).get(k) is not None}
+
+    try:
+        if body is not None:
+            edited = body(path.read_text(encoding="utf-8"))
+            if edited is not None:
+                write_text(ws, path, edited, skip_identical=True)
         rewrite_fields(ws, path, fields)
     except OSError as exc:
         _err("error: cannot write %s: %s" % (path, exc))
@@ -396,20 +455,30 @@ def _mark(
 Row = Tuple[int, int, str, str, str, bool, str]
 
 
-def _open_entries(ws: Workspace) -> List[Tuple[Path, Dict[str, Any]]]:
-    """Frontmatter of every item that is still live, in filename order."""
+def _all_entries(ws: Workspace) -> List[Tuple[Path, Dict[str, Any]]]:
+    """Frontmatter of every readable backlog item, in filename order."""
     entries: List[Tuple[Path, Dict[str, Any]]] = []
     for path in sorted(ws.backlog.glob("*.md")):
         try:
             fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
         except OSError:
             continue
-        if not fm:
-            continue
-        if str(fm.get("status") or "") not in OPEN_STATUSES:
-            continue
-        entries.append((path, fm))
+        if fm:
+            entries.append((path, fm))
     return entries
+
+
+def _open_entries(ws: Workspace) -> List[Tuple[Path, Dict[str, Any]]]:
+    """Frontmatter of every item that is still live, in filename order.
+
+    Through ``is_live``, so a deferred item is back the day it comes due without
+    anything having been written to bring it back. That matters most for the
+    command that never runs: `prune` walks this list, and an item parked until
+    November must not be selected for decay in the meantime -- it is not
+    forgotten, it is scheduled.
+    """
+    today = dt.date.today()
+    return [(path, fm) for path, fm in _all_entries(ws) if is_live(fm, today)]
 
 
 def _age_days(fm: Dict[str, Any], today: dt.date) -> Optional[int]:
@@ -726,7 +795,88 @@ def cmd_ok(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
     )
 
 
+def _ask_closing(args: argparse.Namespace, cat: Optional[Catalog]) -> Optional[Closing]:
+    """The two questions asked when an item is closed, or None to record nothing.
+
+    ★ Exactly two, and both skippable. ★
+
+    Two, because the count is the design. Every extra field is one more thing
+    between a person and the command they came to type, and a form that costs
+    more than it returns is answered with Enter within a fortnight -- at which
+    point it is worse than not asking, because the empty fields look like
+    findings. `summary` and `future_work` are here because a real week produced
+    an item whose title said "run 3 probes" and whose truth was "migrated all of
+    them", and another that uncovered work with nowhere to go.
+
+    Skippable, because a prompt you cannot escape is trained into a reflex.
+    Nothing here refuses; nothing here retries.
+
+    Asked only at a terminal. `nextbrief done X` inside a script must not block
+    on a question nobody will ever see, so a non-tty run records whatever the
+    flags supplied and nothing else.
+    """
+    today = dt.date.today().isoformat()
+
+    def record():
+        if not summary and not future:
+            return None
+        return Closing(today, summary, [FutureWork(t, None) for t in future])
+
+    summary = (getattr(args, "summary", None) or "").strip()
+    future = [t.strip() for t in (getattr(args, "future_work", None) or []) if t.strip()]
+    # Flags win outright: someone who typed the answer is not asked it again.
+    if summary or future or not sys.stdin.isatty():
+        return record()
+
+    print()
+    print("  " + tr(cat, "cli.done.ask_summary",
+                    "What actually happened? One line -- especially anything the "
+                    "item did not say. Enter to skip."))
+    try:
+        summary = input("  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return record()
+
+    print()
+    print("  " + tr(cat, "cli.done.ask_future",
+                    "Anything this turned up that does not belong to it? One per "
+                    "line, Enter on an empty line to finish."))
+    while True:
+        try:
+            line = input("  - ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not line:
+            break
+        future.append(line)
+    return record()
+
+
 def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Close an item, and take delivery of what it knows on the way out.
+
+    The questions come after the durability check and before the write, so a
+    workspace that cannot commit says so without first asking two questions it
+    is about to throw away.
+    """
+    if _find_item(ws, args.item_id, cat) is None:
+        return EXIT_FAIL
+    _gap, problem = _durability_problem(ws)
+    if problem is not None:
+        _err(problem)
+        return EXIT_FAIL
+
+    closing = _ask_closing(args, cat)
+    message = tr(cat, "cli.done.done", "{id} -> done", id=args.item_id)
+    if closing is not None and closing.future_work:
+        message += "\n" + tr(
+            cat, "cli.done.future_hint",
+            "{n} follow-up(s) recorded. `nextbrief followup {id}` turns them into "
+            "backlog items, each carrying discovered_from: {id}.",
+            n=len(closing.future_work), id=args.item_id)
+
     # human_confirmed rides along: closing an item is the strongest possible
     # statement that it was real and worded the way you meant.
     return _mark(
@@ -735,7 +885,8 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
         args.item_id,
         {"status": "done", "human_confirmed": True},
         "done",
-        tr(cat, "cli.done.done", "{id} -> done", id=args.item_id),
+        message,
+        body=None if closing is None else (lambda text: upsert_closing(text, closing)),
     )
 
 
@@ -753,6 +904,300 @@ def cmd_drop(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
             id=args.item_id,
         ),
     )
+
+
+# How long a defer with no date on it may last before the item comes back to be
+# looked at again. Repeated from the shipped config for the same reason every
+# other default here is: a missing key must not turn a scheduled return into a
+# permanent one.
+_REVIEW_AFTER_DAYS = 30
+
+
+def _review_after_days(cfg: Dict[str, Any]) -> int:
+    block = cfg.get("defer")
+    block = block if isinstance(block, dict) else {}
+    try:
+        return max(1, int(block.get("review_after_days", _REVIEW_AFTER_DAYS)))
+    except (TypeError, ValueError):
+        return _REVIEW_AFTER_DAYS
+
+
+def cmd_defer(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Park an item until a date. It comes back on its own.
+
+    ★ The missing verb. ★
+
+    `done` and `drop` are the only two ways an item could stop being on the page,
+    and the most common thing that actually happens to work is neither: it is
+    still real, still worth doing, and not now. Recording that as `drop` writes a
+    falsehood somebody has to rebuild later; leaving it open keeps it competing
+    for the top of a list it cannot win.
+
+    `--until` is required, and that is the whole safety property: **a deferral
+    with no return date is a quiet abandonment**, which is the outcome this
+    command exists to make impossible. A date is taken as the date. Anything else
+    is taken as the condition you are waiting on -- "VirtualTutor ships" is a
+    perfectly good reason and a useless trigger -- and the item is given a review
+    date anyway, so the condition is what you read and the date is what brings it
+    back.
+
+    Nothing writes the item open again when the day comes; `items.is_live` reads
+    the date. A workspace nobody ran for a fortnight still shows everything that
+    came due during it.
+    """
+    item_id = args.item_id
+    today = dt.date.today()
+
+    if getattr(args, "cancel", False):
+        path = _find_item(ws, item_id, cat)
+        if path is None:
+            return EXIT_FAIL
+        fm, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        if str((fm or {}).get("status") or "").lower() != DEFERRED:
+            _err(tr(cat, "cli.defer.not_deferred",
+                    "{id} is not deferred, so there is nothing to cancel.", id=item_id))
+            return EXIT_FAIL
+        return _mark(
+            ws, cat, item_id,
+            {"status": "open", "deferred_until": None,
+             "deferred_when": None, "deferred_because": None},
+            "undefer",
+            tr(cat, "cli.defer.cancelled", "{id} -> open again, no longer deferred.",
+               id=item_id),
+        )
+
+    until = (getattr(args, "until", None) or "").strip()
+    if not until:
+        _err(tr(cat, "cli.defer.needs_until",
+                "defer needs --until: a date (2026-09-01) or what you are waiting "
+                "on (\"after VirtualTutor ships\"). A deferral that never comes "
+                "back is a drop with better manners, so this one is not optional."))
+        return EXIT_USAGE
+
+    fields: Dict[str, Any] = {"status": DEFERRED, "human_confirmed": True,
+                              "deferred_when": None}
+    if _looks_like_date(until):
+        due = dt.date.fromisoformat(until.strip())
+        fields["deferred_until"] = due.isoformat()
+        message = tr(cat, "cli.defer.until_date",
+                     "{id} -> deferred until {date}. It comes back into the brief "
+                     "that morning, on its own.", id=item_id, date=due.isoformat())
+    else:
+        # A condition cannot fire, so it gets a date as well. Both are kept: the
+        # condition is what the reader needs to understand the deferral, the date
+        # is the only part a machine can act on, and collapsing them would lose
+        # whichever one you did not keep.
+        days = _review_after_days(_load_config(ws))
+        due = today + dt.timedelta(days=days)
+        fields["deferred_until"] = due.isoformat()
+        fields["deferred_when"] = until
+        message = tr(cat, "cli.defer.until_condition",
+                     "{id} -> deferred until: {when}. Nothing can watch for that, "
+                     "so it also comes back on {date} ({days} days) to be looked "
+                     "at again.", id=item_id, when=until, date=due.isoformat(), days=days)
+
+    reason = (getattr(args, "reason", None) or "").strip()
+    if reason:
+        fields["deferred_because"] = reason
+    if due < today:
+        _err(tr(cat, "cli.defer.past_date",
+                "note: {date} is in the past, so {id} is deferred and immediately "
+                "due -- it stays in the brief.", date=due.isoformat(), id=item_id))
+
+    return _mark(ws, cat, item_id, fields, "defer", message)
+
+
+# ---------------------------------------------------------------------------
+# what a closed item left behind
+# ---------------------------------------------------------------------------
+
+
+def _closed_entries(ws: Workspace, project: Optional[str] = None):
+    """``(path, frontmatter, closing)`` for every done item, newest first.
+
+    No new store, which was the constraint and is also the point: a done item's
+    file stays in ``backlog/`` forever and is already under version control, so
+    the record was never missing a home -- only a reader.
+    """
+    rows = []
+    for path in sorted(ws.backlog.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm, _body = parse_frontmatter(text)
+        if not fm or str(fm.get("status") or "").lower() != "done":
+            continue
+        if project and str(fm.get("project") or "") != project:
+            continue
+        rows.append((path, fm, parse_closing(text)))
+    rows.sort(key=lambda r: (str((r[2].closed_on if r[2] else "")
+                                 or r[1].get("updated_date") or ""),
+                             str(r[1].get("id") or "")), reverse=True)
+    return rows
+
+
+def cmd_closed(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """What each project has finished, and what it left behind."""
+    project = (getattr(args, "project", None) or "").strip() or None
+    rows = _closed_entries(ws, project)
+    if not rows:
+        print(tr(cat, "cli.closed.empty",
+                 "Nothing closed yet{scope}.",
+                 scope=(" in %s" % project) if project else ""))
+        return EXIT_OK
+
+    by_project: Dict[str, List[Any]] = {}
+    for row in rows:
+        by_project.setdefault(str(row[1].get("project") or "-"), []).append(row)
+
+    no_record = 0
+    follow_ups = 0
+    unpromoted = 0
+    for name in sorted(by_project):
+        print()
+        print("== %s ==" % name)
+        for _path, fm, closing in by_project[name]:
+            when = str((closing.closed_on if closing else "")
+                       or fm.get("updated_date") or "")
+            print("  %s  %s  %s" % (fm.get("id"), when or "-", fm.get("title") or ""))
+            if closing is None or not closing.summary:
+                no_record += 1
+                print("     " + tr(cat, "cli.closed.no_summary",
+                                   "(no closing record)"))
+            else:
+                body = closing.summary if getattr(args, "full", False) \
+                    else closing.summary.split("\n")[0]
+                for line in body.split("\n"):
+                    print("     " + line)
+            for entry in (closing.future_work if closing else []):
+                follow_ups += 1
+                if entry.promoted_to:
+                    print("     -> %s  %s" % (entry.promoted_to, entry.text))
+                else:
+                    unpromoted += 1
+                    print("     -  %s" % entry.text)
+
+    print()
+    print(tr(cat, "cli.closed.footer",
+             "{n} closed item(s); {blank} with no record of what happened; "
+             "{fw} piece(s) of future work, {open} still not turned into items.",
+             n=len(rows), blank=no_record, fw=follow_ups, open=unpromoted))
+    if unpromoted:
+        print(tr(cat, "cli.closed.how",
+                 "nextbrief followup <id> turns those into backlog items."))
+    return EXIT_OK
+
+
+def cmd_followup(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Turn a closed item's future work into backlog items of its own.
+
+    ★ Without this, `future_work` is another `proposed_status`. ★
+
+    A list of follow-ups inside a file nobody reopens is a list that decays into
+    prose, and the whole reason the field exists is that the alternative -- one
+    person remembering -- had already failed. So promotion has to be one command,
+    and the new item has to carry ``discovered_from`` back to where it came from:
+    that edge is what makes an incidental finding traceable to the work that
+    turned it up, rather than a task with no story.
+
+    Listing is the default and promoting takes a flag, because minting backlog
+    entries is the kind of thing that should never happen because somebody typed
+    a command to have a look.
+    """
+    path = _find_item(ws, args.item_id, cat)
+    if path is None:
+        return EXIT_FAIL
+    text = path.read_text(encoding="utf-8")
+    fm, _body = parse_frontmatter(text)
+    closing = parse_closing(text)
+    if closing is None or not closing.future_work:
+        print(tr(cat, "cli.followup.none",
+                 "{id} has no future work recorded.", id=args.item_id))
+        return EXIT_OK
+
+    wanted: List[int] = []
+    if getattr(args, "all", False):
+        wanted = list(range(len(closing.future_work)))
+    else:
+        for raw in (getattr(args, "promote", None) or []):
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                _err(tr(cat, "cli.followup.not_a_number",
+                        "{value} is not one of the numbers below.", value=raw))
+                return EXIT_USAGE
+            if not 1 <= n <= len(closing.future_work):
+                _err(tr(cat, "cli.followup.out_of_range",
+                        "There is no #{n} -- {id} has {total}.",
+                        n=n, id=args.item_id, total=len(closing.future_work)))
+                return EXIT_USAGE
+            wanted.append(n - 1)
+
+    if not wanted:
+        print(tr(cat, "cli.followup.header",
+                 "Future work recorded when {id} was closed:", id=args.item_id))
+        for i, entry in enumerate(closing.future_work, 1):
+            mark = ("-> %s" % entry.promoted_to) if entry.promoted_to else "  ."
+            print("  %d) %s  %s" % (i, mark, entry.text))
+        print()
+        print(tr(cat, "cli.followup.how",
+                 "nextbrief followup {id} --promote <n>  ·  --all for every one "
+                 "not already promoted.", id=args.item_id))
+        return EXIT_OK
+
+    gap, problem = _durability_problem(ws)
+    if problem is not None:
+        _err(problem)
+        return EXIT_FAIL
+    if gap is not None:
+        _err(gap)
+
+    today = dt.date.today().isoformat()
+    known = [str(fm2.get("id") or "") for _p, fm2 in _all_entries(ws)]
+    made: List[Tuple[str, str]] = []
+    for index in wanted:
+        entry = closing.future_work[index]
+        if entry.promoted_to:
+            print(tr(cat, "cli.followup.already",
+                     "#{n} is already {other}; leaving it alone.",
+                     n=index + 1, other=entry.promoted_to))
+            continue
+        new_id = next_item_id(known, str(fm.get("id") or args.item_id))
+        known.append(new_id)
+        new_path = ws.backlog / ("%s-%s.md" % (new_id, slug(entry.text)))
+        try:
+            write_text(ws, new_path, new_item_text(
+                new_id, entry.text, str(fm.get("project") or ""),
+                str(fm.get("id") or args.item_id), today, source_note=path.name))
+        except OSError as exc:
+            _err("error: cannot write %s: %s" % (new_path, exc))
+            return EXIT_FAIL
+        # The edge is recorded on both sides before the next one is minted, so an
+        # interrupted run leaves a backlog that is still true rather than a new
+        # item nothing points at.
+        text = record_promotion(text, index, new_id)
+        try:
+            write_text(ws, path, text)
+        except OSError as exc:
+            _err("error: cannot write %s: %s" % (path, exc))
+            return EXIT_FAIL
+        made.append((new_id, entry.text))
+        if gap is None:
+            if not _commit_human(ws, new_path, "add", new_id):
+                return EXIT_FAIL
+            if not _commit_human(ws, path, "promote %s from" % new_id,
+                                 str(fm.get("id") or "")):
+                return EXIT_FAIL
+
+    if not made:
+        return EXIT_OK
+    for new_id, what in made:
+        print(tr(cat, "cli.followup.made", "{id}  {title}", id=new_id, title=what))
+    print(tr(cat, "cli.followup.made_footer",
+             "{n} new item(s), each carrying discovered_from: {src}.",
+             n=len(made), src=fm.get("id") or args.item_id))
+    return EXIT_OK
 
 
 def _width(text: str) -> int:
@@ -812,14 +1257,57 @@ def _print_rows(rows: Sequence[Tuple[Any, ...]], cat: Optional[Catalog]) -> None
         print(" ".join(_pad(c, w) for c, w in zip(cells, widths)) + " " + _pad(title, 40).rstrip())
 
 
+def _parked_entries(ws: Workspace, today: dt.date):
+    """Deferred items that are not due yet, soonest first."""
+    parked = [(path, fm) for path, fm in _all_entries(ws) if is_parked(fm, today)]
+    parked.sort(key=lambda pair: (str(pair[1].get("deferred_until") or ""),
+                                  str(pair[1].get("id") or "")))
+    return parked
+
+
 def cmd_ls(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    today = dt.date.today()
+    parked = _parked_entries(ws, today)
+
+    if getattr(args, "deferred", False):
+        # A separate view rather than a column on the main table. These items are
+        # deliberately not on your list today; mixing them in would undo the one
+        # thing deferring them accomplished.
+        if not parked:
+            print(tr(cat, "cli.ls.no_parked", "Nothing is deferred."))
+            return EXIT_OK
+        for _path, fm in parked:
+            days = days_until_due(fm, today)
+            print("  %s  %s  %s" % (fm.get("id"), fm.get("deferred_until") or "?",
+                                    fm.get("title") or ""))
+            detail = []
+            if fm.get("deferred_when"):
+                detail.append(tr(cat, "cli.ls.parked_when", "waiting on: {what}",
+                                 what=fm["deferred_when"]))
+            if fm.get("deferred_because"):
+                detail.append(tr(cat, "cli.ls.parked_because", "because: {why}",
+                                 why=fm["deferred_because"]))
+            if days is not None:
+                detail.append(tr(cat, "cli.ls.parked_in", "back in {n} day(s)", n=days))
+            if detail:
+                print("     " + (cat.t("sep.dot") if cat else " | ").join(detail))
+        return EXIT_OK
+
     rows = _open_rows(ws)
     if not rows:
         print(tr(cat, "cli.ls.empty", "Nothing open in the backlog."))
+        if parked:
+            print(tr(cat, "cli.ls.parked",
+                     "{n} item(s) deferred and not due yet -- nextbrief ls --deferred",
+                     n=len(parked)))
         return EXIT_OK
     _print_rows(rows, cat)
     unconfirmed = sum(1 for r in rows if not r[5])
     print()
+    if parked:
+        print(tr(cat, "cli.ls.parked",
+                 "{n} item(s) deferred and not due yet -- nextbrief ls --deferred",
+                 n=len(parked)))
     if unconfirmed:
         print(
             tr(
@@ -1685,6 +2173,9 @@ _HANDLERS = {
     "ok": cmd_ok,
     "done": cmd_done,
     "drop": cmd_drop,
+    "defer": cmd_defer,
+    "followup": cmd_followup,
+    "closed": cmd_closed,
     "ls": cmd_ls,
     "prune": cmd_prune,
     "permissions": cmd_permissions,
@@ -1769,13 +2260,39 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (
         ("show", "print one item in full"),
         ("ok", "confirm an item"),
-        ("done", "mark an item done"),
         ("drop", "drop an item"),
     ):
         p = add(name, help_text)
         p.add_argument("item_id", metavar="<id>")
 
-    add("ls", "list open items")
+    p = add("done", "close an item and record what happened")
+    p.add_argument("item_id", metavar="<id>")
+    p.add_argument("--summary", metavar="TEXT",
+                   help="what actually happened, especially where it differed from the item")
+    p.add_argument("--future-work", dest="future_work", metavar="TEXT", action="append",
+                   help="something this turned up that does not belong to it; repeatable")
+
+    p = add("defer", "park an item until a date")
+    p.add_argument("item_id", metavar="<id>")
+    p.add_argument("--until", metavar="DATE|TEXT",
+                   help="a date (2026-09-01), or what you are waiting on")
+    p.add_argument("--reason", metavar="TEXT", help="why it is being put off")
+    p.add_argument("--cancel", action="store_true",
+                   help="bring it back now instead of on its date")
+
+    p = add("followup", "promote a closed item's future work")
+    p.add_argument("item_id", metavar="<id>")
+    p.add_argument("--promote", metavar="N", action="append",
+                   help="turn entry N into a backlog item; repeatable")
+    p.add_argument("--all", action="store_true", help="promote every entry not already promoted")
+
+    p = add("closed", "what each project finished, and what it left behind")
+    p.add_argument("project", nargs="?", help="one project id, as `nextbrief projects` lists it")
+    p.add_argument("--full", action="store_true", help="print whole summaries, not first lines")
+
+    p = add("ls", "list open items")
+    p.add_argument("--deferred", action="store_true",
+                   help="list what is parked and when it comes back, instead")
     add("prune", "list items worth revisiting")
 
     add("projects", "one line per project")

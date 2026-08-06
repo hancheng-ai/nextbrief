@@ -207,6 +207,12 @@ formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`]
 | Tidepool Docs | 🌤 warm | 2 files/7d · 4 active days/30d · *file timestamps; no git in this repo* | `NA-0003` Write the getting-started page a new con |
 | Beacon Portal | 🔥 hot | 3 commits/30d · last commit 2026-03-13 · 1 files/7d · 3 active days/30d | **stalled: no next step** |
 
+## Waiting for your confirmation
+> An agent thinks these are finished. It is not allowed to say so, only to suggest it -- so nothing happens until you answer.
+- **NA-0003** Write the getting-started page a new contributor can follow unaided -- proposed: done
+  - why: handbook/getting-started.md now covers all four checklist steps and was last edited 2026-03-12
+  - agree: `nextbrief done NA-0003` · disagree: `nextbrief ok NA-0003` clears the suggestion and leaves it open
+
 ## Awaiting a decision (not procrastination — missing evidence)
 - **Orchard API** — Per-tenant schemas, or stay on a shared schema with a tenant_id column?
   - Evidence that would settle it: p95 query latency per tenant at current row counts, for the ten largest tenants
@@ -351,8 +357,16 @@ nextbrief log [-n N]     看最近几次运行
 nextbrief do <id>        在对的目录里开一个带好上下文的会话   （-y：不问直接用）
 nextbrief show <id>      看某条的全文
 nextbrief ok <id>        确认：这条是真的、按我的意思写的
-nextbrief done <id>      完成            nextbrief drop <id>   弃掉
-nextbrief ls             列出所有在办条目
+nextbrief done <id>      结项，并记下实际发生了什么
+                         （--summary "<文字>"、--future-work "<文字>"，后者可重复）
+nextbrief drop <id>      弃掉。文件还在，git 历史也还在
+nextbrief defer <id> --until <日期|"你在等的那件事">
+                         延后。到期那天它会自己回到简报里
+                         （--reason "<为什么>"、--cancel 立刻取回）
+nextbrief followup <id>  列出一条已结项条目留下的 future work
+                         （--promote N、--all：一键提成 backlog 条目）
+nextbrief closed [项目]  每个项目做完了什么、又留下了什么（--full）
+nextbrief ls             列出所有在办条目   （--deferred：看什么被延后了、延到哪天）
 nextbrief prune          列出值得回头看看的条目
 
 nextbrief projects       每个项目一行：信号、阶段、最近一次证据
@@ -387,7 +401,35 @@ nextbrief init [dir]     创建 workspace   （-y、--no-scan）
 - 不确认也不会消失，只是排序会随时间下沉。
 - 不认可就 `nextbrief drop <id>`。文件还在，git 历史也还在。
 
-`ok` / `done` / `drop` 都会**立刻提交一条 git 记录**，这不只是为了留档：第 3 道闸门拿 `git HEAD` 做基线比对，你的 `done` 如果还躺在工作区没提交，闸门就分不清「主人关掉了这条」和「agent 偷偷写了 done」——然后它会把**你自己的操作**回滚掉。
+`ok` / `done` / `drop` / `defer` 都会**立刻提交一条 git 记录**，这不只是为了留档：第 3 道闸门拿 `git HEAD` 做基线比对，你的 `done` 如果还躺在工作区没提交，闸门就分不清「主人关掉了这条」和「agent 偷偷写了 done」——然后它会把**你自己的操作**回滚掉。
+
+### 关掉一条 item 时，别把它知道的东西一起扔了
+
+一条 item 关掉的那一刻，是它携带的信息最多、也**最后一次能被问到**的时刻。所以 `nextbrief done` 会问两个问题，两个都允许留空：
+
+- **`summary`**——**实际**做了什么。这经常和标题不是一回事：一条写着「跑 3 篇探针」、实际却全量迁完了的条目，只记一个状态，日后读到的就是一段**假的历史**。
+- **`future_work`**——关掉它时看见的、但不属于它的活。`nextbrief followup <id> --promote N` 能把其中任意一条提成真正的 backlog 条目，自动带上指回来处的 `discovered_from`，并把新 id 写回原条目旁边——**没人捡起来的那条，因此仍然看得见**。
+
+两者都写进这条 item 自己的文件里，放在 `SECTION:CLOSING` 区块。**不新建存储**：已结项的文件本来就永远留在 `backlog/`，本来就在 git 里。用 `nextbrief closed [项目]` 读回来。
+
+只问两项，不问五项。**一份成本高过回报的表单，两周之内就会被训练成回车**——而空着的字段看起来像是「查过了，没有」。
+
+### 延后：还是真的，只是现在不做
+
+以前一条 item 只有 `done` 和 `drop` 两个出口，而现实中最常发生的状态变化两个都不是。把「这季度不做」记成 `drop`，是写下一句日后还得推翻的假话；留着不动，它就继续在一份自己赢不了的列表里占位。
+
+```bash
+nextbrief defer NA-0006 --until 2026-09-01
+nextbrief defer NA-0006 --until "等 VirtualTutor 上线" --reason "下游还用不上"
+```
+
+`--until` 是必填的，这正是它的安全性所在：**一个不会自己回来的延后，就是一次没人记录的放弃。** 是日期就按日期算；不是日期，就当成你在等的那个条件——理由很好，但机器盯不住——于是同时给它一个复审日期（`defer.review_after_days`，默认 30 天），到点回来让你再看一眼。
+
+**没有任何东西需要写一笔来把它唤回。** 引擎读的是那个日期，所以哪怕两周没跑过，期间到期的每一条都会出现；到期那天早上，简报会点名说它回来了。
+
+### `proposed_status`：agent 唯一被允许做的那种提议
+
+agent 永远不能把条目改成终态。它认为某件事做完了，就写 `proposed_status: done`——**而简报会把这些列在「等你确认」一栏里**，附上回答用的命令。`done` / `drop` 是同意，`ok` 是不同意并撤掉提议。无论哪种，字段都会被清掉，所以这个问题**只问一次**，不会每天早上重问。
 
 ## 配置
 

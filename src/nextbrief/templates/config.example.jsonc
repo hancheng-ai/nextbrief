@@ -124,6 +124,15 @@
     }
   },
 
+  "defer": {
+    // `nextbrief defer <id> --until ...` takes either a date or the thing you are
+    // waiting on. A condition cannot fire, so an item deferred on one is given a
+    // date as well and comes back after this many days to be looked at again.
+    // There is no "off": a deferral that never returns is a drop nobody recorded,
+    // and that is the one outcome the command exists to prevent.
+    "review_after_days": 30
+  },
+
   "automation": {
     // Three rungs: explore (agent probes) -> skill (reusable, still judged by a model)
     // -> hook (deterministic, fires on its own). Promotion depends on VARIANCE, not on

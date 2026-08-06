@@ -515,6 +515,21 @@ class WritePermissionGate(GateCase):
         self.assertEqual(self.runs()[-1]["write_gate"], "ran")
         self.assertIn("Reverted 1", self.brief())
 
+    def test_deferring_is_a_human_status_too_and_is_reverted(self):
+        """Parking an item takes it off the page exactly as closing it does.
+
+        An agent that could write `deferred` could hide work nobody would be
+        asked about again -- the same harm as a false completion, in a word that
+        does not look like one. So the gate treats it as terminal even though the
+        item is not closed.
+        """
+        self._rewrite("NA-0001", "status: open", "status: deferred")
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._fields("NA-0001")["status"], "open")
+        entries = [r for r in self.rejected() if r["kind"] == "illegal_field_write"]
+        self.assertEqual([e["attempted"] for e in entries], ["deferred"])
+
     def test_a_changed_priority_is_reverted(self):
         # Priority is a commitment, not an observation. An agent may retract its
         # own guesses; it may never reorder yours.

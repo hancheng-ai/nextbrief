@@ -300,6 +300,8 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
     unconf = [b for b in open_items if not b.get("human_confirmed")]
     if unconf:
         pills.append((cat.t("html.pill.unconfirmed"), len(unconf)))
+    if meta.get("parked"):
+        pills.append((cat.t("html.pill.parked"), len(meta["parked"])))
     A("<div class=pills>" + "".join(
         "<span class=pill>%s <b>%d</b></span>" % (e(k), v) for k, v in pills) + "</div>")
 
@@ -421,6 +423,35 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
           "<td class=facts>%s</td><td>%s</td></tr>"
           % (e(p.get("name", "")), cls, cell, md_inline(_facts(p, cat)), nxt))
     A("</tbody></table></div>")
+
+    # ---------- an agent proposed a status; you have not answered ----------
+    #
+    # Rendered here as well as in BRIEF.md, and with the same content. `nextbrief
+    # open` shows this page, so a question that appeared only in the Markdown
+    # would go unasked for anyone who reads the brief in a browser -- which was
+    # the original failure of `proposed_status`, one layer up.
+    proposed = meta.get("proposed") or []
+    if proposed:
+        A("<h2>%s</h2>" % e(cat.t("html.section.proposed")))
+        A("<div class=note>%s</div>" % md_inline(cat.t("html.note.proposed")))
+        for b in proposed:
+            bid = str(b.get("id") or "")
+            A("<div class=card>")
+            A("<div class=t-title>%s</div>" % md_inline(
+                cat.t("brief.proposed.item", id=bid, title=b.get("title", ""),
+                      proposed=str(b.get("proposed_status") or ""))))
+            why = b.get("proposed_because") or b.get("proposed_reason")
+            if why:
+                A("<div class=why>%s</div>" % md_inline(why))
+            accept = _cmd("done" if str(b.get("proposed_status")).lower() == "done"
+                          else "drop", bid)
+            dismiss = _cmd("ok", bid)
+            A("<div class=cmd><code>%s</code>"
+              "<button onclick=\"cp(this,'%s')\">%s</button>"
+              "<button onclick=\"cp(this,'%s')\">%s</button></div>"
+              % (e(accept), _attr(accept), e(cat.t("html.copy_button")),
+                 _attr(dismiss), e(cat.t("html.copy_dismiss"))))
+            A("</div>")
 
     # ---------- awaiting a decision ----------
     if meta["decision_pending"]:

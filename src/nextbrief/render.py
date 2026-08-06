@@ -51,6 +51,7 @@ from .annotate import QUESTIONS, pending_count, question_targets
 from .frontmatter import parse_frontmatter
 from .fs import append_jsonl, append_text, rewrite_fields, write_text
 from .i18n import Catalog, load_catalog
+from .items import HUMAN_ONLY_STATUSES, days_until_due, is_live, is_parked
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 from .sense import status_of
@@ -72,8 +73,10 @@ EXIT_STALE = 3
 
 # Fields an agent must never write. See docs, "what the daily pass may write".
 HUMAN_ONLY_FIELDS = ["priority", "is_next_action", "human_confirmed", "project", "id", "created_by"]
-TERMINAL_STATUSES = ("done", "dropped")
-OPEN_STATUSES = ("open", "in_progress", "waiting")
+# What counts as open, terminal, or human-only now lives in `nextbrief.items`,
+# together with the deferral logic that made the question stop being a plain
+# membership test: an item can be `deferred` in the file and open on the page,
+# and only a date decides which.
 
 WEEKDAY_KEYS = [
     "brief.weekday.mon", "brief.weekday.tue", "brief.weekday.wed", "brief.weekday.thu",
@@ -341,9 +344,12 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
         for field in HUMAN_ONLY_FIELDS:
             if field in old_fm and it.get(field) != old_fm.get(field):
                 bad.append((field, old_fm.get(field), it.get(field)))
-        # Terminal statuses are written by humans only.
-        if str(it.get("status", "")).lower() in TERMINAL_STATUSES and \
-           str(old_fm.get("status", "")).lower() not in TERMINAL_STATUSES:
+        # Statuses that take an item off the page are written by humans only:
+        # the terminal two, and `deferred`. Parking something is the same act as
+        # closing it as far as the reader is concerned -- it stops being asked
+        # about -- so an agent that could write it could hide its own work.
+        if str(it.get("status", "")).lower() in HUMAN_ONLY_STATUSES and \
+           str(old_fm.get("status", "")).lower() not in HUMAN_ONLY_STATUSES:
             bad.append(("status", old_fm.get("status"), it.get("status")))
         # Once you have confirmed an entry, its automation block freezes too.
         if old_fm.get("human_confirmed") is True and it.get("automation") != old_fm.get("automation"):
@@ -731,6 +737,10 @@ KEEP = {
     "stalled": 3,
     "decision_pending": 3,
     "most_urgent": 3,
+    # A question addressed to the reader by name, and the only one in the
+    # document that something is actively waiting on. Dropping it would put the
+    # brief back where `proposed_status` started: written, never read.
+    "proposed": 3,
     # Never given up while anything else can be. The reminders are the brief's
     # only warnings -- which projects have no version control, which status
     # documents contradict each other -- and the next actions are the answer to
@@ -777,6 +787,46 @@ def _inside_cliff(p, outcomes=None) -> bool:
         if d.get("overdue") or d.get("in_lead_window"):
             return True
     return False
+
+
+def _as_of_date(snap) -> dt.date:
+    """The run date, from the snapshot. Falls back to today only when there is no
+    snapshot to read -- callers that hand-build one for a unit test."""
+    try:
+        return dt.date.fromisoformat(str((snap.get("run") or {})["as_of_date"])[:10])
+    except (KeyError, TypeError, ValueError):
+        return dt.date.today()
+
+
+def _proposals(backlog, today) -> List[dict]:
+    """Items where an agent has proposed a status change and nobody has answered.
+
+    ★ This is the whole of `proposed_status`. ★
+
+    The rule that produces the field -- an agent may never move an item into a
+    terminal status, only suggest one -- was written as a safety valve and worked
+    exactly as far as the prompt. Nothing read the field. So a model that
+    correctly declined to close an item, and correctly said so, wrote its
+    observation into a file nobody would open again: the safe action and the
+    silent one were the same action.
+
+    Surfacing it is what makes the restraint worth asking for. The proposal is
+    listed, with the commands that answer it, and answering it in either
+    direction clears the field (see `cli._mark`), so the brief asks once rather
+    than every morning until someone gives up and edits YAML.
+    """
+    out = []
+    for b in backlog:
+        proposed = str(b.get("proposed_status") or "").strip().lower()
+        if not proposed or proposed == str(b.get("status") or "open").strip().lower():
+            continue
+        # Only for items still on the page. A proposal about something already
+        # closed has been overtaken by the answer.
+        if not is_live(b, today):
+            continue
+        out.append(b)
+    out.sort(key=lambda b: str(b.get("id") or ""))
+    return out
 
 
 def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
@@ -848,8 +898,14 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
     ties = priority.tie_groups(scores) if discriminating else {}
 
 
-    open_items = [b for b in backlog
-                  if str(b.get("status", "open")).lower() in OPEN_STATUSES]
+    # `is_live` rather than a status test, because a deferred item is open again
+    # the day it comes due and nothing writes anything to make that happen. The
+    # date comes from the snapshot, never from the clock: every other verdict in
+    # this function is pinned to `as_of`, and a page that hides one item by the
+    # wall clock and judges the rest by the snapshot is not reproducible.
+    today = _as_of_date(snap)
+    open_items = [b for b in backlog if is_live(b, today)]
+    parked = [b for b in backlog if is_parked(b, today)]
     by_proj: Dict[Any, List[dict]] = {}
     for b in open_items:
         by_proj.setdefault(b.get("project"), []).append(b)
@@ -921,6 +977,12 @@ def classify(snap, backlog, cfg, reg=None, ws=None) -> Dict[str, Any]:
         "neglected": neglected,
         "open": open_items,
         "open_items": len(open_items),
+        # Deferred and not due yet. Counted and named in the brief's header
+        # rather than merely omitted: an item you cannot see and cannot count is
+        # one you have to take on trust, and `defer` only earns that trust if the
+        # page says how much it is holding.
+        "parked": parked,
+        "proposed": _proposals(backlog, today),
         "by_project": by_proj,
         "self_ids": self_ids,
         "bootstrapped": bootstrapped,
@@ -1083,8 +1145,28 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     if neglected:
         head.append(cat.t("brief.header.neglected", count=len(neglected)))
     head.append(cat.t("brief.header.backlog", count=len(open_items)))
+    # What `defer` is holding, said out loud. A hidden item you cannot count is
+    # an item you have to take on trust, and the whole argument for deferring
+    # rather than dropping is that it is not a quiet abandonment.
+    if meta.get("parked"):
+        head.append(cat.t("brief.header.parked", count=len(meta["parked"])))
     L.append("> " + " | ".join(head))
     L.append("")
+
+    # Items whose deferral ran out this morning. Named rather than merely
+    # restored, because a line that reappears silently among thirty others has
+    # not come back in any sense the reader would notice -- and "it comes back"
+    # is the entire promise that makes `defer` different from `drop`.
+    returned = [b for b in open_items
+                if str(b.get("status") or "").lower() == "deferred"
+                and days_until_due(b, as_of) == 0]
+    if returned:
+        L.append("> " + cat.t(
+            "brief.defer.returned",
+            items=cat.t("sep.semicolon").join(
+                cat.t("brief.defer.returned_item", id=b.get("id", ""),
+                      title=b.get("title", "")) for b in returned)))
+        L.append("")
 
     # ---- where the effort went ----------------------------------------------
     #
@@ -1267,6 +1349,24 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         # corruption the escaping above exists to prevent.
         L.append(line[:caps["per_project_line_chars"] + 60].rstrip("\\"))
     L.append("")
+
+    # ---- waiting for your confirmation --------------------------------------
+    #
+    # Above "awaiting a decision" on purpose. That section asks you to think;
+    # this one asks you to type one word about something already thought through.
+    proposed = meta.get("proposed") or []
+    if proposed:
+        section(L, marks, "proposed", cat.t("brief.section.proposed"))
+        L.append("> " + cat.t("brief.proposed.note"))
+        for b in proposed:
+            L.append("- " + cat.t("brief.proposed.item",
+                                  id=b.get("id", ""), title=b.get("title", ""),
+                                  proposed=str(b.get("proposed_status") or "")))
+            why = b.get("proposed_because") or b.get("proposed_reason")
+            if why:
+                L.append("  - " + cat.t("brief.proposed.why", text=_first_clause(why)))
+            L.append("  - " + cat.t("brief.proposed.how", id=b.get("id", "")))
+        L.append("")
 
     # ---- awaiting a decision ----
     if decision_pending:

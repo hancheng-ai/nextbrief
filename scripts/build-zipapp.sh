@@ -99,8 +99,19 @@ SMOKE="$WORK/smoke"
 mkdir -p "$SMOKE/home" "$SMOKE/box/ws"
 WS="$SMOKE/box/ws"
 
+# Every NEXTBRIEF_* variable, not just the workspace. Unsetting one of a pair
+# was worse than unsetting neither: `--workspace` moved the *inputs* to the
+# throwaway tree while NEXTBRIEF_OUT kept the *outputs* pointed at the real one,
+# so building the artifact overwrote the builder's own BRIEF.md with a brief for
+# an empty workspace, and appended a fictional run to their logs. Observed on a
+# machine that exports NEXTBRIEF_OUT, which is exactly the machine that runs
+# this daily.
+#
+# NEXTBRIEF_LOCALE goes too, and not only for symmetry: the smoke test asserts
+# that `--locale zh` reached the renderer, and an inherited zh would have made
+# that assertion pass without the flag ever being read.
 run_pyz() {
-    env -u NEXTBRIEF_WORKSPACE \
+    env -u NEXTBRIEF_WORKSPACE -u NEXTBRIEF_OUT -u NEXTBRIEF_LOCALE -u NEXTBRIEF_AGENT \
         HOME="$SMOKE/home" \
         XDG_CONFIG_HOME="$SMOKE/home/.config" \
         "$OUT" "$@"

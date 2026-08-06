@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nextbrief defer <id> --until <date|reason>` — the verb that was missing.**
+  `done` and `drop` were the only two ways an item could leave the page, and the
+  commonest thing that actually happens to work is neither: it is still true,
+  still worth doing, and not now. Recording that as `drop` writes a falsehood
+  somebody has to rebuild later; leaving it open keeps it competing for a place
+  it cannot win.
+
+  `--until` is required, and that is the safety property: **a deferral that never
+  returns is a drop nobody recorded.** A date is taken as the date. Anything else
+  is taken as the condition you are waiting on — a good reason and a useless
+  trigger — so the item also gets a review date (`defer.review_after_days`,
+  default 30) and comes back to be looked at again.
+
+  Nothing is written to bring it back. `items.is_live` reads the date, so a
+  workspace nobody ran for a fortnight still shows everything that came due
+  meanwhile, and the brief names the items that returned that morning. `deferred`
+  joins the terminal statuses in gate 3: an agent able to park an item could hide
+  work nobody would ask about again.
+
+- **A closing record on `nextbrief done`: `summary` and `future_work`.** The
+  moment an item stops being open is the moment it carries the most information
+  and the last moment anyone can say so, and a boolean was consuming all of it.
+  An item reading "run 3 probes" whose truth was "migrated all of them" leaves
+  behind a *false* history if only the status is recorded.
+
+  Two questions, both skippable — the count is the design. A form that costs more
+  than it returns is answered with Enter inside a fortnight, and empty fields
+  look like findings. Flags (`--summary`, `--future-work`) skip the prompt
+  entirely, and a non-tty run never asks.
+
+  No new store: the record is written into the item's own file under a
+  `SECTION:CLOSING` block, which is already in `backlog/` and already in git.
+
+- **`nextbrief followup <id>` promotes future work into real items**, each
+  carrying `discovered_from` back to where it came from, with the new id written
+  beside the original entry — so a follow-up nobody picked up stays visibly
+  unpicked. Without this, `future_work` would be another field written and never
+  read.
+
+- **`nextbrief closed [project]`** reads the records back, grouped by project,
+  and counts the closed items that left none — which is the honest measure of
+  whether the habit is sticking. **`nextbrief ls --deferred`** shows what is
+  parked and until when.
+
+### Changed
+
+- **`proposed_status` is read.** The prompt has always told agents to suggest a
+  closure rather than perform one, and nothing in the engine had ever read the
+  field — so the safe action was also the silent one. Standing proposals are now
+  listed in both artifacts under **waiting for your confirmation**, with the
+  commands that answer them, and `done` / `drop` / `ok` clear the field so the
+  question is asked once rather than every morning.
+
+### Fixed
+
+- **Building the zipapp could overwrite the builder's own brief.** The smoke test
+  unset `NEXTBRIEF_WORKSPACE` but not `NEXTBRIEF_OUT`, so on a machine that
+  exports both, `--workspace` moved the inputs to the throwaway tree while the
+  outputs stayed pointed at the real one: a brief for an empty workspace written
+  over the real `BRIEF.md`, and a fictional run appended to the real logs. All
+  four `NEXTBRIEF_*` variables are scrubbed now, in the script and in the test
+  that invokes it.
+
 ## [0.2.0rc1] - 2026-08-06
 
 ### Added
