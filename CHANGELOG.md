@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0rc2] - 2026-08-06
+
 ### Added
 
 - **`nextbrief defer <id> --until <date|reason>` — the verb that was missing.**
@@ -63,6 +65,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   question is asked once rather than every morning.
 
 ### Fixed
+
+- **`check` reported every workspace out of date seconds after a run.** Token
+  counts and the last-active timestamp live in `projects[].sessions`, which
+  `canonical()` compares, and both move on every assistant turn. For a tool whose
+  audience uses agent sessions, that is always — so `check || run` degraded to
+  `run`, and `check` lost the ability to say anything at all.
+
+  Sharper than that: running `nextbrief check` from inside an agent session writes
+  to that session's transcript, moving the number the check is about to compare.
+  It could not settle even in principle.
+
+  Both fields are excluded from the comparison and not from the snapshot. What
+  belongs in `check` is what reaches the page, and neither of these does — tokens
+  are deliberately never printed as magnitudes, and the page reads
+  `last_active_date` rather than the timestamp. The day count, the date and the
+  file count all still count, and a test names that set, so widening the
+  exclusion later has to break something rather than quietly deafen the check.
 
 - **Building the zipapp could overwrite the builder's own brief.** The smoke test
   unset `NEXTBRIEF_WORKSPACE` but not `NEXTBRIEF_OUT`, so on a machine that
@@ -1019,7 +1038,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.0rc1...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.0rc2...HEAD
+[0.2.0rc2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc2
 [0.2.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc1
 [0.1.0rc14]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc14
 [0.1.0rc13]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc13
