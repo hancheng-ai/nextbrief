@@ -410,3 +410,55 @@ class EveryCommandIsDocumented(unittest.TestCase):
                    if not self._documents("README.zh.md", n)]
         self.assertEqual(missing, [],
                          "README.zh.md never mentions: %s" % " ".join(missing))
+
+
+class TheTrustAnswerIsAboveTheFold(unittest.TestCase):
+    """A tool that reads every directory you own has to say so early.
+
+    It used to say so at line 589 of 626 -- after the install instructions, the
+    cost table and the command reference. Anyone deciding whether to run it had
+    already decided by then, which makes the honesty decorative.
+
+    "Above the fold" is measured as a line number rather than a section order,
+    because a section can be moved down by anything inserted above it and nobody
+    would notice. 120 lines is roughly two screens: past the tagline and the
+    three-stage diagram, and before the first thing that asks for a decision.
+    """
+
+    FOLD = 120
+
+    def _first_line_matching(self, doc, pattern):
+        for i, line in enumerate((REPO_ROOT / doc).read_text(encoding="utf-8")
+                                 .splitlines(), 1):
+            if re.search(pattern, line):
+                return i
+        return None
+
+    def test_both_readmes_answer_what_it_reads_early(self):
+        for doc, pattern in (("README.md", r"^## What it reads"),
+                             ("README.zh.md", r"^## 它读什么")):
+            at = self._first_line_matching(doc, pattern)
+            self.assertIsNotNone(at, "%s has no trust section at all" % doc)
+            self.assertLessEqual(
+                at, self.FOLD,
+                "%s answers 'what does this read' at line %d; anyone deciding "
+                "whether to run it has decided before then" % (doc, at))
+
+    def test_the_trust_section_names_what_leaves_the_machine(self):
+        """The question people actually have. A section that describes what is
+        read and stops there answers the easier half."""
+        for doc, sends in (("README.md", "digest.json"), ("README.zh.md", "digest.json")):
+            head = "\n".join((REPO_ROOT / doc).read_text(encoding="utf-8")
+                             .splitlines()[:self.FOLD])
+            self.assertIn(sends, head,
+                          "%s does not say what leaves the machine, above the fold" % doc)
+            self.assertIn("v0", head,
+                          "%s does not say which command sends nothing" % doc)
+
+    def test_security_md_exists_and_is_linked(self):
+        self.assertTrue((REPO_ROOT / "SECURITY.md").is_file(),
+                        "a tool with this reach ships no SECURITY.md")
+        for doc in ("README.md", "README.zh.md"):
+            self.assertIn("SECURITY.md",
+                          (REPO_ROOT / doc).read_text(encoding="utf-8"),
+                          "%s never links SECURITY.md" % doc)
