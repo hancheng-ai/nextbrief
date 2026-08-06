@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0rc1] - 2026-08-06
+
 ### Added
 
 - **An app icon, and the tooling that rebuilds it** — `packaging/icon/`. An ivory
@@ -423,7 +425,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapse the base to `(impact × 3) / 3 == impact`, which is what lets a
   one-question review produce a usable score. Only the invented `impact` was the
   defect.
-
 
 ## [0.1.0rc14] - 2026-07-30
 
@@ -953,7 +954,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.1.0rc14...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.0rc1...HEAD
+[0.2.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc1
 [0.1.0rc14]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc14
 [0.1.0rc13]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc13
 [0.1.0rc12]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc12
