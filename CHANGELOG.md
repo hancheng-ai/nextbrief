@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A criterion the design moved past can now say so.** `-` in the `done` tick
+  selector drops the criterion under the cursor: not done, not outstanding, no
+  longer applicable. The instruction line is now move / toggle / drop / finish,
+  and terminals that cannot draw the list get `-2` alongside the tick numbers.
+
+  Acceptance criteria had two boxes and a design change needs three. Ticking an
+  obsolete criterion claims work that never happened -- the false completion this
+  project refuses everywhere else. Leaving it unticked reads as a shortfall, and
+  that one does not sit still: unticked criteria are what `done` drafts as
+  `future_work`, and `followup` turns those into real backlog items carrying
+  `discovered_from`. So abandoning a goal minted a task for it, and the next
+  reader had nothing to tell them the work was dead. A wrong record is static; a
+  wrong record that mints tasks travels.
+
+  Dropped means marked, not deleted, in the sense `drop <id>` already uses -- the
+  line stays in the file and so does its sentence, because erasing the words
+  would erase the only thing worth keeping, which is that the goal moved. The
+  mark is `- [~]`, and all four readers of criteria share one parser so that
+  none of them can quietly forget it: a mark three readers know about prints
+  `AC 2/5` as `AC 2/4`, which does not look like a bug, it looks like an item
+  that always had four criteria.
+
+  No new question. `-` acts on one keypress, and a criterion set aside during the
+  run pre-fills the `summary` **draft** -- `dropped 2 criteria: ...` -- taken by
+  `=`, editable, and skipped by Enter exactly like every other draft. The closing
+  questions stay at two, both skippable.
+
 ## [0.2.0rc3] - 2026-08-07
 
 ### Fixed

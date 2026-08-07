@@ -570,6 +570,30 @@ machine sentences signed by a person, and a wrong summary in your name is worse
 than an empty field — the empty field at least says nobody knows. The record notes
 which it holds, in `summary_source: human | accepted_draft | none`.
 
+#### `-`: this one no longer applies
+
+Before either question, `done` asks which acceptance criteria are done: a list you
+move through with the arrows and tick with space.
+
+`-` on the criterion under the cursor **drops** it — the design moved past this
+one. Same word and same promise as `nextbrief drop <id>`: the line stays in the
+file and so does its sentence. Only the box changes, to `- [~]`.
+
+It is there because two boxes cannot record a design change. Ticking an obsolete
+criterion claims work that never happened. Leaving it unticked reads as a
+shortfall — and does not sit still, because unticked criteria are exactly what
+`done` drafts as `future_work` and `followup` turns into real backlog items. With
+only two marks, abandoning a goal quietly mints a task for it.
+
+Nothing is asked when you press it: a criterion set aside this run pre-fills the
+`summary` draft — `dropped 2 criteria: …` — which `=` takes, you can edit, and
+Enter skips like any other. The questions stay at two. Terminals that cannot draw
+the list get the same choice as numbers, where `1 3` ticks and `-2` drops.
+
+Dropped criteria stay in the count, reported beside it rather than folded into it:
+`1/3 ticked, 1 dropped`. A denominator that shrank would hide the promise along
+with the decision to abandon it.
+
 Before any of that, `done`, `drop` and `defer` each print `> {id} · {title}`, the
 project, and the acceptance count. All three write `human_confirmed: true` and
 commit, the id is typed by hand, and `NA-0017` and `NA-0019` differ by one

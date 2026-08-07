@@ -31,7 +31,7 @@ from helpers import (
     write_backlog_item,
 )
 
-from nextbrief import cli, items
+from nextbrief import cli, html, items
 from nextbrief.frontmatter import parse_frontmatter
 from nextbrief.paths import Workspace
 
@@ -430,7 +430,7 @@ class ClosingThroughTheCli(TempCase):
         # shifted every answer instead of failing.
         body = "".join(f.read_text(encoding="utf-8")
                        for f in sorted((self.ws / "backlog").glob("*.md")))
-        if any(not done for _i, done, _txt in cli._ac_lines(body)):
+        if any(m == cli.AC_OPEN for _i, m, _txt in cli._ac_lines(body)):
             answers = [kw.pop("tick", "")] + answers
         typed = iter(answers)
         with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
@@ -518,9 +518,13 @@ def _acceptance(*criteria):
 
     Each entry is ``(ticked, text)``. ``write_backlog_item`` appends one unticked
     criterion of its own, so anything asserting on a count passes this instead.
+
+    ``ticked`` may also be a mark character -- ``cli.AC_DROPPED`` -- for the
+    third state, so a fixture can start from a file that already records one.
     """
     lines = ["<!-- AC:BEGIN -->"]
-    lines += ["- [%s] #%d %s" % ("x" if ok else " ", i, text)
+    lines += ["- [%s] #%d %s" % (ok if isinstance(ok, str) else ("x" if ok else " "),
+                                 i, text)
               for i, (ok, text) in enumerate(criteria, 1)]
     lines.append("<!-- AC:END -->")
     return "\n".join(lines)
@@ -629,7 +633,7 @@ class DraftsAreOfferedNeverAssumed(TempCase):
         # shifted every answer instead of failing.
         body = "".join(f.read_text(encoding="utf-8")
                        for f in sorted((self.ws / "backlog").glob("*.md")))
-        if any(not done for _i, done, _txt in cli._ac_lines(body)):
+        if any(m == cli.AC_OPEN for _i, m, _txt in cli._ac_lines(body)):
             answers = [kw.pop("tick", "")] + answers
         typed = iter(answers)
         with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
@@ -953,12 +957,16 @@ class TickingIsPossibleAtAll(TempCase):
 
 
 class TheSelector(unittest.TestCase):
-    """Arrows to move, space to toggle, Enter to accept.
+    """Arrows to move, space to toggle, `-` to drop, Enter to accept.
 
     Typing numbers still works and is the fallback, but a typo there fails
     silently in the worst way: `9` on a two-item list ticks nothing, and a
     criterion nobody ticked reads exactly like one that was already done. A
     cursor on a line cannot miss.
+
+    Every assertion here is on the pair `(ticked, dropped)`, so a key that puts
+    a line in the wrong one of the two cannot pass by matching on the half the
+    test happened to look at.
     """
 
     ROWS = [(1, "#1 one"), (2, "#2 two"), (3, "#3 three")]
@@ -987,30 +995,72 @@ class TheSelector(unittest.TestCase):
             return cli._select_ticks(self.ROWS, None)
 
     def test_space_toggles_the_line_under_the_cursor(self):
-        self.assertEqual(self._drive([" ", "\r"]), [1])
+        self.assertEqual(self._drive([" ", "\r"]), ([1], []))
 
     def test_the_arrows_move(self):
-        self.assertEqual(self._drive(["\x1b", "[", "B", " ", "\r"]), [2])
+        self.assertEqual(self._drive(["\x1b", "[", "B", " ", "\r"]), ([2], []))
 
     def test_toggling_twice_leaves_it_unticked(self):
         """The reason it is a toggle and not a set: changing your mind must not
         need a restart."""
-        self.assertEqual(self._drive([" ", " ", "\r"]), [])
+        self.assertEqual(self._drive([" ", " ", "\r"]), ([], []))
 
     def test_several_can_be_picked_out_of_order(self):
         got = self._drive(["\x1b", "[", "B", "\x1b", "[", "B", " ",
                            "\x1b", "[", "A", "\x1b", "[", "A", " ", "\r"])
-        self.assertEqual(got, [1, 3])
+        self.assertEqual(got, ([1, 3], []))
 
     def test_it_cannot_walk_off_either_end(self):
         """Clamped rather than wrapped. A list that jumps from the last line to
         the first is a list you tick the wrong thing on."""
-        self.assertEqual(self._drive(["\x1b", "[", "A", "\x1b", "[", "A", " ", "\r"]), [1])
+        self.assertEqual(self._drive(["\x1b", "[", "A", "\x1b", "[", "A", " ", "\r"]),
+                         ([1], []))
         keys = ["\x1b", "[", "B"] * 6 + [" ", "\r"]
-        self.assertEqual(self._drive(keys), [3])
+        self.assertEqual(self._drive(keys), ([3], []))
 
     def test_enter_with_nothing_toggled_ticks_nothing(self):
-        self.assertEqual(self._drive(["\r"]), [])
+        self.assertEqual(self._drive(["\r"]), ([], []))
+
+    # -- the author's key ---------------------------------------------------
+
+    def test_minus_drops_the_line_under_the_cursor(self):
+        """`-` on the row the cursor is on, and nothing else moves. The design
+        the author gave: one keypress, no prompt."""
+        self.assertEqual(self._drive([cli.DROP_KEY, "\r"]), ([], [1]))
+
+    def test_minus_drops_where_the_cursor_actually_is(self):
+        """The half a fixed cursor would hide: move first, then drop."""
+        self.assertEqual(self._drive(["\x1b", "[", "B", cli.DROP_KEY, "\r"]), ([], [2]))
+
+    def test_dropping_twice_puts_it_back(self):
+        """Same discipline as space. A drop is a judgement, and a judgement you
+        cannot take back inside the same selector is one you make by restarting
+        the command."""
+        self.assertEqual(self._drive([cli.DROP_KEY, cli.DROP_KEY, "\r"]), ([], []))
+
+    def test_a_tick_and_a_drop_come_back_separately(self):
+        """The property the pair exists for: two answers to two different
+        questions about the same list, and neither may be read as the other."""
+        got = self._drive([" ", "\x1b", "[", "B", cli.DROP_KEY, "\r"])
+        self.assertEqual(got, ([1], [2]))
+
+    def test_either_key_overrides_the_other(self):
+        """Pressing the wrong one first must not need a restart either."""
+        self.assertEqual(self._drive([" ", cli.DROP_KEY, "\r"]), ([], [1]))
+        self.assertEqual(self._drive([cli.DROP_KEY, " ", "\r"]), ([1], []))
+
+    def test_a_dropped_row_draws_its_own_mark(self):
+        """It has to be visible before Enter. A drop that looks identical to an
+        untouched line is one you confirm without knowing you made it -- and the
+        box is the only thing on the row that may change, because the criterion's
+        text belongs to whoever wrote it."""
+        drawn = self._drawn(self.ROWS, [cli.DROP_KEY, "\r"], 80)
+        last = drawn[-len(self.ROWS):]
+        self.assertIn("[%s]" % cli.AC_DROPPED, last[0])
+        self.assertIn("#1 one", last[0], "the criterion's text was rewritten")
+        for line in last[1:]:
+            self.assertNotIn("[%s]" % cli.AC_DROPPED, line,
+                             "a row the cursor was never on was marked")
 
     def _drawn(self, rows, keys, columns):
         """The selector's own output lines, at a given terminal width."""
@@ -1080,6 +1130,284 @@ class TheSelector(unittest.TestCase):
         with mock.patch.object(cli.sys, "stdin",
                                mock.MagicMock(**{"isatty.return_value": False})):
             self.assertIsNone(cli._select_ticks(self.ROWS, None))
+
+
+class TheThirdMarkIsReadByEveryReader(unittest.TestCase):
+    """One parser, four readers, and the failure that has no symptom.
+
+    A mark three readers know about and the fourth does not is not a crash. It is
+    a subtraction: `AC 2/5` prints as `AC 2/4`, which reads as an item that only
+    ever had four criteria. The promise, and the fact that it was set aside, both
+    disappear -- and nothing on the screen is wrong-looking enough to check.
+
+    So every reader is asserted here against ONE body carrying all three marks,
+    rather than each being trusted to remember.
+    """
+
+    BODY = "\n".join([
+        "<!-- AC:BEGIN -->",
+        "- [x] #1 the exporter writes one file per crate",
+        "- [~] #2 the legacy sidecar keeps working",
+        "- [ ] #3 the migration guide names the new flag",
+        "<!-- AC:END -->",
+    ])
+
+    def test_the_parser_reports_the_mark_rather_than_discarding_the_line(self):
+        self.assertEqual([(m, t) for _i, m, t in cli._ac_lines(self.BODY)],
+                         [(cli.AC_DONE, "#1 the exporter writes one file per crate"),
+                          (cli.AC_DROPPED, "#2 the legacy sidecar keeps working"),
+                          (cli.AC_OPEN, "#3 the migration guide names the new flag")])
+
+    def test_the_count_keeps_it_in_the_total(self):
+        """It was promised. A denominator that shrinks when a criterion is set
+        aside hides the promise along with it -- and reports the drop as though
+        the item had always been smaller."""
+        self.assertEqual(cli._ac_progress(self.BODY), (1, 1, 3))
+
+    def test_it_is_not_reported_as_done(self):
+        """The original lie the mark exists to refuse: a criterion nobody met,
+        filed as work that happened."""
+        self.assertEqual(cli._ticked_acs(self.BODY),
+                         ["#1 the exporter writes one file per crate"])
+
+    def test_it_is_not_reported_as_outstanding(self):
+        """The other lie, and the expensive one -- see the class below."""
+        self.assertEqual(cli._unticked_acs(self.BODY),
+                         ["#3 the migration guide names the new flag"])
+
+    def test_the_html_brief_strips_the_mark_like_any_other_box(self):
+        """The reader outside `cli`. `BRIEF.html` selects criteria on `- [` and
+        then strips the checkbox as a PREFIX, so a mark the pattern does not know
+        survives into the page: one line rendering as `- [~] #2 ...` beside three
+        clean ones reads as a formatting fault, not as a state."""
+        line = "- [~] #2 the legacy sidecar keeps working"
+        self.assertEqual(html._AC_PREFIX.sub("", line, count=1),
+                         "#2 the legacy sidecar keeps working")
+
+
+class DroppingACriterionTheDesignMovedPast(TempCase):
+    """`-` in the tick selector: this one no longer applies.
+
+    Reported from real use, closing a real item: a design change had made several
+    tick boxes obsolete, and the file had nowhere to say so. Ticking one claims
+    work that never happened. Leaving it unticked reads as a shortfall -- and
+    does not sit still, because an unticked criterion is exactly what `done`
+    drafts as `future_work` and `followup` turns into a backlog item. The cheap
+    mistake mints a task for work that was deliberately abandoned.
+
+    Dropped means MARKED, not deleted, in the sense this CLI already uses for
+    `drop <id>`: the file stays, and so does its git history. The line and its
+    text stay; only the box changes.
+
+    Everything below drives the numbered fallback rather than the selector,
+    because that is what a captured stdout is -- which makes these the tests
+    that cover the path a terminal that cannot draw takes. The keypresses
+    themselves are covered in `TheSelector`.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        git_init(self.ws)
+        write_backlog_item(
+            self.ws, "NA-0005", title="Rewrite the crate exporter",
+            body=_acceptance((False, "the exporter writes one file per crate"),
+                             (False, "the legacy sidecar keeps working"),
+                             (False, "the migration guide names the new flag")))
+        git_commit_all(self.ws)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _text(self):
+        return (self.ws / "backlog" / "NA-0005.md").read_text(encoding="utf-8")
+
+    def _typed(self, answers, *args):
+        typed = iter(answers)
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            return self._run(*args)
+
+    def _criteria(self):
+        return [ln for ln in self._text().splitlines()
+                if ln.strip().startswith(("- [", "* ["))]
+
+    # -- the one the whole thing is for -------------------------------------
+
+    def test_a_dropped_criterion_is_never_drafted_as_future_work(self):
+        """★ The red one. ★
+
+        Tick #1, drop #2, leave #3. `=` at the follow-up question takes every
+        draft on offer, so whatever reached `future_work` is asserted whole
+        rather than by a substring that could match somewhere else.
+
+        Both halves matter. The drafts are NOT empty here -- #3 is on offer and
+        is accepted -- so the test cannot pass by there being nothing to take,
+        which is the shape of a guard that would go green with the feature ripped
+        out.
+        """
+        code, _out, err = self._typed(["1 -2", "", cli.ACCEPT_DRAFT, ""],
+                                      "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        closing = items.parse_closing(self._text())
+        recorded = [e.text for e in closing.future_work]
+        self.assertEqual(recorded, ["#3 the migration guide names the new flag"])
+        self.assertNotIn("#2 the legacy sidecar keeps working", recorded)
+
+    def test_and_followup_mints_no_backlog_item_for_it(self):
+        """The harm, stated where it actually lands. `future_work` is not a note:
+        `followup` turns each entry into a real item carrying `discovered_from`,
+        and the next reader has nothing to tell them the work is dead."""
+        self._typed(["1 -2", "", cli.ACCEPT_DRAFT, ""], "done", "NA-0005")
+        code, _out, err = self._run("followup", "NA-0005", "--all")
+        self.assertEqual(code, 0, err)
+        minted = sorted(self.ws.glob("backlog/NA-0006*.md")) + \
+            sorted(self.ws.glob("backlog/NA-0007*.md"))
+        self.assertEqual(len(minted), 1, "a dropped criterion became a backlog item")
+        created = minted[0].read_text(encoding="utf-8")
+        self.assertIn("the migration guide names the new flag", created)
+        self.assertNotIn("legacy sidecar", created)
+
+    # -- marked, not deleted -------------------------------------------------
+
+    def test_the_line_stays_and_only_its_box_changes(self):
+        """`drop <id>` keeps the file and its git history; `-` keeps the line and
+        its sentence. Erasing the words would erase the one fact worth having --
+        that the goal moved."""
+        before = self._criteria()
+        code, _out, err = self._typed(["-2", "", ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        after = self._criteria()
+        self.assertEqual(len(after), len(before), "a criterion line was removed")
+        for was, now in zip(before, after):
+            self.assertEqual(was[5:], now[5:], "the criterion's own text changed")
+        self.assertEqual([ln.strip()[:5] for ln in after],
+                         ["- [ ]", "- [~]", "- [ ]"])
+
+    def test_the_header_count_still_says_three(self):
+        """The symptom a missed reader produces, asserted where a person would
+        see it: `1/3` printed as `1/2`, which does not read as a bug -- it reads
+        as an item that only ever had two criteria.
+
+        Read back off a file that already records a drop, so this covers the
+        readers rather than the run that wrote the mark.
+        """
+        write_backlog_item(
+            self.ws, "NA-0009", title="Rewrite the crate exporter",
+            body=_acceptance((True, "the exporter writes one file per crate"),
+                             (cli.AC_DROPPED, "the legacy sidecar keeps working"),
+                             (False, "the migration guide names the new flag")))
+        git_commit_all(self.ws)
+        code, out, err = self._run("done", "NA-0009", "--summary", "shipped")
+        self.assertEqual(code, 0, err)
+        self.assertIn("1/3", out)
+        self.assertIn("1 dropped", out)
+
+    # -- one keypress, and no third question ---------------------------------
+
+    def test_dropping_adds_no_question(self):
+        """`_ask_closing` is exactly two questions and stays that way. A prompt
+        for the reason would reintroduce the friction the key was added to
+        remove."""
+        asked = []
+        answers = ["-2", "", ""]
+
+        def counting(prompt=""):
+            asked.append(prompt)
+            # Anything past the third question is answered with Enter rather
+            # than running off the end of the list: a fourth prompt must be
+            # reported by the count below, not by an IndexError from the fixture.
+            return answers[len(asked) - 1] if len(asked) <= len(answers) else ""
+
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", counting):
+            code, _out, err = self._run("done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(asked), 3,
+                         "asked something other than the tick step plus two "
+                         "questions: %r" % (asked,))
+
+    def test_what_was_dropped_is_offered_as_the_summary_draft(self):
+        """The reason does not go unrecorded just because nothing asked for it:
+        it pre-fills the draft of a question that was being asked anyway."""
+        _code, out, _err = self._typed(["-2", "", ""], "done", "NA-0005")
+        self.assertIn("dropped 1 criteria: #2 the legacy sidecar keeps working", out)
+
+    def test_enter_still_skips_that_draft(self):
+        """★ A draft, never the Enter default. ★
+
+        Both halves: the draft really was on offer, and Enter recorded nothing.
+        If Enter took it, the reflex that answers every form would start filing
+        machine sentences under a person's name -- and it does not become
+        acceptable because the sentence is about something they abandoned.
+        """
+        # A follow-up is typed so that a closing record IS written: "no block at
+        # all" must not be what does the work here. The summary field itself has
+        # to be empty and say so.
+        _code, out, _err = self._typed(
+            ["-2", "", "the sidecar owners need telling", ""], "done", "NA-0005")
+        self.assertIn("dropped 1 criteria", out, "no draft was offered to skip")
+        closing = items.parse_closing(self._text())
+        self.assertEqual(closing.summary, "")
+        self.assertEqual(closing.summary_source, "none")
+
+    def test_a_criterion_dropped_before_this_run_is_not_re_reported(self):
+        """The draft says what happened in THIS close. A criterion set aside
+        weeks ago is already recorded in the file, and re-offering it as news
+        would put a stale sentence in front of the one key that files a draft
+        verbatim -- with nobody at the keyboard in a position to know it is old.
+        """
+        write_backlog_item(
+            self.ws, "NA-0009", title="Rewrite the crate exporter",
+            body=_acceptance((cli.AC_DROPPED, "the legacy sidecar keeps working"),
+                             (False, "the migration guide names the new flag")))
+        git_commit_all(self.ws)
+        typed = iter(["1", "", ""])
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            code, out, err = self._run("done", "NA-0009")
+        self.assertEqual(code, 0, err)
+        # The trigger really happened: the run had something to tick and a draft
+        # was offered, so this cannot pass by nothing being drafted at all.
+        self.assertIn("draft:", out)
+        self.assertNotIn("dropped 1 criteria", out)
+        # And the older drop is still SEEN -- as the count, which is context.
+        # Being absent from the draft is not the same as being forgotten.
+        self.assertIn("1 dropped", out)
+
+    def test_the_accept_key_files_it_as_a_draft_not_as_testimony(self):
+        _code, _out, err = self._typed(["-2", cli.ACCEPT_DRAFT, ""],
+                                       "done", "NA-0005")
+        closing = items.parse_closing(self._text())
+        self.assertIn("dropped 1 criteria: #2 the legacy sidecar keeps working",
+                      closing.summary, err)
+        self.assertEqual(closing.summary_source, "accepted_draft")
+
+    # -- the fallback path ---------------------------------------------------
+
+    def test_a_mistyped_drop_is_named_rather_than_ignored(self):
+        """Same rule the tick numbers already follow. A `-9` that silently drops
+        nothing looks exactly like a criterion that was never obsolete."""
+        code, out, _err = self._typed(["-9", "", ""], "done", "NA-0005")
+        self.assertEqual(code, 0)
+        self.assertIn("ignored -9", out)
+        self.assertNotIn(cli.AC_DROPPED, "".join(self._criteria()))
+
+    # -- who may write it ----------------------------------------------------
+
+    def test_a_scripted_run_can_never_drop_anything(self):
+        """Same discipline as ticking, and as `proposed_status`: an agent may
+        suggest, and only a person at a keyboard may write a criterion off.
+        A non-interactive `done` is not asked, so it cannot answer."""
+        # Bounded rather than a constant: if the gate that skips the questions
+        # were removed, this must run out of answers loudly rather than loop on
+        # the follow-up prompt forever.
+        typed = iter(["-2", "", ""])
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            code, _out, err = self._run("done", "NA-0005", "--summary", "shipped")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn(cli.AC_DROPPED, "".join(self._criteria()))
 
 
 class TheDraftEitherAnswersOrIsNotOffered(TempCase):

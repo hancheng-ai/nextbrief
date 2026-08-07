@@ -809,60 +809,85 @@ def cmd_ok(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
 TICK_ALL = "a"
 ACCEPT_DRAFT = "="
 
+# The three marks an acceptance criterion can carry.
+#
+# Two boxes cannot say what happens after a design change. A criterion the design
+# moved past is neither done nor undone, and both existing marks are a lie about
+# it: `[x]` claims work that never happened, and `[ ]` claims work is outstanding
+# that nobody intends to do. The second lie does not sit still -- an unticked
+# criterion is what `done` drafts as `future_work`, and `followup` turns that
+# into a real backlog item, so the mistake walks downstream and mints a task for
+# work somebody deliberately abandoned.
+#
+# `~` is a MARK, not a deletion. The line stays in the file and so does its text,
+# exactly as `drop` keeps an item's file and its git history. Rewriting the
+# sentence would erase the one thing worth keeping: that the goal moved.
+AC_OPEN = " "
+AC_DONE = "x"
+AC_DROPPED = "~"
 
-def _ac_progress(body: str) -> Tuple[int, int]:
-    """``(ticked, total)`` over the item's acceptance criteria.
+# `-` drops the criterion under the cursor. One keypress, no prompt -- the reason
+# lands in the summary question that was going to be asked anyway, because a
+# third question is precisely the friction this flow exists to remove.
+DROP_KEY = "-"
 
-    Checkbox lines in the body, the same definition ``launch`` copies into the
-    session prompt. Nothing here writes one: ticking is a human-only act, which
-    is exactly why the count is worth showing -- the engine can see the number
-    and cannot move it.
+
+def _ac_lines(body: str) -> List[Tuple[int, str, str]]:
+    """``(line index, mark, text)`` for every acceptance criterion.
+
+    ★ The one parser. Every other reader of criteria is a comprehension over
+    this, and that is load-bearing rather than tidy. ★
+
+    A mark only some of the readers know about does not fail loudly -- it fails
+    by *subtraction*. Miss the counter and `AC 2/5` prints as `AC 2/4`, which
+    does not read as a bug: it reads as an item that always had four criteria,
+    and the promise that was set aside is gone with nothing to say it was ever
+    made. Sharing the parser is what makes "all of them recognise it" a property
+    of the code rather than a thing four functions have to remember.
     """
-    ticked = total = 0
-    for line in body.splitlines():
-        s = line.strip()
-        if s.startswith("- ["):
-            total += 1
-            if s[3:4].lower() == "x":
-                ticked += 1
-    return ticked, total
-
-
-def _unticked_acs(body: str) -> List[str]:
-    """The text of every criterion still unticked, with its ``#n`` left on."""
-    return [ln.strip()[5:].strip() for ln in body.splitlines()
-            if ln.strip().startswith("- [ ]") and ln.strip()[5:].strip()]
-
-
-def _ac_lines(body: str) -> List[Tuple[int, bool, str]]:
-    """``(line index, is ticked, text)`` for every acceptance criterion."""
     out = []
     for i, line in enumerate(body.splitlines()):
         s = line.strip()
         if s[:3] in ("- [", "* [") and len(s) > 5 and s[4] == "]":
             mark = s[3].lower()
-            if mark in (" ", "x") and s[5:].strip():
-                out.append((i, mark == "x", s[5:].strip()))
+            if mark in (AC_OPEN, AC_DONE, AC_DROPPED) and s[5:].strip():
+                out.append((i, mark, s[5:].strip()))
     return out
 
 
-def _apply_ticks(body: str, indexes: Sequence[int]) -> str:
-    """Tick the criteria at these line indexes, leaving everything else alone.
+def _ac_progress(body: str) -> Tuple[int, int, int]:
+    """``(ticked, dropped, total)`` over the item's acceptance criteria.
 
-    A rewrite of the checkbox character and nothing more: the criterion's own
-    text is a sentence a person wrote and this must never touch it. Unticking is
-    not offered -- an engine that can clear a tick can erase a statement its
-    author made, and the file is right there for anyone who wants to.
+    Checkbox lines in the body, the same definition ``launch`` copies into the
+    session prompt. Nothing here writes a tick on its own: ticking is a human
+    act, which is exactly why the count is worth showing -- the engine can see
+    the number and cannot move it.
+
+    Dropped criteria stay in ``total``. They were promised, and a denominator
+    that quietly shrinks when one is set aside hides the promise along with it.
+    They are reported separately rather than folded into ``ticked``, because
+    "we did this" and "we stopped meaning to" are different answers and only one
+    of them is an achievement.
     """
-    want = set(indexes)
-    lines = body.splitlines(True)
-    for i in want:
-        if 0 <= i < len(lines):
-            s = lines[i]
-            head = s[:len(s) - len(s.lstrip())]
-            rest = s.lstrip()
-            lines[i] = head + rest[:3] + "x" + rest[4:]
-    return "".join(lines)
+    marks = [m for _i, m, _t in _ac_lines(body)]
+    return marks.count(AC_DONE), marks.count(AC_DROPPED), len(marks)
+
+
+def _unticked_acs(body: str) -> List[str]:
+    """The text of every criterion still OPEN, with its ``#n`` left on.
+
+    ★ Dropped criteria are excluded here, and that exclusion is the whole point
+    of the third mark. ★
+
+    This list is what `done` drafts as `future_work`, and `followup` turns a
+    `future_work` entry into a real backlog item carrying `discovered_from`. A
+    criterion the design moved past, left merely unticked, therefore does not
+    just sit in the file being wrong -- it mints a task for work that was
+    deliberately abandoned, and the next reader has nothing to tell them it is
+    dead. That is strictly more expensive than a wrong record, because a wrong
+    record is static and a minted task travels.
+    """
+    return [text for _i, mark, text in _ac_lines(body) if mark == AC_OPEN]
 
 
 def _ticked_acs(body: str) -> List[str]:
@@ -871,13 +896,36 @@ def _ticked_acs(body: str) -> List[str]:
     The best available answer to "what actually happened", and the only one that
     is not a guess: a ticked box is a person saying that thing is done, in their
     own words. The engine can read the tick and cannot make it.
+
+    Dropped criteria are not here either. Counting one as done would be the
+    original lie the third mark exists to refuse.
     """
-    out = []
-    for line in body.splitlines():
-        s = line.strip()
-        if s[:5].lower() in ("- [x]", "* [x]") and s[5:].strip():
-            out.append(s[5:].strip())
-    return out
+    return [text for _i, mark, text in _ac_lines(body) if mark == AC_DONE]
+
+
+def _apply_marks(body: str, marks: Dict[int, str]) -> str:
+    """Write these marks at these line indexes, leaving everything else alone.
+
+    A rewrite of the checkbox character and nothing more: the criterion's own
+    text is a sentence a person wrote and this must never touch it. That holds
+    hardest for a dropped criterion, where erasing the words would erase what was
+    once promised -- and "the goal moved" is the only fact the record is here to
+    keep.
+
+    Nothing is ever cleared. The selector only ever offers criteria that are
+    still open, so the marks arriving here can turn an open box into a tick or
+    into a drop and can do nothing else. An engine that could clear a tick could
+    erase a statement its author made, and the file is right there for anyone who
+    wants to.
+    """
+    lines = body.splitlines(True)
+    for i, mark in marks.items():
+        if 0 <= i < len(lines):
+            s = lines[i]
+            head = s[:len(s) - len(s.lstrip())]
+            rest = s.lstrip()
+            lines[i] = head + rest[:3] + mark + rest[4:]
+    return "".join(lines)
 
 
 def _registry(ws: Workspace) -> Dict[str, Any]:
@@ -950,8 +998,15 @@ def _echo_target(ws: Workspace, item_id: str, cat: Optional[Catalog]) -> Optiona
              id=item_id, title=str(fm.get("title") or "")))
     print("  " + tr(cat, "cli.do.project", "Project: {project}",
                     project=_project_name(_registry(ws), fm.get("project"))))
-    ticked, total = _ac_progress(body or "")
-    if total:
+    ticked, dropped, total = _ac_progress(body or "")
+    if total and dropped:
+        # Said in the same breath as the ratio, because the ratio alone reads as
+        # a shortfall: 1/3 with one criterion set aside is not the same item as
+        # 1/3 with two still to do, and the reader is about to close it.
+        print("  " + tr(cat, "cli.close.acceptance_dropped",
+                        "Acceptance criteria: {done}/{total} ticked, {dropped} dropped",
+                        done=ticked, total=total, dropped=dropped))
+    elif total:
         print("  " + tr(cat, "cli.close.acceptance",
                         "Acceptance criteria: {done}/{total} ticked",
                         done=ticked, total=total))
@@ -984,8 +1039,11 @@ def _project_commits(ws: Workspace, reg: Dict[str, Any], project_id: Any,
 
 
 def _select_ticks(rows: Sequence[Tuple[int, str]],
-                  cat: Optional[Catalog]) -> Optional[List[int]]:
-    """Move with the arrows, space toggles, Enter accepts. ``None`` if unusable.
+                  cat: Optional[Catalog]) -> Optional[Tuple[List[int], List[int]]]:
+    """Move with the arrows, space ticks, ``-`` drops, Enter accepts.
+
+    Returns ``(ticked, dropped)`` line indexes, or ``None`` if the terminal
+    cannot do this.
 
     Typing numbers works and is what this falls back to, but a typo there is
     silent in the worst way: `9` on a two-item list ticks nothing, and a
@@ -1018,7 +1076,10 @@ def _select_ticks(rows: Sequence[Tuple[int, str]],
     except Exception:
         return None
 
-    chosen = [False] * len(rows)
+    # The mark each row currently carries, and the character drawn in its box.
+    # Every row starts open: the caller only ever passes criteria that are still
+    # open, so nothing here can undo a decision already recorded in the file.
+    state = [AC_OPEN] * len(rows)
     at = 0
 
     # Every row is cut to one terminal line, and that is what makes the redraw
@@ -1049,7 +1110,7 @@ def _select_ticks(rows: Sequence[Tuple[int, str]],
         for n, text in enumerate(shown):
             sys.stdout.write("\x1b[2K")
             sys.stdout.write("  %s [%s] %s\r\n"
-                             % (">" if n == at else " ", "x" if chosen[n] else " ", text))
+                             % (">" if n == at else " ", state[n], text))
         sys.stdout.flush()
 
     try:
@@ -1058,27 +1119,34 @@ def _select_ticks(rows: Sequence[Tuple[int, str]],
         while True:
             ch = sys.stdin.read(1)
             if ch in ("\r", "\n"):
-                return [rows[n][0] for n, on in enumerate(chosen) if on]
+                return ([rows[n][0] for n, m in enumerate(state) if m == AC_DONE],
+                        [rows[n][0] for n, m in enumerate(state) if m == AC_DROPPED])
             if ch == " ":
-                chosen[at] = not chosen[at]
+                state[at] = AC_OPEN if state[at] == AC_DONE else AC_DONE
+            elif ch == DROP_KEY:
+                # A toggle for the same reason space is one: changing your mind
+                # must not need a restart. `-` and space each toggle their own
+                # mark, so either key on a row the other one marked switches it
+                # outright, and pressing the same key twice puts it back.
+                state[at] = AC_OPEN if state[at] == AC_DROPPED else AC_DROPPED
             elif ch in ("j",):
                 at = min(at + 1, len(rows) - 1)
             elif ch in ("k",):
                 at = max(at - 1, 0)
             elif ch == "\x1b":
                 # An arrow is ESC [ A/B. A bare ESC is somebody backing out, and
-                # is treated as "tick nothing" rather than as an abort -- Ctrl-C
+                # is treated as "mark nothing" rather than as an abort -- Ctrl-C
                 # is the abort, and it still is.
                 nxt = sys.stdin.read(1)
                 if nxt != "[":
-                    return []
+                    return [], []
                 code = sys.stdin.read(1)
                 if code == "A":
                     at = max(at - 1, 0)
                 elif code == "B":
                     at = min(at + 1, len(rows) - 1)
             elif ch == "\x04":              # Ctrl-D: no more input, same as EOF
-                return []
+                return [], []
             draw(False)
     finally:
         try:
@@ -1087,8 +1155,9 @@ def _select_ticks(rows: Sequence[Tuple[int, str]],
             pass
 
 
-def _ask_ticks(body: str, cat: Optional[Catalog]) -> List[int]:
-    """Which criteria are done, asked at the only moment anyone can answer.
+def _ask_ticks(body: str, cat: Optional[Catalog]) -> Tuple[List[int], List[int]]:
+    """Which criteria are done -- and which no longer apply -- asked at the only
+    moment anyone can answer. Returns ``(ticked, dropped)`` line indexes.
 
     Ticking used to be possible only by hand-editing the file, and nothing said
     so -- not the prompts, not the schema, not the README. Measured on a real
@@ -1104,27 +1173,39 @@ def _ask_ticks(body: str, cat: Optional[Catalog]) -> List[int]:
     This is not a third question. It REPLACES the summary draft with something
     that answers the question -- your own criteria, in your own words -- where
     the draft used to offer a commit count.
+
+    Dropping lives here for the same reason, and stays a keypress rather than
+    becoming a prompt: the answer to "why" is already being asked two questions
+    down, and a form that grows is a form that gets answered with Enter.
+
+    Only criteria that are still open are offered. A tick and a drop are both
+    decisions already recorded in the file, and re-asking them would make this
+    step a place where one could be taken back by accident.
     """
-    rows = [(i, text) for i, done, text in _ac_lines(body) if not done]
+    rows = [(i, text) for i, mark, text in _ac_lines(body) if mark == AC_OPEN]
     if not rows:
-        return []
+        return [], []
     print()
     # The selector first, the numbers as the fallback. Both exist because the
     # terminal is not always one that can do the first, and a `done` that cannot
-    # ask is a `done` that goes back to being unanswerable.
+    # ask is a `done` that goes back to being unanswerable. That applies to
+    # dropping exactly as it applies to ticking, so the fallback below takes
+    # `-N` -- otherwise the third state would exist only on terminals that can
+    # draw, and the case it was built for would be unrecordable on the rest.
     print("  " + tr(cat, "cli.done.pick_ticks",
                     "Which of these are done? Up/down to move, space to toggle, "
-                    "Enter when finished."))
-    picked = _select_ticks(rows, cat)
-    if picked is not None:
-        return picked
+                    "{drop} to drop one, Enter when finished.", drop=DROP_KEY))
+    marked = _select_ticks(rows, cat)
+    if marked is not None:
+        return marked
     # The selector declined -- undo its instruction line, which described keys
     # this terminal will not deliver.
     sys.stdout.write("\x1b[1A\x1b[2K" if sys.stdout.isatty() else "")
 
     print("  " + tr(cat, "cli.done.ask_ticks",
-                    "Which of these are done? Numbers like 1 3, {all} for all, "
-                    "Enter for none.", all=TICK_ALL))
+                    "Which of these are done? Numbers like 1 3, {drop}N to drop "
+                    "one, {all} for all, Enter for none.",
+                    all=TICK_ALL, drop=DROP_KEY))
     for n, (_i, text) in enumerate(rows, 1):
         print("    %d. %s" % (n, text))
     try:
@@ -1133,26 +1214,33 @@ def _ask_ticks(body: str, cat: Optional[Catalog]) -> List[int]:
         # Same rule as the questions below: EOF means nobody is here, Ctrl-C
         # means stop, and stop propagates.
         print()
-        return []
+        return [], []
     if not raw:
-        return []
+        return [], []
     if raw.lower() in (TICK_ALL, "all"):
-        return [i for i, _t in rows]
-    picked = []
+        # `a` says everything left is done. There is no bulk drop and there
+        # should not be: "we abandoned all of it" is a `drop` of the item, which
+        # this CLI already has a verb for.
+        return [i for i, _t in rows], []
+    picked: List[int] = []
+    dropped: List[int] = []
     for token in raw.replace(",", " ").split():
-        if token.isdigit() and 1 <= int(token) <= len(rows):
-            picked.append(rows[int(token) - 1][0])
+        drop = token.startswith(DROP_KEY)
+        digits = token[len(DROP_KEY):] if drop else token
+        if digits.isdigit() and 1 <= int(digits) <= len(rows):
+            (dropped if drop else picked).append(rows[int(digits) - 1][0])
         else:
             # Named rather than ignored. A mistyped number that silently ticks
             # nothing looks exactly like a criterion that was already done.
             print("    " + tr(cat, "cli.done.tick_ignored",
                               "ignored {token}: not one of 1-{n}",
                               token=token, n=len(rows)))
-    return sorted(set(picked))
+    return sorted(set(picked)), sorted(set(dropped))
 
 
 def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
-                    cat: Optional[Catalog]) -> Tuple[str, List[str], str]:
+                    cat: Optional[Catalog],
+                    dropped: Sequence[str] = ()) -> Tuple[str, List[str], str]:
     """``(summary draft, follow-up drafts, scope line)``, from facts on disk.
 
     No model, no network, nothing that can be slow or cost money: ``done`` has to
@@ -1182,10 +1270,20 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
       What it offers there is the criteria' own text, which a human wrote and
       only a human may edit. Accepting it copies your own sentence back to you,
       not the engine's.
+
+    ``dropped`` is the text of the criteria set aside in *this* run, which is why
+    it is a parameter rather than something read back out of the file. It is the
+    reason the drop key needs no prompt of its own: the record of why gets to
+    ride on the question that was going to be asked anyway. Like everything else
+    here it is a DRAFT -- offered above the question, taken only by `=`. Enter
+    still records nothing, and that is not a detail: a machine sentence filed
+    under a person's name by reflex is the failure this whole record exists to
+    avoid, and it does not become acceptable because the sentence is about
+    something they abandoned.
     """
     reg = _registry(ws)
     since = str(fm.get("created_date") or fm.get("updated_date") or "").strip()[:10]
-    ticked, total = _ac_progress(body)
+    ticked, gone, total = _ac_progress(body)
     commits = _project_commits(ws, reg, fm.get("project"), since)
 
     # What the reader is shown, and what `=` will file, are two different things.
@@ -1198,21 +1296,30 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
     # which this whole record exists to avoid.
     #
     # `summary` is offered to `=` only when it is a real candidate answer. There
-    # are exactly two such cases and both are somebody's own words rather than
-    # the engine's:
+    # are exactly three such cases and all three are somebody's own words rather
+    # than the engine's:
     #
     #   - the criteria that are TICKED. A tick is a person saying that thing is
     #     done; accepting them copies your sentences back to you.
+    #   - the criteria DROPPED in this run, which are the same sentences pointed
+    #     the other way. The file records that each one was set aside; only this
+    #     line can record it in the same breath as what was achieved, and `-`
+    #     asked nothing at the time on purpose.
     #   - exactly one commit since the item opened, where its subject is evidence
     #     about THIS item because there is nothing to choose between.
     #
     # With several commits and nothing ticked there is no honest draft, so none
     # is offered, and the question is asked plainly.
     scope = ""
-    summary = ""
+    said = []
     done_acs = _ticked_acs(body)
     if done_acs:
-        summary = "; ".join(done_acs)
+        said.append("; ".join(done_acs))
+    if dropped:
+        said.append(tr(cat, "cli.close.draft_dropped",
+                       "dropped {n} criteria: {text}",
+                       n=len(dropped), text="; ".join(dropped)))
+    summary = " · ".join(said)
     if commits or total:
         parts = [_project_name(reg, fm.get("project"))]
         if len(commits) == 1:
@@ -1229,7 +1336,11 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
             parts.append(tr(cat, "cli.close.draft_commits",
                             "{n} commits since {since}",
                             n=len(commits), since=since))
-        if total:
+        if total and gone:
+            parts.append(tr(cat, "cli.close.draft_acceptance_dropped",
+                            "AC {done}/{total} ({dropped} dropped)",
+                            done=ticked, total=total, dropped=gone))
+        elif total:
             parts.append(tr(cat, "cli.close.draft_acceptance", "AC {done}/{total}",
                             done=ticked, total=total))
         scope = " · ".join(p for p in parts if p)
@@ -1405,6 +1516,12 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
     asking = not (getattr(args, "summary", None)
                   or (getattr(args, "future_work", None) or [])
                   or not sys.stdin.isatty())
+    # What `-` set aside in THIS run, in the criteria' own words. Carried to the
+    # summary draft rather than re-derived from the file, because the file cannot
+    # tell a criterion dropped a moment ago from one dropped last month, and only
+    # the first is something the person at the keyboard is in a position to
+    # explain.
+    dropped_now: List[str] = []
     if asking:
         try:
             original = path.read_text(encoding="utf-8")
@@ -1412,28 +1529,35 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
             original = ""
         if original:
             try:
-                picked = _ask_ticks(original, cat)
+                picked, dropped = _ask_ticks(original, cat)
             except KeyboardInterrupt:
                 print()
                 _err(tr(cat, "cli.done.cancelled",
                         "Cancelled. {id} was not closed and nothing was written.",
                         id=args.item_id))
                 return EXIT_FAIL
-            if picked:
+            if picked or dropped:
                 # Whole-text transform, the same shape `record_promotion` uses.
                 # Line indexes come from the same text they are applied to.
+                # One write for both marks: a tick and a drop are one answer to
+                # one question, and half of it landing is not a state worth
+                # having.
+                marks = dict.fromkeys(picked, AC_DONE)
+                marks.update(dict.fromkeys(dropped, AC_DROPPED))
                 try:
-                    write_text(ws, path, _apply_ticks(original, picked))
+                    write_text(ws, path, _apply_marks(original, marks))
                 except OSError as exc:
                     _err("error: cannot write %s: %s" % (path, exc))
                     return EXIT_FAIL
+            gone = set(dropped)
+            dropped_now = [t for i, _m, t in _ac_lines(original) if i in gone]
 
     def drafts():
         try:
             fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except OSError:
             return "", [], ""
-        return _closing_drafts(ws, fm or {}, body or "", cat)
+        return _closing_drafts(ws, fm or {}, body or "", cat, dropped_now)
 
     try:
         closing = _ask_closing(args, cat, drafts)

@@ -23,8 +23,14 @@ from typing import Any, Dict, List, Optional
 from .annotate import QUESTIONS, question_targets
 from .i18n import Catalog
 
-# Markdown checkbox prefix: "- [ ] " / "- [x] " / "* [X] ".
-_AC_PREFIX = re.compile(r"^\s*[-*+]\s*\[[ xX]?\]\s*")
+# Markdown checkbox prefix: "- [ ] " / "- [x] " / "* [X] " / "- [~] ".
+#
+# `~` is the third state a criterion can carry -- the design moved past it. The
+# mark is stripped like the other two rather than left in the text: it is not
+# part of the sentence somebody wrote, and a criterion that renders as
+# "- [~] #2 ..." while its neighbours render clean reads as a formatting fault
+# rather than as a state.
+_AC_PREFIX = re.compile(r"^\s*[-*+]\s*\[[ xX~]?\]\s*")
 
 __all__ = ["render_html"]
 
