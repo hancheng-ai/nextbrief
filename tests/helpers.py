@@ -371,8 +371,14 @@ def make_workspace(root, registry=None, config=None, with_git=True):
     return root
 
 
-def write_backlog_item(ws_root, item_id, **fields):
-    """One backlog entry, written in the frontmatter subset the schema documents."""
+def write_backlog_item(ws_root, item_id, body=None, **fields):
+    """One backlog entry, written in the frontmatter subset the schema documents.
+
+    ``body`` replaces the default one-criterion body. Acceptance criteria are the
+    only part of the body anything reads -- the closing header counts them and
+    the draft is derived from which are ticked -- so a test that cares about the
+    count has to be able to say what they are.
+    """
     data = {
         "id": item_id,
         "title": "Do the thing",
@@ -396,9 +402,12 @@ def write_backlog_item(ws_root, item_id, **fields):
         lines.append("%s: %s" % (key, rendered))
     lines.append("---")
     lines.append("")
-    lines.append("## Acceptance")
-    lines.append("")
-    lines.append("- [ ] It is done")
+    if body is None:
+        lines.append("## Acceptance")
+        lines.append("")
+        lines.append("- [ ] It is done")
+    else:
+        lines.append(body)
     lines.append("")
     path = Path(ws_root) / "backlog" / ("%s.md" % item_id)
     path.write_text("\n".join(lines), encoding="utf-8")

@@ -31,6 +31,7 @@ from helpers import (
 
 from nextbrief import cli, items
 from nextbrief.frontmatter import parse_frontmatter
+from nextbrief.paths import Workspace
 
 
 class Liveness(unittest.TestCase):
@@ -436,15 +437,41 @@ class ClosingThroughTheCli(TempCase):
         self.assertEqual(
             parse_frontmatter(self._text())[0]["status"], "done")
 
-    def test_ctrl_c_at_the_prompt_still_closes_the_item(self):
-        # The person asked for `done`. Declining to answer the questions is not
-        # declining the command, and treating it as a failure would leave them
-        # unsure whether the close happened.
+    def test_ctrl_c_at_the_prompt_closes_nothing(self):
+        """Ctrl-C stops the command. It is not a way to skip the questions.
+
+        This reverses a deliberate earlier decision, whose reasoning was that
+        "declining to answer the questions is not declining the command" and that
+        failing would leave the reader unsure whether the close happened. The
+        first half does not survive contact: `done` writes
+        `human_confirmed: true` and commits, so treating an interrupt as consent
+        records the reader confirming something they were trying to back out of.
+        The second half is a real concern and is answered by SAYING nothing
+        happened -- see the message asserted below -- rather than by closing the
+        item anyway. Enter already skips, and the prompt says so.
+        """
         def interrupt(_prompt=""):
             raise KeyboardInterrupt
 
+        before = self._text()
         with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
                 mock.patch("builtins.input", interrupt):
+            code, _out, err = self._run("done", "NA-0005")
+        self.assertNotEqual(code, 0, "an interrupted command reported success")
+        self.assertNotEqual(parse_frontmatter(self._text())[0].get("status"), "done")
+        self.assertEqual(self._text(), before,
+                         "an interrupted `done` still modified the item file")
+        self.assertIn("not closed", err)
+
+    def test_eof_still_skips_the_questions_and_closes(self):
+        """The other half, and the reason the two cannot share a branch. EOF is a
+        pipe running dry or a non-tty run -- nobody is there to answer, which is
+        not the same as somebody stopping the command."""
+        def eof(_prompt=""):
+            raise EOFError
+
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", eof):
             code, _out, err = self._run("done", "NA-0005")
         self.assertEqual(code, 0, err)
         self.assertEqual(parse_frontmatter(self._text())[0]["status"], "done")
@@ -464,6 +491,378 @@ class ClosingThroughTheCli(TempCase):
         code, _out, err = self._run("followup", "NA-0005", "--promote", "4")
         self.assertEqual(code, 2)
         self.assertIn("no #4", err)
+
+
+def _acceptance(*criteria):
+    """A body whose acceptance criteria are exactly ``criteria``.
+
+    Each entry is ``(ticked, text)``. ``write_backlog_item`` appends one unticked
+    criterion of its own, so anything asserting on a count passes this instead.
+    """
+    lines = ["<!-- AC:BEGIN -->"]
+    lines += ["- [%s] #%d %s" % ("x" if ok else " ", i, text)
+              for i, (ok, text) in enumerate(criteria, 1)]
+    lines.append("<!-- AC:END -->")
+    return "\n".join(lines)
+
+
+class SayingWhatIsAboutToClose(TempCase):
+    """The three terminal verbs name the item before they touch it.
+
+    `done`, `drop` and `defer` each write `human_confirmed: true` and commit, so
+    a mistyped id permanently confirms an item nobody has read -- and `NA-0017`
+    and `NA-0019` differ by one keystroke. `do`, which merely opens a session,
+    already printed a header; the irreversible three printed nothing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        self.item = write_backlog_item(
+            self.ws, "NA-0005", title="Run 3 probes",
+            body=_acceptance((True, "one"), (False, "two")))
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def test_done_names_the_item_before_it_asks_anything(self):
+        out = self._run("done", "NA-0005", "--summary", "x")[1]
+        self.assertIn("NA-0005 · Run 3 probes", out)
+        self.assertIn("Orchard", out)          # the registry's name, not the id
+        self.assertIn("1/2", out)              # the number that stops you
+
+    def test_the_header_comes_before_the_first_question(self):
+        typed = iter(["", ""])
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            out = self._run("done", "NA-0005")[1]
+        self.assertLess(out.index("Run 3 probes"), out.index("What actually happened"))
+
+    def test_drop_names_it_too(self):
+        out = self._run("drop", "NA-0005")[1]
+        self.assertIn("NA-0005 · Run 3 probes", out)
+
+    def test_defer_names_it_too(self):
+        # The quietest of the three: a wrongly deferred item leaves the brief on
+        # the spot and says nothing again until its date.
+        out = self._run("defer", "NA-0005", "--until", "2026-04-01")[1]
+        self.assertIn("NA-0005 · Run 3 probes", out)
+
+    def test_an_item_with_no_criteria_says_nothing_about_them(self):
+        write_backlog_item(self.ws, "NA-0006", title="Bare", body="No criteria here.")
+        out = self._run("drop", "NA-0006")[1]
+        self.assertIn("NA-0006 · Bare", out)
+        self.assertNotIn("0/0", out)
+
+    def test_a_mistyped_id_still_refuses_and_names_nothing(self):
+        code, out, err = self._run("done", "NA-9999")
+        self.assertEqual(code, 1)
+        self.assertIn("No item NA-9999", err)
+        self.assertNotIn("Run 3 probes", out)
+
+
+class DraftsAreOfferedNeverAssumed(TempCase):
+    """A draft is shown above the question and is never what Enter means.
+
+    ★ This class exists for one assertion. ★
+
+    Drafts make the two closing questions cheaper to answer, which is the cure
+    for the "answered with Enter within a fortnight" problem the prompt was
+    designed around. Pointed one degree differently, the same mechanism is the
+    worst thing here: if Enter took the draft, the reflex that already answers
+    every form would start producing machine sentences signed by a person. An
+    empty field says "nobody knows"; a wrong summary in your own name is a
+    fabricated finding, and that is what the evidence gate exists to prevent.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+
+    def _item(self, item_id="NA-0005", **fields):
+        return write_backlog_item(self.ws, item_id, title="Run 3 probes", **fields)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _closing(self, item_id="NA-0005"):
+        return items.parse_closing(
+            (self.ws / "backlog" / ("%s.md" % item_id)).read_text(encoding="utf-8"))
+
+    def _interactively(self, answers, *args):
+        typed = iter(answers)
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            return self._run(*args)
+
+    # -- the red one --------------------------------------------------------
+
+    def test_enter_skips_even_when_a_draft_is_on_offer(self):
+        """Plant "Enter accepts the draft" and this must fail.
+
+        Two halves, and both are needed: the draft really was offered (so the
+        test cannot pass by there being nothing to accept), and pressing Enter
+        recorded nothing at all.
+        """
+        self._item(body=_acceptance((True, "one"), (False, "two")))
+        code, out, err = self._interactively(["", ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        self.assertIn("draft:", out)                       # it was on offer
+        self.assertIn("AC 1/2", out)                       # and this is what it said
+        self.assertIsNone(self._closing())                 # and Enter took none of it
+
+    def test_enter_leaves_no_summary_even_when_follow_ups_were_typed(self):
+        # The sharper form: a record does get written, so "no block at all" is
+        # not what is doing the work -- the summary field itself stays empty and
+        # says so.
+        self._item(body=_acceptance((True, "one"), (False, "two")))
+        code, _out, err = self._interactively(
+            ["", "something I noticed", ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        closing = self._closing()
+        self.assertEqual(closing.summary, "")
+        self.assertEqual(closing.summary_source, "none")
+
+    # -- accepting on purpose ----------------------------------------------
+
+    def test_the_accept_key_takes_the_draft_verbatim(self):
+        self._item(body=_acceptance((True, "one"), (False, "two")))
+        code, out, err = self._interactively([cli.ACCEPT_DRAFT, ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        closing = self._closing()
+        self.assertIn("AC 1/2", closing.summary)
+        self.assertEqual(closing.summary_source, "accepted_draft")
+        # And the offer said which key does it, rather than leaving it to be guessed.
+        self.assertIn(cli.ACCEPT_DRAFT, out)
+
+    def test_the_accept_key_is_not_reachable_by_pressing_enter(self):
+        # The property the author chose the key for. Stated as an assertion so
+        # that changing the key to "" -- or to anything a stray newline produces
+        # -- is a failing test rather than a silent regression.
+        self.assertTrue(cli.ACCEPT_DRAFT)
+        self.assertNotIn(cli.ACCEPT_DRAFT, ("", "\n", "\r", " "))
+
+    def test_the_accept_key_with_nothing_on_offer_records_nothing(self):
+        """Someone who learned the key and pressed it on an item that had no
+        draft must not end up with a summary reading `=`."""
+        self._item(body="no criteria, no history")
+        code, out, err = self._interactively([cli.ACCEPT_DRAFT, ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("draft:", out)
+        self.assertIsNone(self._closing())
+
+    def test_typing_your_own_words_is_recorded_as_yours(self):
+        self._item(body=_acceptance((True, "one"), (False, "two")))
+        self._interactively(["Migrated all 47 posts, not 3.", ""], "done", "NA-0005")
+        closing = self._closing()
+        self.assertEqual(closing.summary, "Migrated all 47 posts, not 3.")
+        self.assertEqual(closing.summary_source, "human")
+
+    def test_the_flag_is_recorded_as_yours_as_well(self):
+        self._item()
+        self._run("done", "NA-0005", "--summary", "did it")
+        self.assertEqual(self._closing().summary_source, "human")
+
+    def test_a_scripted_run_never_pays_for_a_draft_it_cannot_show(self):
+        """Deriving one reads a git log per project directory. A `done` in a
+        pipeline is answered by its flags before any question is asked, so it
+        must not shell out for an offer nobody is there to take."""
+        self._item()
+        with mock.patch("nextbrief.cli._closing_drafts",
+                        side_effect=AssertionError("derived a draft for a script")):
+            code, _out, err = self._run("done", "NA-0005", "--summary", "did it")
+        self.assertEqual(code, 0, err)
+
+    def test_a_record_written_before_the_field_existed_gains_no_provenance(self):
+        """Reading an old closing record must not invent one. `""` is a fourth
+        value -- "nobody recorded this" -- and it is different from `none`."""
+        text = items.upsert_closing("body\n", items.Closing("2026-03-16", "old", []))
+        self.assertNotIn("summary_source", text)
+        self.assertEqual(items.parse_closing(text).summary_source, "")
+        self.assertEqual(items.parse_closing(text).summary, "old")
+
+
+class DraftsAreDerivedNotInvented(TempCase):
+    """What a draft may say, checked against the two items that motivated it.
+
+    NA-0017 was closed at 0/6 and NA-0024 at 5/5, one week apart, and between
+    them they cover both ends. The regression is not "a draft appears" -- it is
+    that neither draft claims anything the workspace cannot show.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+
+    def _drafts(self, item_id, **fields):
+        path = write_backlog_item(self.ws, item_id, **fields)
+        fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        ws = Workspace(root=self.ws, out=self.ws, source="test")
+        return cli._closing_drafts(ws, fm, body, None)
+
+    def test_nothing_ticked_offers_no_follow_ups_at_all(self):
+        """The NA-0017 shape: six criteria, none ticked, all six in fact shipped.
+
+        Drafting the unticked ones here would have minted six backlog items for
+        finished work -- the engine cannot tell "not done" from "not ticked",
+        and at 0/n the tick habit is what failed, not the work.
+        """
+        summary, future = self._drafts(
+            "NA-0017", body=_acceptance(*[(False, "criterion %d" % i) for i in range(1, 7)]))
+        self.assertEqual(future, [])
+        self.assertIn("AC 0/6", summary)
+
+    def test_everything_ticked_offers_no_follow_ups_either(self):
+        """The NA-0024 shape: five of five, and genuinely nothing left over."""
+        summary, future = self._drafts(
+            "NA-0024", body=_acceptance(*[(True, "criterion %d" % i) for i in range(1, 6)]))
+        self.assertEqual(future, [])
+        self.assertIn("AC 5/5", summary)
+
+    def test_a_half_finished_item_offers_what_is_left(self):
+        """The only shape where unticked criteria are evidence of anything: some
+        were ticked, so the others are outstanding rather than merely untouched.
+
+        What it offers is the criteria's own text -- prose a human wrote, and
+        which only a human may edit. Accepting it hands your own sentence back
+        to you, so nothing here launders a machine's words into a person's."""
+        _summary, future = self._drafts(
+            "NA-0010", body=_acceptance((True, "sjtuaa"), (False, "robots"),
+                                        (False, "aigc-lecture")))
+        self.assertEqual(future, ["#2 robots", "#3 aigc-lecture"])
+
+    def test_the_summary_draft_never_claims_authorship_of_commits(self):
+        """Not one commit in a real workspace names an item id, so git cannot
+        tell this item's work from that day's work. The draft therefore states a
+        scope -- the project, and what it saw since the item was opened -- and
+        the count is attached to the project, never to the item."""
+        summary, _future = self._drafts("NA-0005", body=_acceptance((True, "one")))
+        self.assertTrue(summary.startswith("Orchard"))
+        self.assertNotIn("NA-0005", summary)
+
+    @requires_git
+    def test_several_commits_are_counted_and_none_of_them_quoted(self):
+        """Picking a subject by recency names whatever was committed last.
+
+        Both items this was regression-tested against were closed on a day their
+        project had been busy with other work, and in both the most recent
+        commit belonged to something else -- a true sentence about the wrong
+        thing, offered where a summary goes.
+        """
+        project = self.ws / "projects" / "orchard"
+        git_init(project)
+        for n in range(3):
+            (project / ("f%d.txt" % n)).write_text("x", encoding="utf-8")
+            git_commit_all(project, "orchard: unrelated change %d" % n,
+                           when="2026-03-12T09:00:00+00:00")
+        summary, _future = self._drafts("NA-0005", created_date="2026-03-01")
+        self.assertIn("3 commits since 2026-03-01", summary)
+        self.assertNotIn("unrelated change", summary)
+
+    @requires_git
+    def test_a_single_commit_is_quoted_because_there_is_nothing_to_choose(self):
+        project = self.ws / "projects" / "orchard"
+        git_init(project)
+        git_commit_all(project, "orchard: the only thing that happened",
+                       when="2026-03-12T09:00:00+00:00")
+        summary, _future = self._drafts("NA-0005", created_date="2026-03-01")
+        self.assertIn("the only thing that happened", summary)
+
+    @requires_git
+    def test_commits_made_earlier_the_same_day_are_not_dropped(self):
+        """`git log --since=2026-03-16` is read at the *current time of day*.
+
+        A bare date therefore hides everything committed earlier today -- which
+        is every commit that matters when an item is opened and closed on the
+        same day, the normal case for this command. The fixture commit is pinned
+        one second after midnight so that a bare `--since` would find nothing.
+        """
+        today = dt.date.today().isoformat()
+        project = self.ws / "projects" / "orchard"
+        git_init(project)
+        git_commit_all(project, "orchard: work done at dawn",
+                       when="%sT00:00:01+00:00" % today)
+        summary, _future = self._drafts("NA-0005", created_date=today)
+        self.assertIn("at dawn", summary)
+
+
+class FollowUpListing(TempCase):
+    """The list, and the promotion that follows it.
+
+    The old list printed `  .` in a column that aligned to `-> NA-0026`. On a
+    freshly closed item nothing has been promoted, so every row carried a lone
+    `.` standing in for a shape the reader had never seen -- and `.` already
+    means "unconfirmed" in `ls`, where a footer explains it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        write_backlog_item(self.ws, "NA-0005", title="Run 3 probes")
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _close_with(self, *future):
+        args = ["done", "NA-0005"]
+        for text in future:
+            args += ["--future-work", text]
+        self._run(*args)
+
+    def test_nothing_promoted_yet_prints_no_column(self):
+        self._close_with("Write down the hotlink fix", "Do the same for sjtuaa")
+        out = self._run("followup", "NA-0005")[1]
+        rows = [ln for ln in out.splitlines() if ln.strip().startswith(("1)", "2)"))]
+        self.assertEqual(len(rows), 2)
+        for row in rows:
+            self.assertNotIn(".", row.split(")", 1)[0] + row.split(")", 1)[1][:4])
+        self.assertIn("1) Write down the hotlink fix", out)
+
+    def test_once_something_is_promoted_the_column_says_so_in_words(self):
+        self._close_with("Write down the hotlink fix", "Do the same for sjtuaa")
+        self._run("followup", "NA-0005", "--promote", "1")
+        out = self._run("followup", "NA-0005")[1]
+        self.assertIn("already NA-0006", out)
+        self.assertIn("not promoted", out)
+
+    def test_the_column_is_padded_by_display_width(self):
+        """`_pad`, not `%-12s`. It was written for `ls` because a CJK glyph is
+        one character and two terminal cells, and it sits directly below this
+        function -- the localised marks here need it exactly as much."""
+        self._close_with("first", "second")
+        self._run("followup", "NA-0005", "--promote", "1")
+        out = self._run("followup", "NA-0005")[1]
+        rows = [ln for ln in out.splitlines() if ln.strip().startswith(("1)", "2)"))]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(*[cli._width(r[:r.index(t)]) for r, t
+                           in zip(rows, ("first", "second"))])
+
+    def test_promote_says_what_it_will_create_before_it_creates_it(self):
+        self._close_with("Write down the hotlink fix")
+        out = self._run("followup", "NA-0005", "--all")[1]
+        self.assertIn("About to create", out)
+        self.assertLess(out.index("About to create"), out.index("discovered_from: NA-0005."))
+
+    def test_it_says_so_even_when_the_write_then_fails(self):
+        """The proof that the announcement precedes the write rather than merely
+        being printed above it. `--promote` mints files and produces two commits
+        per item; describing that after the fact is the same shape as `done`
+        closing an item it never named."""
+        self._close_with("Write down the hotlink fix")
+        with mock.patch("nextbrief.cli.write_text", side_effect=OSError("no")):
+            code, out, _err = self._run("followup", "NA-0005", "--all")
+        self.assertEqual(code, 1)
+        self.assertIn("About to create", out)
+        self.assertIn("NA-0006", out)
+        self.assertEqual(len(list(self.ws.glob("backlog/NA-0006-*.md"))), 0)
+
+    def test_an_all_run_with_nothing_left_to_do_announces_nothing(self):
+        self._close_with("Write down the hotlink fix")
+        self._run("followup", "NA-0005", "--all")
+        code, out, _err = self._run("followup", "NA-0005", "--all")
+        self.assertEqual(code, 0)
+        self.assertIn("already", out)
+        self.assertNotIn("About to create", out)
 
 
 if __name__ == "__main__":

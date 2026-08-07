@@ -38,6 +38,7 @@ __all__ = [
     "OPEN_STATUSES", "TERMINAL_STATUSES", "DEFERRED", "HUMAN_ONLY_STATUSES",
     "status_of", "defer_due", "is_live", "is_parked", "days_until_due",
     "Closing", "FutureWork", "CLOSING_BEGIN", "CLOSING_END",
+    "SUMMARY_HUMAN", "SUMMARY_DRAFT", "SUMMARY_NONE",
     "parse_closing", "render_closing", "upsert_closing", "record_promotion",
     "next_item_id", "slug", "new_item_text",
 ]
@@ -119,10 +120,26 @@ class FutureWork(NamedTuple):
     promoted_to: Optional[str]
 
 
+# Who wrote the summary. `""` is a fourth, unwritable value: a record closed
+# before this field existed, which is not the same claim as `none`.
+SUMMARY_HUMAN = "human"
+SUMMARY_DRAFT = "accepted_draft"
+SUMMARY_NONE = "none"
+
+
 class Closing(NamedTuple):
     closed_on: str
     summary: str
     future_work: List[FutureWork]
+    # ★ Whose sentence this is. ★
+    #
+    # Everything else in this tool records provenance -- `created_by`,
+    # `human_confirmed`, the evidence gate -- and the closing summary is the one
+    # place where a machine-derived sentence could end up filed under a person's
+    # name. A draft the engine offered and a person accepted is a real answer,
+    # but it is not testimony, and six months later the difference is the whole
+    # reason to trust or distrust the line.
+    summary_source: str = ""
 
     @property
     def empty(self) -> bool:
@@ -153,6 +170,7 @@ def parse_closing(text: str) -> Optional[Closing]:
     _s, _e, inner = found
 
     closed_on = ""
+    source = ""
     summary_lines: List[str] = []
     future: List[FutureWork] = []
     mode = None
@@ -166,6 +184,10 @@ def parse_closing(text: str) -> Optional[Closing]:
             mode = None
         if stripped.startswith("closed_on:"):
             closed_on = stripped[len("closed_on:"):].strip()
+            continue
+        # Before `summary:`, because `startswith("summary:")` matches both.
+        if stripped.startswith("summary_source:"):
+            source = stripped[len("summary_source:"):].strip()
             continue
         if stripped == "summary: |":
             mode, summary_lines = "summary", []
@@ -181,7 +203,7 @@ def parse_closing(text: str) -> Optional[Closing]:
             m = _PROMOTED.search(body)
             future.append(FutureWork(_PROMOTED.sub("", body).strip(),
                                      m.group(1) if m else None))
-    return Closing(closed_on, "\n".join(summary_lines).strip(), future)
+    return Closing(closed_on, "\n".join(summary_lines).strip(), future, source)
 
 
 def render_closing(closing: Closing) -> str:
@@ -192,6 +214,10 @@ def render_closing(closing: Closing) -> str:
     view that works in one language and silently finds nothing in the other.
     """
     lines = [CLOSING_BEGIN, "closed_on: %s" % (closing.closed_on or "")]
+    # Only when it is known. Writing `summary_source:` onto a record closed
+    # before the field existed would invent a provenance nobody recorded.
+    if closing.summary_source:
+        lines.append("summary_source: %s" % closing.summary_source)
     summary = closing.summary.strip()
     if summary:
         lines.append("")

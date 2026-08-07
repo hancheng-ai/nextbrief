@@ -52,6 +52,9 @@ from .i18n import Catalog, load_catalog
 from .inventory import INVENTORY_NAME
 from .items import (
     DEFERRED,
+    SUMMARY_DRAFT,
+    SUMMARY_HUMAN,
+    SUMMARY_NONE,
     Closing,
     FutureWork,
     days_until_due,
@@ -795,7 +798,209 @@ def cmd_ok(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
     )
 
 
-def _ask_closing(args: argparse.Namespace, cat: Optional[Catalog]) -> Optional[Closing]:
+# ---------------------------------------------------------------------------
+# saying what is about to be closed, and offering what can be derived
+# ---------------------------------------------------------------------------
+
+# The key that accepts a draft. Chosen by the author, and the requirement it was
+# chosen against is the only one that matters: it must not be reachable by the
+# reflex that answers prompts with Enter. It is also not a letter, so it is
+# never the first character of a sentence somebody meant to type.
+ACCEPT_DRAFT = "="
+
+
+def _ac_progress(body: str) -> Tuple[int, int]:
+    """``(ticked, total)`` over the item's acceptance criteria.
+
+    Checkbox lines in the body, the same definition ``launch`` copies into the
+    session prompt. Nothing here writes one: ticking is a human-only act, which
+    is exactly why the count is worth showing -- the engine can see the number
+    and cannot move it.
+    """
+    ticked = total = 0
+    for line in body.splitlines():
+        s = line.strip()
+        if s.startswith("- ["):
+            total += 1
+            if s[3:4].lower() == "x":
+                ticked += 1
+    return ticked, total
+
+
+def _unticked_acs(body: str) -> List[str]:
+    """The text of every criterion still unticked, with its ``#n`` left on."""
+    return [ln.strip()[5:].strip() for ln in body.splitlines()
+            if ln.strip().startswith("- [ ]") and ln.strip()[5:].strip()]
+
+
+def _registry(ws: Workspace) -> Dict[str, Any]:
+    try:
+        reg = load_jsonc(ws.registry_path)
+    except (JSONCError, OSError):
+        return {}
+    return reg if isinstance(reg, dict) else {}
+
+
+def _project_dirs(ws: Workspace, reg: Dict[str, Any], project_id: Any) -> List[Path]:
+    """Existing directories a project declares, resolved the way ``launch`` does.
+
+    A relative ``defaults.root`` is relative to the *workspace*, never to
+    wherever the command was typed -- resolving it anywhere else reads git logs
+    from a tree nobody meant.
+    """
+    declared = (reg.get("defaults") or {}).get("root") or str(ws.root)
+    root = expand(declared)
+    if not root.is_absolute():
+        root = ws.root / root
+    for pr in reg.get("projects") or []:
+        if isinstance(pr, dict) and pr.get("id") == project_id:
+            return [d for d in (root / str(rel) for rel in (pr.get("paths") or []))
+                    if d.is_dir()]
+    return []
+
+
+def _project_name(reg: Dict[str, Any], project_id: Any) -> str:
+    for pr in reg.get("projects") or []:
+        if isinstance(pr, dict) and pr.get("id") == project_id:
+            return str(pr.get("name") or project_id or "")
+    return str(project_id or "")
+
+
+def _clip(text: str, cells: int) -> str:
+    """``text`` cut to ``cells`` terminal columns, with an ellipsis when cut."""
+    s = " ".join(str(text).split())
+    if _width(s) <= cells:
+        return s
+    return _pad(s, max(1, cells - 1)).rstrip() + "…"
+
+
+def _echo_target(ws: Workspace, item_id: str, cat: Optional[Catalog]) -> Optional[Path]:
+    """Find the item and say what it is, before anything irreversible happens.
+
+    ★ The id is typed by hand, and `NA-0017` and `NA-0019` differ by one key. ★
+
+    `done`, `drop` and `defer` all write ``human_confirmed: true`` and commit,
+    so a mistyped character permanently confirms an item nobody has read and
+    leaves a commit saying so. `do` -- which only opens a session -- already
+    printed a header; the three commands that cannot be undone did not. That was
+    an inconsistency rather than a design.
+
+    The acceptance count is here because it is the number that stops you: an
+    item about to be closed with nothing ticked is either finished-and-unticked
+    or not finished, and both are worth one second of hesitation. It is omitted
+    when the item has no criteria at all, where `0/0` would only be noise.
+    """
+    path = _find_item(ws, item_id, cat)
+    if path is None:
+        return None
+    try:
+        fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError:
+        return path
+    fm = fm or {}
+    print()
+    print(tr(cat, "cli.do.header", "> {id} · {title}",
+             id=item_id, title=str(fm.get("title") or "")))
+    print("  " + tr(cat, "cli.do.project", "Project: {project}",
+                    project=_project_name(_registry(ws), fm.get("project"))))
+    ticked, total = _ac_progress(body or "")
+    if total:
+        print("  " + tr(cat, "cli.close.acceptance",
+                        "Acceptance criteria: {done}/{total} ticked",
+                        done=ticked, total=total))
+    print()
+    return path
+
+
+def _project_commits(ws: Workspace, reg: Dict[str, Any], project_id: Any,
+                     since: str) -> List[Tuple[str, str]]:
+    """``(sha, subject)`` for the project's commits since ``since``, newest first.
+
+    ``--since=2026-08-06`` is read by git at the *current time of day*, so a bare
+    date silently drops everything committed earlier the same day -- which is
+    every commit that matters when an item is opened and closed on one day, the
+    normal case here. Hence the explicit midnight.
+    """
+    if not since:
+        return []
+    got: List[Tuple[str, str]] = []
+    for directory in _project_dirs(ws, reg, project_id):
+        rc, out, _err = _git(directory, "log", "--since=%s 00:00:00" % since,
+                             "--no-merges", "--pretty=%h\t%s")
+        if rc != 0:
+            continue
+        for line in out.splitlines():
+            if "\t" in line:
+                sha, subject = line.split("\t", 1)
+                got.append((sha.strip(), subject.strip()))
+    return got
+
+
+def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
+                    cat: Optional[Catalog]) -> Tuple[str, List[str]]:
+    """``(summary draft, follow-up drafts)``, derived only from facts on disk.
+
+    No model, no network, nothing that can be slow or cost money: ``done`` has to
+    stay instant or it stops being typed.
+
+    **Both drafts are deliberately narrower than they could be**, because the
+    failure mode here is not a missing draft, it is a plausible wrong one -- a
+    sentence a machine wrote, accepted in a hurry, and filed forever under a
+    person's name. That is strictly worse than an empty field, which at least
+    says "nobody knows".
+
+    * The summary draft states a **scope**, never authorship. Not one commit in
+      this workspace's projects names an item id, so git cannot tell "this
+      item's work" from "that day's work" -- a busy repo produced 31 commits on
+      the day an item was closed, of which one was the item. Worded as a
+      summary, that number is a fabricated finding; worded as "the project saw
+      31 commits since this was opened", it is a true observation the reader can
+      act on.
+
+    * Follow-ups are drafted from unticked criteria **only when some are
+      ticked**. At ``n/n`` there is nothing left; at ``0/n`` the tick habit
+      itself failed and the engine cannot tell "not done" from "not ticked" --
+      the real case that taught this was an item closed at 0/6 whose six
+      untouched boxes had all in fact shipped. Drafting them would have minted
+      six backlog items for finished work.
+
+      What it offers there is the criteria' own text, which a human wrote and
+      only a human may edit. Accepting it copies your own sentence back to you,
+      not the engine's.
+    """
+    reg = _registry(ws)
+    since = str(fm.get("created_date") or fm.get("updated_date") or "").strip()[:10]
+    ticked, total = _ac_progress(body)
+    commits = _project_commits(ws, reg, fm.get("project"), since)
+
+    summary = ""
+    if commits or total:
+        parts = [_project_name(reg, fm.get("project"))]
+        if len(commits) == 1:
+            # One commit since the item was opened is the only case where a
+            # subject line is evidence about *this* item: there is nothing to
+            # choose between. Any more and picking by recency names whatever was
+            # committed last, which in both items this was regression-tested
+            # against belonged to different work entirely -- a true sentence
+            # about the wrong thing, which is the failure being guarded here.
+            parts.append(tr(cat, "cli.close.draft_commit",
+                            "one commit since {since}: \"{subject}\"",
+                            since=since, subject=_clip(commits[0][1], 56)))
+        elif commits:
+            parts.append(tr(cat, "cli.close.draft_commits",
+                            "{n} commits since {since}",
+                            n=len(commits), since=since))
+        if total:
+            parts.append(tr(cat, "cli.close.draft_acceptance", "AC {done}/{total}",
+                            done=ticked, total=total))
+        summary = " · ".join(p for p in parts if p)
+
+    future = _unticked_acs(body) if 0 < ticked < total else []
+    return summary, future
+
+
+def _ask_closing(args: argparse.Namespace, cat: Optional[Catalog],
+                 drafts: Any = None) -> Optional[Closing]:
     """The two questions asked when an item is closed, or None to record nothing.
 
     ★ Exactly two, and both skippable. ★
@@ -814,40 +1019,108 @@ def _ask_closing(args: argparse.Namespace, cat: Optional[Catalog]) -> Optional[C
     Asked only at a terminal. `nextbrief done X` inside a script must not block
     on a question nobody will ever see, so a non-tty run records whatever the
     flags supplied and nothing else.
+
+    ★ A draft is shown above a question and never inside it. ★
+
+    Drafts exist to make these two questions cheaper to answer, which is the
+    cure for the fortnight problem above. But the same mechanism, pointed one
+    degree differently, is the worst thing this tool could do: if Enter took the
+    draft, then the reflex that already answers every form would start producing
+    *machine sentences signed by a person* -- a fabricated finding, which is the
+    exact failure the evidence gate exists to prevent, wearing the costume of a
+    filled-in field.
+
+    So Enter keeps the meaning it always had, to the letter:
+
+        Enter  = skip                     (unchanged, and unchangeable)
+        `=`    = take the draft as shown  (deliberate, and recorded as such)
+        typing = your own words
+
+    ``summary_source`` is written for the same reason: an accepted draft is a
+    real answer, but it is not testimony, and the record has to be able to say
+    which one it holds.
     """
     today = dt.date.today().isoformat()
 
     def record():
         if not summary and not future:
             return None
-        return Closing(today, summary, [FutureWork(t, None) for t in future])
+        return Closing(today, summary, [FutureWork(t, None) for t in future], source)
 
     summary = (getattr(args, "summary", None) or "").strip()
     future = [t.strip() for t in (getattr(args, "future_work", None) or []) if t.strip()]
+    source = SUMMARY_HUMAN if summary else SUMMARY_NONE
     # Flags win outright: someone who typed the answer is not asked it again.
     if summary or future or not sys.stdin.isatty():
         return record()
+
+    # Only now, because deriving a draft reads a git log per project directory
+    # and a scripted `done` would pay for one it is never shown. ``drafts`` is a
+    # callable for that reason alone.
+    summary_draft, future_drafts = drafts() if drafts is not None else ("", [])
+
+    def offer(lines: Sequence[str]) -> None:
+        """Show a draft above the prompt, and say what takes it."""
+        for line in lines:
+            print("    " + tr(cat, "cli.close.draft", "draft: {text}", text=line))
+        print("    " + tr(cat, "cli.close.draft_hint",
+                          "{accept} to take the draft  ·  Enter to skip  ·  or just "
+                          "write your own", accept=ACCEPT_DRAFT))
 
     print()
     print("  " + tr(cat, "cli.done.ask_summary",
                     "What actually happened? One line -- especially anything the "
                     "item did not say. Enter to skip."))
+    if summary_draft:
+        offer([summary_draft])
     try:
-        summary = input("  > ").strip()
-    except (EOFError, KeyboardInterrupt):
+        typed = input("  > ").strip()
+    except EOFError:
+        # EOF only. Ctrl-C is NOT a way to skip an optional question -- it is
+        # the reader stopping the command, and this one is about to write
+        # `human_confirmed: true` and commit. Catching it here turned an
+        # interrupt into a confirmation: the item closed, in the reader's name,
+        # because they tried to back out. `main` catches the propagating
+        # KeyboardInterrupt and exits non-zero, which is the whole abort path.
+        #
+        # EOF genuinely does mean skip: a pipe ran dry, or the run is not a tty,
+        # and both of those are "nobody is here to answer", not "stop".
         print()
         return record()
+    if typed == ACCEPT_DRAFT:
+        # With a draft, take it. Without one -- somebody who learned the key and
+        # pressed it on an item that had nothing to offer -- take nothing. The
+        # alternative is filing a summary that reads `=`, which is precisely the
+        # kind of junk in the record this whole item exists to prevent.
+        if summary_draft:
+            summary, source = summary_draft, SUMMARY_DRAFT
+    elif typed:
+        summary, source = typed, SUMMARY_HUMAN
+    # else: Enter. `summary` stays empty and `source` stays `none`. This branch
+    # is the property the whole feature is built around -- see the test that
+    # plants a draft and presses Enter.
 
     print()
     print("  " + tr(cat, "cli.done.ask_future",
                     "Anything this turned up that does not belong to it? One per "
                     "line, Enter on an empty line to finish."))
+    if future_drafts:
+        offer(future_drafts)
     while True:
         try:
             line = input("  - ").strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
+            # As above: EOF finishes the list, Ctrl-C abandons the command.
             print()
             break
+        if future_drafts and line == ACCEPT_DRAFT:
+            # Taken as a group: these are the criteria that were left unticked,
+            # and picking some of them apart from the others is a judgement the
+            # engine has no basis for. Anything wrong in the list can be edited
+            # in the file, which is prose a person owns.
+            future.extend(t for t in future_drafts if t not in future)
+            future_drafts = []
+            continue
         if not line:
             break
         future.append(line)
@@ -860,15 +1133,41 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
     The questions come after the durability check and before the write, so a
     workspace that cannot commit says so without first asking two questions it
     is about to throw away.
+
+    The header comes before both, because it is the only chance to notice that
+    the id was mistyped -- and unlike the questions, that mistake cannot be
+    taken back.
     """
-    if _find_item(ws, args.item_id, cat) is None:
+    path = _echo_target(ws, args.item_id, cat)
+    if path is None:
         return EXIT_FAIL
     _gap, problem = _durability_problem(ws)
     if problem is not None:
         _err(problem)
         return EXIT_FAIL
 
-    closing = _ask_closing(args, cat)
+    def drafts():
+        try:
+            fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            return "", []
+        return _closing_drafts(ws, fm or {}, body or "", cat)
+
+    try:
+        closing = _ask_closing(args, cat, drafts)
+    except KeyboardInterrupt:
+        # Ctrl-C stops the command, and this is where that is worth saying out
+        # loud. The concern behind the old behaviour was real -- an interrupt
+        # that just exits leaves the reader unsure whether the close happened --
+        # but the answer to that is to SAY nothing happened, not to close the
+        # item anyway. Enter is the affordance for skipping the questions, and
+        # the prompt says so.
+        print()
+        _err(tr(cat, "cli.done.cancelled",
+                "Cancelled. {id} was not closed and nothing was written.",
+                id=args.item_id))
+        return EXIT_FAIL
+
     message = tr(cat, "cli.done.done", "{id} -> done", id=args.item_id)
     if closing is not None and closing.future_work:
         message += "\n" + tr(
@@ -891,6 +1190,10 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
 
 
 def cmd_drop(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Abandon an item. Terminal, confirming, and committed -- so it says which
+    one first, for the same reason `done` does."""
+    if _echo_target(ws, args.item_id, cat) is None:
+        return EXIT_FAIL
     return _mark(
         ws,
         cat,
@@ -949,7 +1252,7 @@ def cmd_defer(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
     today = dt.date.today()
 
     if getattr(args, "cancel", False):
-        path = _find_item(ws, item_id, cat)
+        path = _echo_target(ws, item_id, cat)
         if path is None:
             return EXIT_FAIL
         fm, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -973,6 +1276,14 @@ def cmd_defer(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
                 "on (\"after VirtualTutor ships\"). A deferral that never comes "
                 "back is a drop with better manners, so this one is not optional."))
         return EXIT_USAGE
+
+    # After the usage check, which is about the command line rather than the
+    # item, and before anything is written. Deferring the wrong item is the
+    # quietest of the three mistakes: the item sinks out of the brief on the
+    # spot and nothing surfaces again until its date, so there is no later
+    # moment at which the error announces itself.
+    if _echo_target(ws, item_id, cat) is None:
+        return EXIT_FAIL
 
     fields: Dict[str, Any] = {"status": DEFERRED, "human_confirmed": True,
                               "deferred_when": None}
@@ -1137,9 +1448,33 @@ def cmd_followup(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]
     if not wanted:
         print(tr(cat, "cli.followup.header",
                  "Future work recorded when {id} was closed:", id=args.item_id))
+        # The column exists only once there is something in it.
+        #
+        # It used to print `  .` as a placeholder against the `-> NA-0026` it was
+        # aligning to. On a freshly closed item nothing has been promoted, so
+        # every row got a lone `.` standing in for a shape the reader had never
+        # seen -- a legend legible only to someone who no longer needs it. Worse,
+        # `.` already means "unconfirmed" in `nextbrief ls`, where a footer
+        # explains it; the same character meaning two things, unexplained in the
+        # place it cannot be guessed.
+        #
+        # So: words rather than a symbol, and only when at least one has been
+        # promoted. No mark is itself the information, and the footer's "every
+        # one not already promoted" says the rest.
+        marks = []
+        if any(e.promoted_to for e in closing.future_work):
+            marks = [tr(cat, "cli.followup.promoted", "already {id}", id=e.promoted_to)
+                     if e.promoted_to
+                     else tr(cat, "cli.followup.not_promoted", "not promoted")
+                     for e in closing.future_work]
+        # `_pad`, not `%-*s`: these strings are localised, and a CJK glyph is two
+        # terminal cells wide but one character, so `%-12s` drifts every column
+        # to its right. The helper was written for `ls` and this table needed it
+        # just as much.
+        width = max((_width(m) for m in marks), default=0)
         for i, entry in enumerate(closing.future_work, 1):
-            mark = ("-> %s" % entry.promoted_to) if entry.promoted_to else "  ."
-            print("  %d) %s  %s" % (i, mark, entry.text))
+            prefix = ("%s  " % _pad(marks[i - 1], width)) if marks else ""
+            print("  %d) %s%s" % (i, prefix, entry.text))
         print()
         print(tr(cat, "cli.followup.how",
                  "nextbrief followup {id} --promote <n>  ·  --all for every one "
@@ -1155,7 +1490,13 @@ def cmd_followup(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]
 
     today = dt.date.today().isoformat()
     known = [str(fm2.get("id") or "") for _p, fm2 in _all_entries(ws)]
-    made: List[Tuple[str, str]] = []
+
+    # Work out the whole plan, say it, and only then write. `--promote` mints
+    # files and produces two commits per item, and until now it described what
+    # it had done rather than what it was about to do. Same shape as `done`
+    # closing an item it never named: a hand-typed command doing something
+    # irreversible without showing you first.
+    plan: List[Tuple[int, str, str]] = []
     for index in wanted:
         entry = closing.future_work[index]
         if entry.promoted_to:
@@ -1163,8 +1504,30 @@ def cmd_followup(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]
                      "#{n} is already {other}; leaving it alone.",
                      n=index + 1, other=entry.promoted_to))
             continue
+        # Assigned here rather than in the write loop so the announcement names
+        # the ids that will actually be used, instead of promising ids a second
+        # pass might renumber.
         new_id = next_item_id(known, str(fm.get("id") or args.item_id))
         known.append(new_id)
+        plan.append((index, new_id, entry.text))
+
+    if not plan:
+        return EXIT_OK
+    project = str(fm.get("project") or "")
+    print(tr(cat, "cli.followup.about_to",
+             "About to create {n} backlog item(s) in {project}, each carrying "
+             "discovered_from: {src}:",
+             n=len(plan), project=project or "-",
+             src=fm.get("id") or args.item_id))
+    # Not `text`: that name holds the item file's contents for the whole
+    # function, and the write below rewrites the file from it.
+    for _index, new_id, what in plan:
+        print("  %s  %s" % (new_id, what))
+    print()
+
+    made: List[Tuple[str, str]] = []
+    for index, new_id, _what in plan:
+        entry = closing.future_work[index]
         new_path = ws.backlog / ("%s-%s.md" % (new_id, slug(entry.text)))
         try:
             write_text(ws, new_path, new_item_text(
@@ -1952,10 +2315,15 @@ def cmd_review(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
 
 
 def _ask_choice(count: int, skip_hint: str) -> Optional[int]:
-    """Read a 1..count choice. Anything else, including EOF, means skip."""
+    """Read a 1..count choice. Anything else, including EOF, means skip.
+
+    Ctrl-C is not "anything else" -- it propagates, and the review saves nothing.
+    """
     try:
         raw = input("   [1-%d, %s] " % (count, skip_hint)).strip()
-    except (EOFError, KeyboardInterrupt):
+    except EOFError:
+        # Same rule. Ctrl-C partway through a review used to SAVE the answers
+        # given so far, because skipping and stopping were the same branch.
         return None
     if not raw.isdigit():
         return None

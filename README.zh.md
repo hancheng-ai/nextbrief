@@ -1,8 +1,8 @@
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.2.0rc2-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc2)
-[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.2.0rc2-blue)](https://test.pypi.org/project/nextbrief/)
+[![Release](https://img.shields.io/badge/release-v0.2.0rc3-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc3)
+[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.2.0rc3-blue)](https://test.pypi.org/project/nextbrief/)
 [![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -115,7 +115,7 @@ nextbrief open                  # 在浏览器里读
 如果你同时在用 [xwmx/nb](https://github.com/xwmx/nb)（那个记笔记的 CLI），两者会撞名：
 改用 `pipx install --suffix @nx nextbrief`，命令就是 `nextbrief@nx`。
 
-> **当前版本是 `0.2.0rc2`，是一个预发布版。** 它发在 **TestPyPI** 而不是 PyPI：
+> **当前版本是 `0.2.0rc3`，是一个预发布版。** 它发在 **TestPyPI** 而不是 PyPI：
 > release workflow 会把任何带预发布段的版本路由到 TestPyPI，而往正式索引推一个 rc
 > 是撤不回来的。所以下面每条走索引的命令都显式带上了索引地址和版本号——少任何一个，
 > 你会得到「no matching distribution」。
@@ -126,7 +126,7 @@ nextbrief open                  # 在浏览器里读
 **1 · 什么都不装，直接跑**
 
 ```sh
-uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc2" v0
+uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc3" v0
 ```
 
 **2 · 单个文件，不需要包管理器**
@@ -144,14 +144,14 @@ bash nextbrief/scripts/build-zipapp.sh    # 产出 dist/nextbrief.pyz
 每个打了 tag 的发布都会附带编译好的 `nextbrief.pyz` 与 `SHA256SUMS`：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc2/nextbrief.pyz
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc3/nextbrief.pyz
 chmod +x nextbrief.pyz
 ```
 
 要核对校验和——加 `--ignore-missing` 是因为 `SHA256SUMS` 同时覆盖 sdist 与 wheel，而你并没有下载它们：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc2/SHA256SUMS
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc3/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
 ```
 
@@ -161,10 +161,10 @@ shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
 
 ```sh
 pipx install --python /usr/bin/python3 \
-  --index-url https://test.pypi.org/simple/ "nextbrief==0.2.0rc2"
+  --index-url https://test.pypi.org/simple/ "nextbrief==0.2.0rc3"
 
 uv tool install --python /usr/bin/python3 \
-  --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc2"
+  --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc3"
 
 pipx install --python /usr/bin/python3 \
   "git+https://github.com/hancheng-ai/nextbrief"            # 直接装 main
@@ -181,7 +181,7 @@ git clone --depth 1 https://github.com/hancheng-ai/nextbrief
 brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 ```
 
-formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.2.0rc2` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
+formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.2.0rc3` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
 
 （各发布渠道当前是「已生效」还是「待发布」，见英文版的 [Distribution](README.md#distribution) 一节。）
 
@@ -413,6 +413,12 @@ nextbrief init [dir]     创建 workspace   （-y、--no-scan）
 两者都写进这条 item 自己的文件里，放在 `SECTION:CLOSING` 区块。**不新建存储**：已结项的文件本来就永远留在 `backlog/`，本来就在 git 里。用 `nextbrief closed [项目]` 读回来。
 
 只问两项，不问五项。**一份成本高过回报的表单，两周之内就会被训练成回车**——而空着的字段看起来像是「查过了，没有」。
+
+两问各配一条**草稿**，只从盘上已有的事实推出来：这条 item 开出来之后该项目的提交数，以及验收标准勾了几条。不调模型、不联网，`done` 仍然是瞬时的。
+
+**草稿绝不是回车的意思。** 回车照旧＝跳过；`=` 采用草稿；敲字＝你自己的话。这一行就是全部设计：如果回车等于接受草稿，那个「两周内退化成回车」的反射就会开始生产**署着人名的机器句子**——而一句错的、挂在你名下的总结，比空字段更坏，因为空字段至少诚实地说了「不知道」。这句话是谁写的会记进 `summary_source: human | accepted_draft | none`。
+
+在这一切之前，`done` / `drop` / `defer` 都会先打出 `> {id} · {title}`、项目、以及验收完成度。三个动作都会写 `human_confirmed: true` 并提交，而 id 是手敲的——`NA-0017` 和 `NA-0019` 只差一个字符。
 
 ### 延后：还是真的，只是现在不做
 

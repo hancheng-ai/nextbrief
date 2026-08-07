@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0rc3] - 2026-08-07
+
+### Fixed
+
+- **An interrupted `done` no longer closes the item.** Ctrl-C at the closing
+  questions was caught in the same branch as EOF and treated as "skip", so the
+  command carried on: it wrote `status: done`, set `human_confirmed: true`, and
+  committed. An interrupt was being recorded as the reader confirming something
+  they were trying to back out of.
+
+  The two are not the same event. EOF is a pipe running dry or a non-tty run --
+  nobody is there to answer, which genuinely means skip. Ctrl-C is somebody
+  stopping the command. Enter already skips, and the prompt says so, so Ctrl-C
+  never needed to.
+
+  This reverses a deliberate decision, and half its reasoning was right: an
+  interrupt that merely exits leaves the reader unsure whether the close
+  happened. The answer to that is to *say* nothing happened -- `done` now prints
+  "Cancelled. <id> was not closed and nothing was written." -- rather than to
+  close the item anyway.
+
+  The same conflation is fixed in `review`, where Ctrl-C partway through used to
+  save the answers given so far. `nextbrief do` already had it right and is
+  unchanged.
+
+- **The engine no longer counts its own output as the project's uncommitted
+  work.** `walk_project` hid `state/`, `log/`, `BRIEF.md` and `BRIEF.html` from
+  the activity count, for the reason `engine_output_globs` gives -- a workspace
+  declared as one of your own projects would otherwise never go stale, because
+  the thing measuring it touches it every night. That reasoning never reached
+  git, so the same files came back as UNCOMMITTED: a parked workspace reported
+  stalled, the evidence term read +3 for a repository nobody had touched, and
+  `check` could not settle, because each run dirtied the project it had just
+  measured.
+
+### Added
+
+- **`done`, `drop` and `defer` say which item they are about to close.** All three
+  write `human_confirmed: true` and commit, so a mistyped id permanently confirms
+  an item nobody has read and leaves a commit saying so — and the id is typed by
+  hand, where `NA-0017` and `NA-0019` differ by one keystroke. `do`, which only
+  opens a session, already printed a header; the three that cannot be undone
+  printed nothing. They now print `> {id} · {title}`, the project, and how many
+  acceptance criteria are ticked, before anything is asked or written.
+
+  The count is there because it is the number that stops you. An item closed at
+  `0/6` is either finished-and-unticked or not finished, and both are worth one
+  second of hesitation; nothing displayed it anywhere before.
+
+- **A draft for each of the two closing questions, derived only from what is
+  already on disk** — the project's commits since the item was opened, and its
+  acceptance ratio. No model, no network: `done` has to stay instant or it stops
+  being typed.
+
+  **The draft is shown above the question and is never what Enter means.** Enter
+  still skips, exactly as before; `=` takes the draft; typing gives your own
+  words. If Enter took the draft, the reflex that answers every form would start
+  producing machine sentences signed by a person — a fabricated finding, which is
+  worse than the empty field it replaces, because an empty field at least says
+  nobody knows.
+
+- **`summary_source: human | accepted_draft | none` in the closing record**, so
+  the record can say whose sentence it holds. A record written before this field
+  existed carries no `summary_source` at all, which is a fourth and different
+  claim from `none`.
+
+### Changed
+
+- **`nextbrief followup` stopped printing a `.` nobody could read.** The list
+  marked unpromoted entries with `  .`, a placeholder aligning to a `-> NA-0026`
+  that a freshly closed item has never shown — a legend legible only to someone
+  who no longer needs it, using a character that already means "unconfirmed" in
+  `ls`. The column now appears only once something has been promoted, says
+  `already NA-0026` / `not promoted` in words, and is padded by display width so
+  a CJK translation does not shift every column to its right.
+
+- **`nextbrief followup --promote` says what it will create before creating it.**
+  It mints files and makes two commits per item, and it used to describe that
+  afterwards.
+
 ## [0.2.0rc2] - 2026-08-06
 
 ### Added
@@ -1038,7 +1118,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.0rc2...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.0rc3...HEAD
+[0.2.0rc3]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc3
 [0.2.0rc2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc2
 [0.2.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc1
 [0.1.0rc14]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.1.0rc14

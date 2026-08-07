@@ -75,12 +75,20 @@ closing it turned up that does not belong to it; `nextbrief followup <id>` turns
 any entry into a real item carrying `discovered_from` back to here, and writes
 the resulting id beside the entry so an unpicked follow-up stays visible.
 
+`summary_source` records whose sentence the summary is: `human` if you typed it
+or passed `--summary`, `accepted_draft` if you took the draft `done` offered, and
+`none` if you skipped the question. The draft is derived from the project's git
+log and the acceptance ratio, and it is never what Enter means — Enter skips, `=`
+takes the draft. A record closed before this field existed has no
+`summary_source` line, which is not the same claim as `none`.
+
 Read them across a project with `nextbrief closed [project]`. The keys are
 English in every locale: they are parsed, not displayed.
 
 ```markdown
 <!-- SECTION:CLOSING:BEGIN -->
 closed_on: 2026-03-16
+summary_source: human
 
 summary: |
   What was actually done, and where it differed from what this item said.
