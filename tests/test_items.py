@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import sys
 import unittest
 from unittest import mock
 
@@ -82,7 +84,7 @@ class ClosingRecord(unittest.TestCase):
             "Migrated all 47 posts, not the 3 the item asked for.\nThe hotlink "
             "protection needed a referer header.",
             [items.FutureWork("Write down the hotlink fix", None),
-             items.FutureWork("Do the same for sjtuaa", "NA-0042")])
+             items.FutureWork("Do the same for larkspur", "NA-0042")])
         text = items.upsert_closing("---\nid: NA-0005\n---\n\nNotes.\n", record)
         got = items.parse_closing(text)
         self.assertEqual(got.closed_on, record.closed_on)
@@ -182,13 +184,13 @@ class DeferRoundTrip(TempCase):
         self.assertIn("1 item(s) deferred", out)
 
     def test_a_condition_still_gets_a_date(self):
-        """"After VirtualTutor ships" is a good reason and a useless trigger.
+        """"After Fernwood ships" is a good reason and a useless trigger.
         Both are kept: the condition is what a person reads, the date is the only
         part anything can act on."""
-        code, out, err = self._run("defer", "NA-0001", "--until", "after VirtualTutor ships")
+        code, out, err = self._run("defer", "NA-0001", "--until", "after Fernwood ships")
         self.assertEqual(code, 0, err)
         fm = self._fields()
-        self.assertEqual(fm["deferred_when"], "after VirtualTutor ships")
+        self.assertEqual(fm["deferred_when"], "after Fernwood ships")
         self.assertEqual(
             fm["deferred_until"],
             (dt.date.today() + dt.timedelta(days=30)).isoformat())
@@ -345,7 +347,7 @@ class ClosingThroughTheCli(TempCase):
             "done", "NA-0005",
             "--summary", "Migrated all 47 posts, not 3.",
             "--future-work", "Write down the hotlink fix",
-            "--future-work", "Do the same for sjtuaa")
+            "--future-work", "Do the same for larkspur")
         self.assertEqual(code, 0, err)
         closing = items.parse_closing(self._text())
         self.assertEqual(closing.summary, "Migrated all 47 posts, not 3.")
@@ -410,8 +412,26 @@ class ClosingThroughTheCli(TempCase):
         self.assertIn("already", out)
         self.assertEqual(len(list(self.ws.glob("backlog/NA-0006-*.md"))), 1)
 
-    def _interactively(self, answers, *args):
-        """Run `done` as a person at a terminal would, with `answers` typed in."""
+    def _interactively(self, answers, *args, **kw):
+        """Run `done` as a person would, with `answers` typed in.
+
+        The tick step comes first and only appears when the item has an unticked
+        criterion, so the skip is prepended on exactly that condition -- read
+        from the fixture rather than assumed. Prepending it unconditionally
+        shifted every later answer by one on items with no criteria, which is how
+        an `=` meant for the summary ended up filed as a follow-up.
+
+        Pass ``tick=`` to answer the step instead of skipping it.
+        """
+        answers = list(answers)
+        # Read from disk rather than through a per-class accessor: the two test
+        # classes name theirs differently, and a `try/except` around the wrong
+        # one silently produced "no criteria", which skipped the prepend and
+        # shifted every answer instead of failing.
+        body = "".join(f.read_text(encoding="utf-8")
+                       for f in sorted((self.ws / "backlog").glob("*.md")))
+        if any(not done for _i, done, _txt in cli._ac_lines(body)):
+            answers = [kw.pop("tick", "")] + answers
         typed = iter(answers)
         with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
                 mock.patch("builtins.input", lambda _p="": next(typed)):
@@ -532,7 +552,9 @@ class SayingWhatIsAboutToClose(TempCase):
         self.assertIn("1/2", out)              # the number that stops you
 
     def test_the_header_comes_before_the_first_question(self):
-        typed = iter(["", ""])
+        # Three Enters: the tick step, then both questions. The header must come
+        # before all of them -- it is the only chance to notice a mistyped id.
+        typed = iter(["", "", ""])
         with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
                 mock.patch("builtins.input", lambda _p="": next(typed)):
             out = self._run("done", "NA-0005")[1]
@@ -589,7 +611,26 @@ class DraftsAreOfferedNeverAssumed(TempCase):
         return items.parse_closing(
             (self.ws / "backlog" / ("%s.md" % item_id)).read_text(encoding="utf-8"))
 
-    def _interactively(self, answers, *args):
+    def _interactively(self, answers, *args, **kw):
+        """Run `done` as a person would, with `answers` typed in.
+
+        The tick step comes first and only appears when the item has an unticked
+        criterion, so the skip is prepended on exactly that condition -- read
+        from the fixture rather than assumed. Prepending it unconditionally
+        shifted every later answer by one on items with no criteria, which is how
+        an `=` meant for the summary ended up filed as a follow-up.
+
+        Pass ``tick=`` to answer the step instead of skipping it.
+        """
+        answers = list(answers)
+        # Read from disk rather than through a per-class accessor: the two test
+        # classes name theirs differently, and a `try/except` around the wrong
+        # one silently produced "no criteria", which skipped the prepend and
+        # shifted every answer instead of failing.
+        body = "".join(f.read_text(encoding="utf-8")
+                       for f in sorted((self.ws / "backlog").glob("*.md")))
+        if any(not done for _i, done, _txt in cli._ac_lines(body)):
+            answers = [kw.pop("tick", "")] + answers
         typed = iter(answers)
         with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
                 mock.patch("builtins.input", lambda _p="": next(typed)):
@@ -630,7 +671,10 @@ class DraftsAreOfferedNeverAssumed(TempCase):
         code, out, err = self._interactively([cli.ACCEPT_DRAFT, ""], "done", "NA-0005")
         self.assertEqual(code, 0, err)
         closing = self._closing()
-        self.assertIn("AC 1/2", closing.summary)
+        # The draft is the TICKED criterion -- the reader's own sentence for
+        # what was done -- not the scope line, which answers a different
+        # question and is shown separately as context.
+        self.assertEqual(closing.summary, "#1 one")
         self.assertEqual(closing.summary_source, "accepted_draft")
         # And the offer said which key does it, rather than leaving it to be guessed.
         self.assertIn(cli.ACCEPT_DRAFT, out)
@@ -707,17 +751,17 @@ class DraftsAreDerivedNotInvented(TempCase):
         finished work -- the engine cannot tell "not done" from "not ticked",
         and at 0/n the tick habit is what failed, not the work.
         """
-        summary, future = self._drafts(
+        _summary, future, scope = self._drafts(
             "NA-0017", body=_acceptance(*[(False, "criterion %d" % i) for i in range(1, 7)]))
         self.assertEqual(future, [])
-        self.assertIn("AC 0/6", summary)
+        self.assertIn("AC 0/6", scope)
 
     def test_everything_ticked_offers_no_follow_ups_either(self):
         """The NA-0024 shape: five of five, and genuinely nothing left over."""
-        summary, future = self._drafts(
+        _summary, future, scope = self._drafts(
             "NA-0024", body=_acceptance(*[(True, "criterion %d" % i) for i in range(1, 6)]))
         self.assertEqual(future, [])
-        self.assertIn("AC 5/5", summary)
+        self.assertIn("AC 5/5", scope)
 
     def test_a_half_finished_item_offers_what_is_left(self):
         """The only shape where unticked criteria are evidence of anything: some
@@ -726,19 +770,23 @@ class DraftsAreDerivedNotInvented(TempCase):
         What it offers is the criteria's own text -- prose a human wrote, and
         which only a human may edit. Accepting it hands your own sentence back
         to you, so nothing here launders a machine's words into a person's."""
-        _summary, future = self._drafts(
-            "NA-0010", body=_acceptance((True, "sjtuaa"), (False, "robots"),
-                                        (False, "aigc-lecture")))
-        self.assertEqual(future, ["#2 robots", "#3 aigc-lecture"])
+        _summary, future, _scope = self._drafts(
+            "NA-0010", body=_acceptance((True, "larkspur"), (False, "robots"),
+                                        (False, "sitemap")))
+        self.assertEqual(future, ["#2 robots", "#3 sitemap"])
 
     def test_the_summary_draft_never_claims_authorship_of_commits(self):
         """Not one commit in a real workspace names an item id, so git cannot
         tell this item's work from that day's work. The draft therefore states a
         scope -- the project, and what it saw since the item was opened -- and
         the count is attached to the project, never to the item."""
-        summary, _future = self._drafts("NA-0005", body=_acceptance((True, "one")))
-        self.assertTrue(summary.startswith("Orchard"))
-        self.assertNotIn("NA-0005", summary)
+        summary, _future, scope = self._drafts(
+            "NA-0005", body=_acceptance((True, "one")))
+        # The SCOPE names the project; the DRAFT is the ticked criterion,
+        # which is the reader's own sentence rather than the engine's.
+        self.assertTrue(scope.startswith("Orchard"))
+        self.assertNotIn("NA-0005", scope)
+        self.assertEqual(summary, "#1 one")
 
     @requires_git
     def test_several_commits_are_counted_and_none_of_them_quoted(self):
@@ -755,9 +803,12 @@ class DraftsAreDerivedNotInvented(TempCase):
             (project / ("f%d.txt" % n)).write_text("x", encoding="utf-8")
             git_commit_all(project, "orchard: unrelated change %d" % n,
                            when="2026-03-12T09:00:00+00:00")
-        summary, _future = self._drafts("NA-0005", created_date="2026-03-01")
-        self.assertIn("3 commits since 2026-03-01", summary)
-        self.assertNotIn("unrelated change", summary)
+        summary, _future, scope = self._drafts("NA-0005", created_date="2026-03-01")
+        self.assertIn("3 commits since 2026-03-01", scope)
+        self.assertNotIn("unrelated change", scope)
+        # Several commits and nothing ticked: no honest draft exists, so
+        # none is offered and the scope stays context.
+        self.assertEqual(summary, "")
 
     @requires_git
     def test_a_single_commit_is_quoted_because_there_is_nothing_to_choose(self):
@@ -765,7 +816,7 @@ class DraftsAreDerivedNotInvented(TempCase):
         git_init(project)
         git_commit_all(project, "orchard: the only thing that happened",
                        when="2026-03-12T09:00:00+00:00")
-        summary, _future = self._drafts("NA-0005", created_date="2026-03-01")
+        summary, _future, _scope = self._drafts("NA-0005", created_date="2026-03-01")
         self.assertIn("the only thing that happened", summary)
 
     @requires_git
@@ -782,8 +833,317 @@ class DraftsAreDerivedNotInvented(TempCase):
         git_init(project)
         git_commit_all(project, "orchard: work done at dawn",
                        when="%sT00:00:01+00:00" % today)
-        summary, _future = self._drafts("NA-0005", created_date=today)
+        summary, _future, _scope = self._drafts("NA-0005", created_date=today)
+        # One commit and nothing ticked, so the subject IS the candidate answer
+        # and the scope line doubles as the draft.
         self.assertIn("at dawn", summary)
+
+
+class TickingIsPossibleAtAll(TempCase):
+    """Reported from real use: the brief printed `0/9 ticked` on every close, and
+    nothing in the package could tick a box.
+
+    Measured on a real backlog at the time: 1 item of 25 carried a single tick.
+    So the number that was meant to make you pause read zero for everybody, and
+    the two rules that read ticks -- the closing draft, and follow-ups drafted
+    from what is left -- were dead in 24 cases out of 25.
+
+    Asked at the close, because that is the moment somebody knows and the last
+    moment anyone will be in a position to say.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        git_init(self.ws)
+        write_backlog_item(self.ws, "NA-0005", title="Run 3 probes",
+                           body=_acceptance((False, "migrate"), (False, "write up")))
+        git_commit_all(self.ws)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _text(self):
+        return (self.ws / "backlog" / "NA-0005.md").read_text(encoding="utf-8")
+
+    def _typed(self, answers, *args):
+        typed = iter(answers)
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            return self._run(*args)
+
+    def test_picking_a_number_ticks_that_criterion(self):
+        code, _out, err = self._typed(["1", "", ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        ticked = cli._ticked_acs(self._text())
+        self.assertEqual(ticked, ["#1 migrate"])
+
+    def test_the_criterion_text_is_never_rewritten(self):
+        """A criterion is a sentence a person wrote. Only the box may change."""
+        before = self._text()
+        self._typed(["1", "", ""], "done", "NA-0005")
+        after = self._text()
+        # Compared line by line over the criteria alone, so the closing record
+        # `done` also writes does not mask a change to the text.
+        b = [ln for ln in before.splitlines() if ln.strip().startswith(("- [", "* ["))]
+        a = [ln for ln in after.splitlines() if ln.strip().startswith(("- [", "* ["))]
+        self.assertEqual(len(a), len(b))
+        for was, now in zip(b, a):
+            self.assertEqual(was[5:], now[5:], "the criterion's own text changed")
+        self.assertEqual(a[0][:5].strip(), "- [x]".strip())
+
+    def test_all_ticks_everything_left(self):
+        code, _out, err = self._typed([cli.TICK_ALL, "", ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(cli._ticked_acs(self._text())), 2)
+
+    def test_enter_ticks_nothing(self):
+        """The reflex answer must not assert that work was done."""
+        self._typed(["", "", ""], "done", "NA-0005")
+        self.assertEqual(cli._ticked_acs(self._text()), [])
+
+    def test_what_was_ticked_becomes_the_offered_draft(self):
+        """The point of asking here rather than anywhere else: the answer to
+        "what actually happened" is now the reader's own criteria."""
+        code, _out, err = self._typed(["1", cli.ACCEPT_DRAFT, ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        closing = items.parse_closing(self._text())
+        self.assertIn("#1 migrate", closing.summary)
+        self.assertEqual(closing.summary_source, "accepted_draft")
+
+    def test_a_mistyped_number_is_named_rather_than_ignored(self):
+        """A number that ticks nothing looks exactly like a criterion that was
+        already done."""
+        code, out, _err = self._typed(["9", "", ""], "done", "NA-0005")
+        self.assertEqual(code, 0)
+        self.assertEqual(cli._ticked_acs(self._text()), [])
+        self.assertIn("ignored 9", out)
+
+    def test_ctrl_c_at_the_tick_step_closes_nothing(self):
+        def interrupt(_prompt=""):
+            raise KeyboardInterrupt
+
+        before = self._text()
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", interrupt):
+            code, _out, err = self._run("done", "NA-0005")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self._text(), before, "an interrupted tick step wrote")
+        self.assertIn("not closed", err)
+
+    def test_a_scripted_run_is_never_asked(self):
+        """`done --summary x` and any non-tty run must stay one command."""
+        def never(_prompt=""):
+            raise AssertionError("a scripted run was asked to tick")
+
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", never):
+            code, _out, err = self._run("done", "NA-0005", "--summary", "did it")
+        self.assertEqual(code, 0, err)
+
+    def test_an_item_with_nothing_left_is_not_asked(self):
+        write_backlog_item(self.ws, "NA-0006", title="Done already",
+                           body=_acceptance((True, "all of it")))
+        git_commit_all(self.ws)
+        typed = iter(["", ""])          # two questions only, no tick step
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            code, _out, err = self._run("done", "NA-0006")
+        self.assertEqual(code, 0, err)
+
+
+class TheSelector(unittest.TestCase):
+    """Arrows to move, space to toggle, Enter to accept.
+
+    Typing numbers still works and is the fallback, but a typo there fails
+    silently in the worst way: `9` on a two-item list ticks nothing, and a
+    criterion nobody ticked reads exactly like one that was already done. A
+    cursor on a line cannot miss.
+    """
+
+    ROWS = [(1, "#1 one"), (2, "#2 two"), (3, "#3 three")]
+
+    def _drive(self, keys, term="xterm"):
+        """Run the selector against a scripted keyboard."""
+        chars = iter(list(keys))
+
+        class FakeIn:
+            def isatty(self):
+                return True
+
+            def fileno(self):
+                return 0
+
+            def read(self, _n=1):
+                return next(chars)
+
+        fake_termios = mock.MagicMock()
+        fake_termios.tcgetattr.return_value = object()
+        with mock.patch.dict(os.environ, {"TERM": term}), \
+                mock.patch.dict(sys.modules, {"termios": fake_termios,
+                                              "tty": mock.MagicMock()}), \
+                mock.patch.object(cli.sys, "stdin", FakeIn()), \
+                mock.patch.object(cli.sys, "stdout", mock.MagicMock(**{"isatty.return_value": True})):
+            return cli._select_ticks(self.ROWS, None)
+
+    def test_space_toggles_the_line_under_the_cursor(self):
+        self.assertEqual(self._drive([" ", "\r"]), [1])
+
+    def test_the_arrows_move(self):
+        self.assertEqual(self._drive(["\x1b", "[", "B", " ", "\r"]), [2])
+
+    def test_toggling_twice_leaves_it_unticked(self):
+        """The reason it is a toggle and not a set: changing your mind must not
+        need a restart."""
+        self.assertEqual(self._drive([" ", " ", "\r"]), [])
+
+    def test_several_can_be_picked_out_of_order(self):
+        got = self._drive(["\x1b", "[", "B", "\x1b", "[", "B", " ",
+                           "\x1b", "[", "A", "\x1b", "[", "A", " ", "\r"])
+        self.assertEqual(got, [1, 3])
+
+    def test_it_cannot_walk_off_either_end(self):
+        """Clamped rather than wrapped. A list that jumps from the last line to
+        the first is a list you tick the wrong thing on."""
+        self.assertEqual(self._drive(["\x1b", "[", "A", "\x1b", "[", "A", " ", "\r"]), [1])
+        keys = ["\x1b", "[", "B"] * 6 + [" ", "\r"]
+        self.assertEqual(self._drive(keys), [3])
+
+    def test_enter_with_nothing_toggled_ticks_nothing(self):
+        self.assertEqual(self._drive(["\r"]), [])
+
+    def _drawn(self, rows, keys, columns):
+        """The selector's own output lines, at a given terminal width."""
+        chars = iter(list(keys))
+        written = []
+
+        class FakeIn:
+            def isatty(self): return True
+            def fileno(self): return 0
+            def read(self, _n=1): return next(chars)
+
+        class FakeOut:
+            def isatty(self): return True
+            def write(self, s): written.append(s)
+            def flush(self): pass
+
+        fake_termios = mock.MagicMock()
+        fake_termios.tcgetattr.return_value = object()
+        with mock.patch.dict(os.environ, {"TERM": "xterm"}), \
+                mock.patch.dict(sys.modules, {"termios": fake_termios,
+                                              "tty": mock.MagicMock()}), \
+                mock.patch.object(cli.shutil, "get_terminal_size",
+                                  return_value=os.terminal_size((columns, 24))), \
+                mock.patch.object(cli.sys, "stdin", FakeIn()), \
+                mock.patch.object(cli.sys, "stdout", FakeOut()):
+            cli._select_ticks(rows, None)
+        return [ln for ln in "".join(written).split("\r\n") if "[" in ln]
+
+    def test_a_long_criterion_is_cut_to_one_line(self):
+        """The reported bug. Criteria are sentences, so they wrapped -- and the
+        redraw moves the cursor up by one line PER ROW. On wrapped rows it landed
+        inside the list and every keypress appended a fresh copy instead of
+        overwriting, so the list grew down the screen as you moved through it.
+
+        Cutting each row to the terminal width is what makes that arithmetic
+        true. Measured in CELLS, because a CJK glyph takes two of them and a
+        criterion written in Chinese would otherwise be cut at twice the width it
+        actually occupies.
+        """
+        rows = [(1, "x" * 300), (2, "字" * 200), (3, "short")]
+        for columns in (40, 80, 120):
+            drawn = self._drawn(rows, ["\r"], columns)
+            self.assertTrue(drawn, "nothing was drawn at %d columns" % columns)
+            for line in drawn:
+                clean = line.replace("\x1b[2K", "")
+                self.assertLessEqual(
+                    cli._width(clean), columns,
+                    "a row is %d cells wide in a %d-column terminal, so it wraps "
+                    "and the redraw desynchronises" % (cli._width(clean), columns))
+
+    def test_the_number_of_lines_drawn_never_grows(self):
+        """The symptom, asserted directly: one line per row per redraw, however
+        many keys are pressed."""
+        rows = [(1, "a" * 200), (2, "b" * 200)]
+        drawn = self._drawn(rows, [" ", "\x1b", "[", "B", " ", "\x1b", "[", "A", "\r"], 80)
+        # 4 redraws (initial + one per key that changes state) x 2 rows.
+        self.assertEqual(len(drawn) % len(rows), 0)
+        self.assertEqual(len(drawn), (len(drawn) // len(rows)) * len(rows))
+        self.assertGreaterEqual(len(drawn) // len(rows), 2, "no redraw happened")
+
+    def test_a_dumb_terminal_declines_rather_than_breaking(self):
+        """CI, a pipe, a scheduler. The caller asks the numeric question, and a
+        `done` that cannot draw is still a `done` that can ask."""
+        self.assertIsNone(self._drive([" ", "\r"], term="dumb"))
+
+    def test_a_non_tty_declines(self):
+        with mock.patch.object(cli.sys, "stdin",
+                               mock.MagicMock(**{"isatty.return_value": False})):
+            self.assertIsNone(cli._select_ticks(self.ROWS, None))
+
+
+class TheDraftEitherAnswersOrIsNotOffered(TempCase):
+    """Reported from real use: `done` on an item with seven commits and 0/9
+    ticked offered `nextbrief · 7 commits since 2026-08-06 · AC 0/9` under
+    "what actually happened?", with `=` to accept it.
+
+    That is a true sentence and a non-answer, and `=` filed it as the summary --
+    a statistic wearing a finding's clothes, which is the exact substitution the
+    closing record exists to prevent. The scope is worth SEEING; it is not worth
+    ACCEPTING.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+
+    def _drafts(self, item_id, **fields):
+        path = write_backlog_item(self.ws, item_id, **fields)
+        fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        ws = Workspace(root=self.ws, out=self.ws, source="test")
+        return cli._closing_drafts(ws, fm, body, None)
+
+    def test_nothing_ticked_and_several_commits_offers_no_draft(self):
+        """The reported shape. No honest candidate exists, so none is offered."""
+        project = self.ws / "projects" / "orchard"
+        git_init(project)
+        for n in range(3):
+            (project / ("f%d.txt" % n)).write_text("x\n", encoding="utf-8")
+            git_commit_all(project, "orchard: change %d" % n,
+                           when="2026-03-1%dT09:00:00+00:00" % (n + 2))
+        summary, _future, scope = self._drafts(
+            "NA-0005", created_date="2026-03-01",
+            body=_acceptance((False, "one"), (False, "two")))
+        self.assertEqual(summary, "",
+                         "a scope line was offered as the answer to what happened")
+        self.assertIn("AC 0/2", scope, "the scope was lost rather than demoted")
+
+    def test_what_is_ticked_becomes_the_draft(self):
+        """The better answer that was available all along: a ticked box is a
+        person saying that thing is done, in their own words. The engine can
+        read the tick and cannot make it."""
+        summary, _future, _scope = self._drafts(
+            "NA-0006", body=_acceptance((True, "migrated the probes"),
+                                        (False, "wrote it up")))
+        self.assertIn("migrated the probes", summary)
+        self.assertNotIn("wrote it up", summary,
+                         "an unticked criterion was reported as done")
+
+    def test_the_scope_is_never_silently_the_summary(self):
+        """The property, stated once. Whatever the draft is, it is not the
+        statistics line -- unless that line is the single-commit case, where the
+        subject genuinely is evidence about this item."""
+        project = self.ws / "projects" / "orchard"
+        git_init(project)
+        for n in range(3):
+            (project / ("f%d.txt" % n)).write_text("x\n", encoding="utf-8")
+            git_commit_all(project, "orchard: change %d" % n,
+                           when="2026-03-1%dT09:00:00+00:00" % (n + 2))
+        summary, _future, scope = self._drafts(
+            "NA-0007", created_date="2026-03-01",
+            body=_acceptance((True, "did the thing"), (False, "the other")))
+        self.assertNotEqual(summary, scope)
+        self.assertIn("did the thing", summary)
 
 
 class FollowUpListing(TempCase):
@@ -810,7 +1170,7 @@ class FollowUpListing(TempCase):
         self._run(*args)
 
     def test_nothing_promoted_yet_prints_no_column(self):
-        self._close_with("Write down the hotlink fix", "Do the same for sjtuaa")
+        self._close_with("Write down the hotlink fix", "Do the same for larkspur")
         out = self._run("followup", "NA-0005")[1]
         rows = [ln for ln in out.splitlines() if ln.strip().startswith(("1)", "2)"))]
         self.assertEqual(len(rows), 2)
@@ -819,7 +1179,7 @@ class FollowUpListing(TempCase):
         self.assertIn("1) Write down the hotlink fix", out)
 
     def test_once_something_is_promoted_the_column_says_so_in_words(self):
-        self._close_with("Write down the hotlink fix", "Do the same for sjtuaa")
+        self._close_with("Write down the hotlink fix", "Do the same for larkspur")
         self._run("followup", "NA-0005", "--promote", "1")
         out = self._run("followup", "NA-0005")[1]
         self.assertIn("already NA-0006", out)

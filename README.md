@@ -584,7 +584,7 @@ open keeps it competing for a place it cannot win.
 
 ```bash
 nextbrief defer NA-0006 --until 2026-09-01
-nextbrief defer NA-0006 --until "after VirtualTutor ships" --reason "downstream is not ready"
+nextbrief defer NA-0006 --until "after Fernwood ships" --reason "downstream is not ready"
 ```
 
 `--until` is required, and that is the safety property: **a deferral that never

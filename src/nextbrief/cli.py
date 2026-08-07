@@ -806,6 +806,7 @@ def cmd_ok(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
 # chosen against is the only one that matters: it must not be reachable by the
 # reflex that answers prompts with Enter. It is also not a letter, so it is
 # never the first character of a sentence somebody meant to type.
+TICK_ALL = "a"
 ACCEPT_DRAFT = "="
 
 
@@ -831,6 +832,52 @@ def _unticked_acs(body: str) -> List[str]:
     """The text of every criterion still unticked, with its ``#n`` left on."""
     return [ln.strip()[5:].strip() for ln in body.splitlines()
             if ln.strip().startswith("- [ ]") and ln.strip()[5:].strip()]
+
+
+def _ac_lines(body: str) -> List[Tuple[int, bool, str]]:
+    """``(line index, is ticked, text)`` for every acceptance criterion."""
+    out = []
+    for i, line in enumerate(body.splitlines()):
+        s = line.strip()
+        if s[:3] in ("- [", "* [") and len(s) > 5 and s[4] == "]":
+            mark = s[3].lower()
+            if mark in (" ", "x") and s[5:].strip():
+                out.append((i, mark == "x", s[5:].strip()))
+    return out
+
+
+def _apply_ticks(body: str, indexes: Sequence[int]) -> str:
+    """Tick the criteria at these line indexes, leaving everything else alone.
+
+    A rewrite of the checkbox character and nothing more: the criterion's own
+    text is a sentence a person wrote and this must never touch it. Unticking is
+    not offered -- an engine that can clear a tick can erase a statement its
+    author made, and the file is right there for anyone who wants to.
+    """
+    want = set(indexes)
+    lines = body.splitlines(True)
+    for i in want:
+        if 0 <= i < len(lines):
+            s = lines[i]
+            head = s[:len(s) - len(s.lstrip())]
+            rest = s.lstrip()
+            lines[i] = head + rest[:3] + "x" + rest[4:]
+    return "".join(lines)
+
+
+def _ticked_acs(body: str) -> List[str]:
+    """The text of every criterion that IS ticked.
+
+    The best available answer to "what actually happened", and the only one that
+    is not a guess: a ticked box is a person saying that thing is done, in their
+    own words. The engine can read the tick and cannot make it.
+    """
+    out = []
+    for line in body.splitlines():
+        s = line.strip()
+        if s[:5].lower() in ("- [x]", "* [x]") and s[5:].strip():
+            out.append(s[5:].strip())
+    return out
 
 
 def _registry(ws: Workspace) -> Dict[str, Any]:
@@ -936,9 +983,177 @@ def _project_commits(ws: Workspace, reg: Dict[str, Any], project_id: Any,
     return got
 
 
+def _select_ticks(rows: Sequence[Tuple[int, str]],
+                  cat: Optional[Catalog]) -> Optional[List[int]]:
+    """Move with the arrows, space toggles, Enter accepts. ``None`` if unusable.
+
+    Typing numbers works and is what this falls back to, but a typo there is
+    silent in the worst way: `9` on a two-item list ticks nothing, and a
+    criterion nobody ticked is indistinguishable from one that was already done.
+    Moving a cursor onto a line cannot miss.
+
+    **`setcbreak`, not `setraw`.** Raw mode swallows the interrupt character, so
+    Ctrl-C would arrive as the byte 0x03 and the abort path -- the one that stops
+    `done` from closing an item you were backing out of -- would have to be
+    re-implemented here, correctly, from scratch. cbreak leaves ISIG alone, so
+    Ctrl-C still raises KeyboardInterrupt exactly as it does at every other
+    prompt.
+
+    Returns ``None`` rather than raising when the terminal cannot do this, which
+    is the ordinary case in CI, over a pipe, and under a scheduler. The caller
+    asks the numeric question instead.
+    """
+    try:
+        import termios
+        import tty
+    except ImportError:                      # not POSIX
+        return None
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+    if os.environ.get("TERM", "") in ("", "dumb"):
+        return None
+    try:
+        fd = sys.stdin.fileno()
+        before = termios.tcgetattr(fd)
+    except Exception:
+        return None
+
+    chosen = [False] * len(rows)
+    at = 0
+
+    # Every row is cut to one terminal line, and that is what makes the redraw
+    # arithmetic true rather than approximately true.
+    #
+    # The first version moved the cursor up by len(rows) and assumed each row had
+    # taken one line. Real criteria are sentences: they wrapped, so the cursor
+    # landed inside the list and each keypress appended a fresh copy instead of
+    # overwriting -- the list grew down the screen on every arrow. Nine wrapped
+    # rows and it was unreadable after one keystroke.
+    #
+    # `_clip` is measured in terminal CELLS, not characters, so a CJK criterion
+    # -- two cells per glyph -- is cut where it actually reaches the edge. The
+    # column budget leaves room for the "  > [x] " prefix and one spare cell,
+    # because a row filling the last column wraps on some terminals and not
+    # others, and a selector that is correct only on some terminals is worse
+    # than one that is short.
+    try:
+        columns = shutil.get_terminal_size().columns
+    except Exception:
+        columns = 80
+    budget = max(20, columns - 10)
+    shown = [_clip(text, budget) for _i, text in rows]
+
+    def draw(first: bool) -> None:
+        if not first:
+            sys.stdout.write("\x1b[%dA" % len(rows))
+        for n, text in enumerate(shown):
+            sys.stdout.write("\x1b[2K")
+            sys.stdout.write("  %s [%s] %s\r\n"
+                             % (">" if n == at else " ", "x" if chosen[n] else " ", text))
+        sys.stdout.flush()
+
+    try:
+        tty.setcbreak(fd)
+        draw(True)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                return [rows[n][0] for n, on in enumerate(chosen) if on]
+            if ch == " ":
+                chosen[at] = not chosen[at]
+            elif ch in ("j",):
+                at = min(at + 1, len(rows) - 1)
+            elif ch in ("k",):
+                at = max(at - 1, 0)
+            elif ch == "\x1b":
+                # An arrow is ESC [ A/B. A bare ESC is somebody backing out, and
+                # is treated as "tick nothing" rather than as an abort -- Ctrl-C
+                # is the abort, and it still is.
+                nxt = sys.stdin.read(1)
+                if nxt != "[":
+                    return []
+                code = sys.stdin.read(1)
+                if code == "A":
+                    at = max(at - 1, 0)
+                elif code == "B":
+                    at = min(at + 1, len(rows) - 1)
+            elif ch == "\x04":              # Ctrl-D: no more input, same as EOF
+                return []
+            draw(False)
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, before)
+        except Exception:
+            pass
+
+
+def _ask_ticks(body: str, cat: Optional[Catalog]) -> List[int]:
+    """Which criteria are done, asked at the only moment anyone can answer.
+
+    Ticking used to be possible only by hand-editing the file, and nothing said
+    so -- not the prompts, not the schema, not the README. Measured on a real
+    backlog: 1 item of 25 carried a single tick. So `0/9 ticked` printed on
+    almost every close, which is a number that stops nobody, and the two rules
+    that read ticks (the closing draft, and follow-ups from what is left) were
+    dead in all but one case.
+
+    Asked rather than derived, and only ever additive. A tick is a person saying
+    a thing is done; an engine that sets one is inventing the statement the whole
+    closing record exists to capture honestly.
+
+    This is not a third question. It REPLACES the summary draft with something
+    that answers the question -- your own criteria, in your own words -- where
+    the draft used to offer a commit count.
+    """
+    rows = [(i, text) for i, done, text in _ac_lines(body) if not done]
+    if not rows:
+        return []
+    print()
+    # The selector first, the numbers as the fallback. Both exist because the
+    # terminal is not always one that can do the first, and a `done` that cannot
+    # ask is a `done` that goes back to being unanswerable.
+    print("  " + tr(cat, "cli.done.pick_ticks",
+                    "Which of these are done? Up/down to move, space to toggle, "
+                    "Enter when finished."))
+    picked = _select_ticks(rows, cat)
+    if picked is not None:
+        return picked
+    # The selector declined -- undo its instruction line, which described keys
+    # this terminal will not deliver.
+    sys.stdout.write("\x1b[1A\x1b[2K" if sys.stdout.isatty() else "")
+
+    print("  " + tr(cat, "cli.done.ask_ticks",
+                    "Which of these are done? Numbers like 1 3, {all} for all, "
+                    "Enter for none.", all=TICK_ALL))
+    for n, (_i, text) in enumerate(rows, 1):
+        print("    %d. %s" % (n, text))
+    try:
+        raw = input("  > ").strip()
+    except EOFError:
+        # Same rule as the questions below: EOF means nobody is here, Ctrl-C
+        # means stop, and stop propagates.
+        print()
+        return []
+    if not raw:
+        return []
+    if raw.lower() in (TICK_ALL, "all"):
+        return [i for i, _t in rows]
+    picked = []
+    for token in raw.replace(",", " ").split():
+        if token.isdigit() and 1 <= int(token) <= len(rows):
+            picked.append(rows[int(token) - 1][0])
+        else:
+            # Named rather than ignored. A mistyped number that silently ticks
+            # nothing looks exactly like a criterion that was already done.
+            print("    " + tr(cat, "cli.done.tick_ignored",
+                              "ignored {token}: not one of 1-{n}",
+                              token=token, n=len(rows)))
+    return sorted(set(picked))
+
+
 def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
-                    cat: Optional[Catalog]) -> Tuple[str, List[str]]:
-    """``(summary draft, follow-up drafts)``, derived only from facts on disk.
+                    cat: Optional[Catalog]) -> Tuple[str, List[str], str]:
+    """``(summary draft, follow-up drafts, scope line)``, from facts on disk.
 
     No model, no network, nothing that can be slow or cost money: ``done`` has to
     stay instant or it stops being typed.
@@ -973,7 +1188,31 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
     ticked, total = _ac_progress(body)
     commits = _project_commits(ws, reg, fm.get("project"), since)
 
+    # What the reader is shown, and what `=` will file, are two different things.
+    #
+    # `scope` is always true and never an answer: a project name, a commit count,
+    # a tick ratio. It is worth seeing -- "7 commits since this opened, 0/9
+    # ticked" is the number that makes you pause -- but it does not say what
+    # happened, and filing it as the summary answers "what did you actually do?"
+    # with a statistic. That is the empty field wearing a finding's clothes,
+    # which this whole record exists to avoid.
+    #
+    # `summary` is offered to `=` only when it is a real candidate answer. There
+    # are exactly two such cases and both are somebody's own words rather than
+    # the engine's:
+    #
+    #   - the criteria that are TICKED. A tick is a person saying that thing is
+    #     done; accepting them copies your sentences back to you.
+    #   - exactly one commit since the item opened, where its subject is evidence
+    #     about THIS item because there is nothing to choose between.
+    #
+    # With several commits and nothing ticked there is no honest draft, so none
+    # is offered, and the question is asked plainly.
+    scope = ""
     summary = ""
+    done_acs = _ticked_acs(body)
+    if done_acs:
+        summary = "; ".join(done_acs)
     if commits or total:
         parts = [_project_name(reg, fm.get("project"))]
         if len(commits) == 1:
@@ -993,10 +1232,14 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
         if total:
             parts.append(tr(cat, "cli.close.draft_acceptance", "AC {done}/{total}",
                             done=ticked, total=total))
-        summary = " · ".join(p for p in parts if p)
+        scope = " · ".join(p for p in parts if p)
+        # One commit and nothing ticked: the subject IS the candidate, so the
+        # scope line doubles as the draft. Any more commits and it is context.
+        if not summary and len(commits) == 1:
+            summary = scope
 
     future = _unticked_acs(body) if 0 < ticked < total else []
-    return summary, future
+    return summary, future, scope
 
 
 def _ask_closing(args: argparse.Namespace, cat: Optional[Catalog],
@@ -1057,7 +1300,8 @@ def _ask_closing(args: argparse.Namespace, cat: Optional[Catalog],
     # Only now, because deriving a draft reads a git log per project directory
     # and a scripted `done` would pay for one it is never shown. ``drafts`` is a
     # callable for that reason alone.
-    summary_draft, future_drafts = drafts() if drafts is not None else ("", [])
+    summary_draft, future_drafts, scope = (
+        drafts() if drafts is not None else ("", [], ""))
 
     def offer(lines: Sequence[str]) -> None:
         """Show a draft above the prompt, and say what takes it."""
@@ -1071,6 +1315,11 @@ def _ask_closing(args: argparse.Namespace, cat: Optional[Catalog],
     print("  " + tr(cat, "cli.done.ask_summary",
                     "What actually happened? One line -- especially anything the "
                     "item did not say. Enter to skip."))
+    # Context first, and never as something `=` can take. It is true and worth
+    # seeing -- the tick ratio is the number that makes you pause -- and it is
+    # not an answer to the question above it.
+    if scope and scope != summary_draft:
+        print("    " + tr(cat, "cli.close.scope", "for reference: {text}", text=scope))
     if summary_draft:
         offer([summary_draft])
     try:
@@ -1146,11 +1395,44 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
         _err(problem)
         return EXIT_FAIL
 
+    # Ticking comes first, because it is the thing that makes the question below
+    # answerable. Before the write, like everything else here, and skipped
+    # entirely when the run is scripted or the answers were given as flags --
+    # a non-tty `done` must stay a single non-interactive command.
+    # Skipped on exactly the conditions `_ask_closing` skips its questions on:
+    # answers already given as flags, or a run with nobody at the keyboard. A
+    # scripted `done` must stay one non-interactive command.
+    asking = not (getattr(args, "summary", None)
+                  or (getattr(args, "future_work", None) or [])
+                  or not sys.stdin.isatty())
+    if asking:
+        try:
+            original = path.read_text(encoding="utf-8")
+        except OSError:
+            original = ""
+        if original:
+            try:
+                picked = _ask_ticks(original, cat)
+            except KeyboardInterrupt:
+                print()
+                _err(tr(cat, "cli.done.cancelled",
+                        "Cancelled. {id} was not closed and nothing was written.",
+                        id=args.item_id))
+                return EXIT_FAIL
+            if picked:
+                # Whole-text transform, the same shape `record_promotion` uses.
+                # Line indexes come from the same text they are applied to.
+                try:
+                    write_text(ws, path, _apply_ticks(original, picked))
+                except OSError as exc:
+                    _err("error: cannot write %s: %s" % (path, exc))
+                    return EXIT_FAIL
+
     def drafts():
         try:
             fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except OSError:
-            return "", []
+            return "", [], ""
         return _closing_drafts(ws, fm or {}, body or "", cat)
 
     try:
@@ -1239,7 +1521,7 @@ def cmd_defer(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
     `--until` is required, and that is the whole safety property: **a deferral
     with no return date is a quiet abandonment**, which is the outcome this
     command exists to make impossible. A date is taken as the date. Anything else
-    is taken as the condition you are waiting on -- "VirtualTutor ships" is a
+    is taken as the condition you are waiting on -- "Fernwood ships" is a
     perfectly good reason and a useless trigger -- and the item is given a review
     date anyway, so the condition is what you read and the date is what brings it
     back.
@@ -1273,7 +1555,7 @@ def cmd_defer(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
     if not until:
         _err(tr(cat, "cli.defer.needs_until",
                 "defer needs --until: a date (2026-09-01) or what you are waiting "
-                "on (\"after VirtualTutor ships\"). A deferral that never comes "
+                "on (\"after Fernwood ships\"). A deferral that never comes "
                 "back is a drop with better manners, so this one is not optional."))
         return EXIT_USAGE
 

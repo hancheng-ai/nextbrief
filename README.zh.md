@@ -426,7 +426,7 @@ nextbrief init [dir]     创建 workspace   （-y、--no-scan）
 
 ```bash
 nextbrief defer NA-0006 --until 2026-09-01
-nextbrief defer NA-0006 --until "等 VirtualTutor 上线" --reason "下游还用不上"
+nextbrief defer NA-0006 --until "等 Fernwood 上线" --reason "下游还用不上"
 ```
 
 `--until` 是必填的，这正是它的安全性所在：**一个不会自己回来的延后，就是一次没人记录的放弃。** 是日期就按日期算；不是日期，就当成你在等的那个条件——理由很好，但机器盯不住——于是同时给它一个复审日期（`defer.review_after_days`，默认 30 天），到点回来让你再看一眼。

@@ -13,7 +13,7 @@ status: open                  # open | in_progress | waiting | deferred | done |
 deferred_until: null          # ISO date. The item is live again from this date on,
                               # with nothing written to bring it back
 deferred_when: null           # the condition you are actually waiting on, when it
-                              # is not a date ("after VirtualTutor ships")
+                              # is not a date ("after Fernwood ships")
 deferred_because: null        # why it was put off
 proposed_status: null         # an agent's SUGGESTION of a terminal status. It is
                               # listed in the brief under "waiting for your
