@@ -605,13 +605,22 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
             continue
         if not fm or not is_live(fm, today):
             continue
-        criteria = [t for _i, _m, t in _ac_lines(body or "")]
-        if not criteria:
+        lines = _ac_lines(body or "")
+        if not lines:
             continue
         item_id = str(fm.get("id") or path.stem)
-        if any(_ac_owner(t) is None for t in criteria):
+        if any(_ac_owner(t) is None for _i, _m, t in lines):
             unmarked.append(item_id)
-        yours = sum(1 for t in criteria if _ac_owner(t) == AC_YOU)
+        # Only OPEN criteria can be crowding anyone. A `[~]` one is set aside --
+        # nobody has to answer it, so counting it says an item is badly shaped on
+        # the strength of criteria its author already retired. Found by UAT on the
+        # real backlog: an item read 4 when 2 were open.
+        #
+        # The mark has to be read here for the same reason it has to be read in
+        # the other six places, and this warning shipped in the same batch as the
+        # mark while still discarding it.
+        yours = sum(1 for _i, m, t in lines
+                    if m == AC_OPEN and _ac_owner(t) == AC_YOU)
         if yours > MAX_YOURS:
             crowded.append((item_id, yours))
 

@@ -1595,6 +1595,25 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
                                             (True, "(you) it reads right")))
         self.assertEqual(self._warnings(), [])
 
+    def test_a_criterion_the_design_moved_past_does_not_count_against_you(self):
+        """Found by UAT on the real backlog, 2026-08-08.
+
+        A `[~]` criterion is set aside: nobody has to answer it, so it cannot be
+        part of "too many criteria need you". Counting it inflated a live item to
+        4 when 2 were open, and the warning then told the author his item was
+        badly shaped on the strength of two criteria he had already retired.
+
+        This is the third state's own failure mode arriving one level up. Every
+        reader of the mark has to know about it, and this warning shipped in the
+        same batch as the mark without knowing.
+        """
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((cli.AC_DROPPED, "(you) retired one"),
+                                            (cli.AC_DROPPED, "(you) retired two"),
+                                            (False, "(you) still open"),
+                                            (False, "(agent) checkable")))
+        self.assertEqual(self._warnings(), [])
+
     def test_too_many_criteria_on_a_person_is_reported_with_the_count(self):
         write_backlog_item(self.ws, "NA-0005",
                            body=_acceptance((False, "(you) one"), (False, "(you) two"),
