@@ -67,10 +67,10 @@ SCANNER = REPO / "scripts" / "leak-shapes.py"
 
 ACTIVATE = "git config core.hooksPath .githooks"
 
-# Assembled at run time rather than written out, so this file does not itself
-# contain the strings it plants -- the same reason tests/test_leak_shapes.py does
-# it. Excluding this file from the scan instead would create an unscanned file,
-# which is a place to hide something.
+# Built by concatenation at import time. A scanner's own source must not hold a
+# literal copy of what it hunts for, or it reports itself forever; the fix is to
+# spell the bait out in pieces here rather than to skip this file, because a file
+# the scan never reads is exactly where something would be left.
 BAIT = "\n".join([
     "/" + "Users" + "/someone/Projects/thing",
     "-----BEGIN" + " RSA PRIVATE KEY-----",
