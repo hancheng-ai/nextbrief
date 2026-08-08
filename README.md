@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="packaging/icon/nextbrief.svg" alt="" width="96" height="96">
+</p>
+
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)

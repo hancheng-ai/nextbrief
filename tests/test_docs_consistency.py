@@ -462,3 +462,59 @@ class TheTrustAnswerIsAboveTheFold(unittest.TestCase):
             self.assertIn("SECURITY.md",
                           (REPO_ROOT / doc).read_text(encoding="utf-8"),
                           "%s never links SECURITY.md" % doc)
+
+
+class TheMarkAtTheTop(unittest.TestCase):
+    """The artwork has existed since the icon was built and appeared nowhere.
+
+    Two things about putting it in a README are easy to get wrong in ways that
+    only show on somebody else's screen, so both are pinned rather than eyeballed
+    once.
+    """
+
+    # Written out rather than derived from the file: the point of the test is
+    # that the READMEs agree with each other on a specific path, and deriving it
+    # from whichever path they happen to contain would agree with anything.
+    MARK = "packaging/icon/nextbrief.svg"
+
+    def _heads(self):
+        for doc in ("README.md", "README.zh.md"):
+            text = (REPO_ROOT / doc).read_text(encoding="utf-8")
+            yield doc, text, "\n".join(text.splitlines()[:12])
+
+    def test_both_readmes_open_with_the_same_mark(self):
+        self.assertTrue((REPO_ROOT / self.MARK).is_file(),
+                        "%s does not exist, so both READMEs link to nothing" % self.MARK)
+        for doc, _text, head in self._heads():
+            self.assertIn(self.MARK, head,
+                          "%s does not show the mark in its first 12 lines" % doc)
+
+    def test_the_mark_carries_its_own_colour(self):
+        """The trap, and the reason `nextbrief-mono.svg` is not the file above.
+
+        The monochrome mark is drawn in `currentColor`, which is what makes it
+        useful for checking the silhouette and useless here: an SVG loaded
+        through `<img>` inherits nothing from the page, so `currentColor`
+        resolves to its own initial value -- black -- and the mark is black on
+        `#0d1117` for every reader with GitHub's dark theme on. Rendered both
+        ways to check rather than reasoned about: the colour mark reads on both
+        backgrounds because it carries its own ivory sheet and a rim that holds
+        it against white, and the mono one disappears into the dark.
+        """
+        svg = (REPO_ROOT / self.MARK).read_text(encoding="utf-8")
+        self.assertNotIn(
+            "currentColor", svg,
+            "%s is drawn in currentColor. Through an <img> that resolves to "
+            "black, so it vanishes on a dark background -- which is most of the "
+            "readers who will ever see it." % self.MARK)
+
+    def test_the_mark_does_not_reach_outside_the_repository(self):
+        """A logo served from somewhere else is a logo that can change, expire,
+        or report who read the page."""
+        for doc, _text, head in self._heads():
+            for line in head.splitlines():
+                if self.MARK not in line:
+                    continue
+                self.assertNotIn("http", line,
+                                 "%s loads the mark over the network: %s"
+                                 % (doc, line.strip()))

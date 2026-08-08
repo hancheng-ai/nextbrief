@@ -257,6 +257,32 @@
       "expect": "'--workspace' not found"
     },
     {
+      "label": "the mark dropped from the Chinese README",
+      "file": "README.zh.md",
+      "old": "<p align=\"center\">\n  <img src=\"packaging/icon/nextbrief.svg\" alt=\"\" width=\"96\" height=\"96\">\n</p>\n\n",
+      "new": "",
+      "select": "test_both_readmes_open_with_the_same_mark",
+      "expect": "README.zh.md does not show the mark",
+      "note": "The two READMEs drifting apart is the likeliest way this regresses: one gets edited, the other does not."
+    },
+    {
+      "label": "the monochrome mark used for the README instead",
+      "file": "tests/test_docs_consistency.py",
+      "old": "    MARK = \"packaging/icon/nextbrief.svg\"",
+      "new": "    MARK = \"packaging/icon/nextbrief-mono.svg\"",
+      "select": "test_the_mark_carries_its_own_colour",
+      "expect": "drawn in currentColor",
+      "note": "The obvious-looking fix for dark mode, and the one that breaks it: through an <img> currentColor resolves to black."
+    },
+    {
+      "label": "the mark hotlinked from raw.githubusercontent",
+      "file": "README.md",
+      "old": "<img src=\"packaging/icon/nextbrief.svg\"",
+      "new": "<img src=\"https://raw.githubusercontent.com/hancheng-ai/nextbrief/main/packaging/icon/nextbrief.svg\"",
+      "select": "test_the_mark_does_not_reach_outside_the_repository",
+      "expect": "loads the mark over the network"
+    },
+    {
       "label": "the engine check is no longer the first thing run",
       "file": "skills/portfolio-context/SKILL.md",
       "old": "```bash\nnextbrief --version\n```",
