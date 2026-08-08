@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`inventory.json` is a versioned contract.** The document produced by `sense`
+  and printed by `nextbrief context --json` now carries a top-level
+  `schema_version`, starting at `1`, and
+  [`docs/INVENTORY_SCHEMA.md`](docs/INVENTORY_SCHEMA.md) publishes the field set
+  behind it: every field marked stable or may-change, and the `kind` domains
+  (`declared` / `observed` / `absent`) written down instead of living only in the
+  implementation.
+
+  It was the only artifact shipping without one. `snapshot.json` has carried
+  `schema_version` since its second shape and `brief.json` has a JSON Schema,
+  while the file an agent reads *before it starts work* had nothing — which was
+  survivable only while every reader lived in this repository. Once a plugin or
+  somebody else's tool reads it, a rename stops costing a test edit and starts
+  being a silent breakage in a program nobody here maintains. Versioning it after
+  the first consumer arrives is versioning it after the first breakage.
+
+  The envelope is now assembled in `inventory.py` rather than half there and half
+  at the call site in `sense`, so one module owns the shape.
+
+  `tests/test_inventory.py` holds the published field set of each version as a
+  literal table and compares it against a document from a real `sense` run: add,
+  drop or rename a field and it goes red until the version is bumped and the new
+  shape recorded. Writing the table out rather than deriving it from the code is
+  the point — a derived table agrees with whatever the code currently does.
+
 - **`nextbrief probe`: evidence for work that never lands on disk.** A new
   registry field, `evidence_probe`, names one URL, one count and one date; the
   new command fetches it and caches the reading to `state/probes.json`. The

@@ -15,13 +15,20 @@ finding, which is the mistake this codebase has made twice already.
 from __future__ import annotations
 
 import json
+import re
 import unittest
 
-from helpers import AS_OF, TempCase, capture
+from helpers import AS_OF, REPO_ROOT, TempCase, base_registry, capture
 
 from nextbrief import cli, sense
 from nextbrief.annotate import ANNOTATIONS_NAME
-from nextbrief.inventory import INVENTORY_NAME, describe
+from nextbrief.inventory import (
+    CAPABILITY_KINDS,
+    DESCRIPTION_KINDS,
+    INVENTORY_NAME,
+    INVENTORY_SCHEMA_VERSION,
+    describe,
+)
 
 
 class WhereADescriptionComesFrom(TempCase):
@@ -129,6 +136,327 @@ class ThroughAFullRun(TempCase):
                                  ["--workspace", str(self.ws), "--as-of", AS_OF])[0], 0)
         self.assertEqual((self.ws / "state" / INVENTORY_NAME).read_text(encoding="utf-8"),
                          first)
+
+
+SCHEMA_DOC = REPO_ROOT / "docs" / "INVENTORY_SCHEMA.md"
+
+# The published field set of every `schema_version`, written out as a literal.
+#
+# Derived from the code, it would agree with whatever the code currently does,
+# which is the one thing this table must never do. It is a transcript of a
+# promise made to readers outside this repository, so it changes when the promise
+# does and not when the implementation does.
+#
+# Keys are paths into the document: "" is the envelope, "projects[]" is any one
+# entry, "projects[].description" is that sub-object on any entry.
+FIELDS_BY_VERSION = {
+    1: {
+        "": frozenset({"schema_version", "generated_at", "root", "projects"}),
+        "projects[]": frozenset({
+            "id", "name", "path", "description", "capability", "goal",
+            "stacks", "run", "declared", "status", "positioning",
+            "serves", "needs", "unlocks", "has_git",
+        }),
+        "projects[].description": frozenset({"what", "kind", "source"}),
+        "projects[].capability": frozenset({"what", "kind", "source"}),
+    },
+}
+
+BUMP = ("The published field set of inventory.json changed under "
+        "schema_version %d.\n"
+        "This is a contract read outside this repository, so:\n"
+        "  1. bump INVENTORY_SCHEMA_VERSION in src/nextbrief/inventory.py\n"
+        "  2. add the new field set to FIELDS_BY_VERSION in this file\n"
+        "  3. update docs/INVENTORY_SCHEMA.md and CHANGELOG.md\n"
+        "at %s: ")
+
+
+def document_shape(doc):
+    """Every field path in a document, mapped to the key sets seen there.
+
+    A set of key sets per path rather than one: two project entries that
+    disagree about their fields is exactly the drift worth catching, and a union
+    would hide it.
+    """
+    shape = {}
+
+    def note(path, obj):
+        shape.setdefault(path, set()).add(frozenset(obj))
+
+    note("", doc)
+    for entry in doc.get("projects") or []:
+        note("projects[]", entry)
+        for sub in ("description", "capability"):
+            if isinstance(entry.get(sub), dict):
+                note("projects[].%s" % sub, entry[sub])
+    return shape
+
+
+class TheContractIsVersioned(TempCase):
+    """`inventory.json` is the one artifact an agent reads *before* it works, and
+    it was the only one shipping without a version marker -- `snapshot.json` has
+    carried `schema_version` since its second shape.
+
+    That was survivable while the only reader was in this repository, where a
+    rename costs a test edit. It stops being survivable the moment a plugin, a
+    skill or somebody else's tool reads it: the same rename becomes a silent
+    breakage in a program nobody here maintains, discovered on a day its owner
+    was doing something else. Silent wrongness is the thing this engine exists to
+    refuse, so the contract gets a version before the consumers arrive rather
+    than after the first one breaks.
+
+    Run through `sense.main` rather than calling `inventory_document` directly.
+    The unit that builds the dict is not the thing consumers read -- the file on
+    disk is -- and a hand-built dict has confirmed the wrong reasoning here
+    before.
+    """
+
+    def setUp(self):
+        """A portfolio built to walk every branch that emits a contract object.
+
+        The default two-project fixture does not. Both its projects get their
+        description from a README, so the manifest branch of `describe()`, the
+        declared branch, and the absent branch are all unreached -- and a field
+        added on an unreached branch never appears in the document the guard
+        below inspects. That is not a worry, it is a measurement: adding a key to
+        the manifest branch and running this class left every test green.
+
+        So: four projects, one per branch, and
+        `test_the_fixture_reaches_every_shape_the_contract_can_take` fails if
+        that ever stops being true.
+        """
+        super().setUp()
+        reg = base_registry()
+        reg["projects"].append(
+            {"id": "silo", "name": "Silo", "paths": ["silo"], "git": "none"})
+        reg["projects"].append(
+            {"id": "void", "name": "Void", "paths": ["void"], "git": "none"})
+        self.ws = self.workspace(registry=reg)
+
+        # silo: a package manifest, so `describe()` takes the manifest branch.
+        (self.ws / "projects" / "silo").mkdir(parents=True, exist_ok=True)
+        (self.ws / "projects" / "silo" / "package.json").write_text(
+            json.dumps({"description": "Reads a manifest and stops there."}),
+            encoding="utf-8")
+        # void: nothing at all, so `describe()` reaches its `absent` return.
+        (self.ws / "projects" / "void").mkdir(parents=True, exist_ok=True)
+
+        code, _, err = capture(sense.main, ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        # kiln: a declared description. orchard: a declared capability, which
+        # has no other way to exist -- nothing on disk states one.
+        for argv in (["describe", "kiln", "A sentence somebody typed."],
+                     ["describe", "orchard", "--capability", "Generalises past its purpose."]):
+            self.assertEqual(
+                capture(cli.main, ["--workspace", str(self.ws)] + argv)[0], 0, argv)
+        code, _, err = capture(sense.main, ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+
+        self.raw = (self.ws / "state" / INVENTORY_NAME).read_text(encoding="utf-8")
+        self.inv = json.loads(self.raw)
+
+    def test_the_fixture_reaches_every_shape_the_contract_can_take(self):
+        """The guard is only as good as the branches the fixture walks.
+
+        Kept as its own test rather than folded into `setUp` so that a fixture
+        that stops reaching a branch fails by name, instead of quietly weakening
+        the assertion next door.
+        """
+        for sub, domain in (("description", DESCRIPTION_KINDS),
+                            ("capability", CAPABILITY_KINDS)):
+            seen = {e[sub]["kind"] for e in self.inv["projects"]}
+            # Both directions named: a value the fixture stops reaching and a
+            # value the code invented read very differently to whoever is
+            # holding the failure, and the same assertion catches both.
+            self.assertEqual(
+                sorted(seen), sorted(domain),
+                "%s.kind -- declared but never reached by this fixture: %s; "
+                "produced but not in the module's domain: %s"
+                % (sub, sorted(set(domain) - seen) or "none",
+                   sorted(seen - set(domain)) or "none"))
+        # `observed` covers two different branches that return two different
+        # dicts, and only the citation tells them apart.
+        sources = {e["description"]["source"] for e in self.inv["projects"]}
+        for want, branch in (("package.json", "the manifest branch"),
+                             ("README.md", "the README branch"),
+                             ("registry", "the declared branch")):
+            self.assertIn(want, sources, "%s of describe() is unwalked" % branch)
+
+    def test_the_document_says_which_contract_it_is(self):
+        self.assertEqual(self.inv.get("schema_version"), INVENTORY_SCHEMA_VERSION)
+        self.assertIsInstance(self.inv["schema_version"], int)
+
+    def test_the_field_set_cannot_change_without_the_version_changing(self):
+        """The guard this whole item is for.
+
+        Add a field, drop one, or rename one, and this goes red -- and stays red
+        until the version is bumped and the new set recorded above. Which is the
+        point: the failure is not "you changed the shape", it is "you changed the
+        shape without telling anyone".
+        """
+        version = self.inv.get("schema_version")
+        expected = FIELDS_BY_VERSION.get(version)
+        self.assertIsNotNone(
+            expected,
+            "schema_version %r has no recorded field set. If you just bumped it, "
+            "record the new shape in FIELDS_BY_VERSION in this file and in "
+            "docs/INVENTORY_SCHEMA.md." % (version,))
+
+        # Before comparing anything: the fixture has to have reached the code.
+        # A per-entry check over an empty list passes without looking at
+        # anything, and looks identical to a passing test.
+        self.assertTrue(self.inv.get("projects"),
+                        "the fixture produced no project entries, so the "
+                        "per-entry half of this assertion would pass vacuously")
+
+        got = document_shape(self.inv)
+        self.assertEqual(
+            sorted(got), sorted(expected),
+            "the set of objects in inventory.json changed: %s"
+            % sorted(set(got) ^ set(expected)))
+
+        for path in sorted(expected):
+            seen = got[path]
+            self.assertEqual(
+                len(seen), 1,
+                "entries disagree about their fields at %r: %s"
+                % (path, [sorted(s) for s in seen]))
+            fields = next(iter(seen))
+            self.assertEqual(
+                sorted(fields), sorted(expected[path]),
+                (BUMP % (version, path or "the top level"))
+                + "%s" % sorted(fields ^ expected[path]))
+
+    def test_the_command_an_outside_tool_calls_carries_it_too(self):
+        # `context --json` is the documented entry point for another program;
+        # the file is an implementation detail of where it lives. It prints the
+        # bytes verbatim today, but "today" is why this is asserted separately.
+        code, out, err = capture(
+            cli.main, ["--workspace", str(self.ws), "context", "--json"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out).get("schema_version"),
+                         INVENTORY_SCHEMA_VERSION)
+
+    def test_the_sentinel_values_are_a_closed_set(self):
+        """`kind` is what a consumer branches on, so its domain is part of the
+        contract in the way a field name is.
+
+        Read out of the module source rather than out of a run: the fixture has
+        no project with a declared capability, so a test that only inspected
+        output would never see `declared` and would happily pass while the code
+        emitted a fourth value nothing documents.
+        """
+        src = (REPO_ROOT / "src" / "nextbrief" / "inventory.py").read_text(
+            encoding="utf-8")
+        emitted = set(re.findall(r'"kind":\s*"([a-z_]+)"', src))
+        self.assertTrue(emitted, "the kind literals stopped parsing")
+        self.assertEqual(
+            sorted(emitted), sorted(set(DESCRIPTION_KINDS) | set(CAPABILITY_KINDS)),
+            "inventory.py emits a `kind` that DESCRIPTION_KINDS/CAPABILITY_KINDS "
+            "do not declare, or declares one it never emits")
+
+    def test_absent_never_arrives_with_a_value_beside_it(self):
+        # The three fields move together, and docs/INVENTORY_SCHEMA.md tells
+        # consumers they may check `kind` alone. That permission has to be true.
+        checked = 0
+        for entry in self.inv["projects"]:
+            for sub in ("description", "capability"):
+                obj = entry[sub]
+                checked += 1
+                if obj["kind"] == "absent":
+                    self.assertIsNone(obj["what"], sub)
+                    self.assertIsNone(obj["source"], sub)
+                else:
+                    self.assertIsNotNone(obj["source"], sub)
+        self.assertGreater(checked, 0, "no sub-object was examined")
+
+
+class TheContractDocument(unittest.TestCase):
+    """The doc is the deliverable, not the table above -- a promise nobody
+    outside can read is not a promise. So it is checked against the same literal
+    the guard uses, in both directions.
+
+    One-directional would be worse than nothing: a doc that merely fails to
+    mention a new field still reads as complete.
+    """
+
+    def _text(self):
+        return SCHEMA_DOC.read_text(encoding="utf-8")
+
+    def _field_rows(self):
+        """Rows of the tables headed `| Field | Promise | …`, as (name, promise).
+
+        Only those tables: the value-domain tables are headed `| Value |` and
+        their first cell is a `kind` value, not a field name.
+        """
+        rows, inside = [], False
+        for line in self._text().splitlines():
+            if line.startswith("| Field | Promise |"):
+                inside = True
+                continue
+            if not inside:
+                continue
+            if not line.startswith("|"):
+                inside = False
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if set(cells[0]) <= set("-: "):
+                continue
+            name = re.match(r"^`([a-z_]+)`$", cells[0])
+            self.assertIsNotNone(name, "unparseable field row: %r" % line)
+            rows.append((name.group(1), cells[1]))
+        return rows
+
+    def _domain_values(self, heading):
+        text = self._text()
+        start = text.index(heading) + len(heading)
+        rest = text[start:]
+        end = min((i for i in (rest.find("\n### "), rest.find("\n---")) if i >= 0),
+                  default=len(rest))
+        return set(re.findall(r"^\| `([a-z_]+)` \|", rest[:end], re.MULTILINE))
+
+    def test_it_documents_exactly_the_fields_that_ship(self):
+        # Not FIELDS_BY_VERSION[...] directly: a fresh bump would raise KeyError
+        # here, and a traceback is a worse instruction than a sentence.
+        table = FIELDS_BY_VERSION.get(INVENTORY_SCHEMA_VERSION)
+        self.assertIsNotNone(
+            table, "schema_version %d has no field set in FIELDS_BY_VERSION; "
+                   "record the new shape there first."
+                   % INVENTORY_SCHEMA_VERSION)
+        promised = {name for keys in table.values() for name in keys}
+        documented = {name for name, _ in self._field_rows()}
+        self.assertTrue(documented, "the field tables stopped parsing")
+        self.assertEqual(sorted(documented), sorted(promised),
+                         "docs/INVENTORY_SCHEMA.md and the shipped field set "
+                         "disagree: %s" % sorted(documented ^ promised))
+
+    def test_every_field_is_marked_stable_or_may_change(self):
+        # The whole reason a consumer reads this file. A field with no promise
+        # against it is one they cannot make a decision about.
+        rows = self._field_rows()
+        self.assertTrue(rows)
+        for name, promise in rows:
+            self.assertIn(promise, ("stable", "may change"),
+                          "%r carries no usable promise (%r)" % (name, promise))
+
+    def test_the_kind_domains_are_pinned_and_match_the_code(self):
+        self.assertEqual(self._domain_values("### `description.kind`"),
+                         set(DESCRIPTION_KINDS))
+        self.assertEqual(self._domain_values("### `capability.kind`"),
+                         set(CAPABILITY_KINDS))
+
+    def test_it_states_the_current_version(self):
+        # The worked example at the top is the first thing anyone reads, and an
+        # example showing a version that is no longer shipped teaches the wrong
+        # number to every consumer who skims.
+        #
+        # `assertTrue` rather than `assertIn`: the latter appends the entire
+        # document to its message, and 12KB of markdown in a CI log is how a
+        # maintainer learns to skim past the line they needed to read.
+        want = '"schema_version": %d' % INVENTORY_SCHEMA_VERSION
+        self.assertTrue(want in self._text(),
+                        "the worked example in docs/INVENTORY_SCHEMA.md does not "
+                        "show %s" % want)
 
 
 class TheContextCommand(TempCase):

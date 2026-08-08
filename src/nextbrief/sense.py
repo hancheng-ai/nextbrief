@@ -67,7 +67,7 @@ from .annotate import ASKED_VERSION, apply_annotations, load_annotations
 from .discovery import discover
 from .frontmatter import parse_frontmatter
 from .fs import write_text
-from .inventory import INVENTORY_NAME, build_inventory
+from .inventory import INVENTORY_NAME, inventory_document
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
@@ -2812,10 +2812,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # it by walking the tree. Written here because sensing already knows the
     # project list, and rewritten every run because it costs nothing.
     inv_root = resolve_root(ws, reg)
-    inv = build_inventory(inv_root, snap["projects"])
-    itext = json.dumps({"generated_at": snap["run"]["generated_at"],
-                        "root": str(inv_root), "projects": inv},
-                       ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    inv = inventory_document(inv_root, snap["projects"],
+                             snap["run"]["generated_at"])
+    itext = json.dumps(inv, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     write_text(ws, ws.state / INVENTORY_NAME, itext, skip_identical=False)
 
     n_hot = sum(1 for p in snap["projects"] if p["evidence"]["signal"] == "hot")

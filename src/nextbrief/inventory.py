@@ -24,6 +24,12 @@ That distinction is the whole safety property. An agent reading this must be abl
 to tell "orchard is a tenancy API" — which its `package.json` says, checkably —
 from "orchard is our flagship" — which is a thing a person typed. Blend them and
 the second reads as a finding.
+
+**The whole document shape is assembled here, envelope included.** It used to be
+half here and half at the call site in `sense`, which is a fine arrangement right
+up until the day the two halves disagree about what the contract is. There is one
+module that knows the field set, one constant that versions it, and one document
+— `docs/INVENTORY_SCHEMA.md` — that publishes both.
 """
 
 from __future__ import annotations
@@ -33,10 +39,31 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-__all__ = ["INVENTORY_NAME", "MANIFESTS", "build_inventory", "capability",
-           "describe"]
+__all__ = ["CAPABILITY_KINDS", "DESCRIPTION_KINDS", "INVENTORY_NAME",
+           "INVENTORY_SCHEMA_VERSION", "MANIFESTS", "build_inventory",
+           "capability", "describe", "inventory_document"]
 
 INVENTORY_NAME = "inventory.json"
+
+# The version of the *published field set*, not of the engine.
+#
+# Bump it when a consumer outside this repository would have to change: a field
+# renamed or removed, a type changed, a sentinel value given a new meaning.
+# Adding a field is the borderline case and it counts too, because the reason
+# this number exists is so that a reader can tell "I have seen this shape" from
+# "I have not", and a shape with an extra key is one they have not seen.
+#
+# Starts at 1 rather than matching `snapshot.json`'s 2. They are separate
+# contracts with separate consumers; making the numbers agree today would only
+# promise that they keep agreeing, which is a promise nothing here can keep.
+INVENTORY_SCHEMA_VERSION = 1
+
+# The value domains for the two `kind` fields, written down because an agent
+# branching on them needs to know what it must handle. `absent` is the sentinel
+# that matters: it means "we looked and there was nothing", which is a different
+# statement from a missing key, and both are different from an empty string.
+DESCRIPTION_KINDS = ("declared", "observed", "absent")
+CAPABILITY_KINDS = ("declared", "absent")
 
 # (filename, how to pull a description out of it, what stack it implies).
 # Ordered: the first that exists and yields a description wins, so a package
@@ -237,3 +264,20 @@ def build_inventory(root: Path, projects: Sequence[Dict[str, Any]]) -> List[Dict
         }
         out.append(entry)
     return sorted(out, key=lambda e: e["id"])
+
+
+def inventory_document(root: Path, projects: Sequence[Dict[str, Any]],
+                       generated_at: str) -> Dict[str, Any]:
+    """The whole `inventory.json` document, envelope and all.
+
+    Assembled here rather than at the call site because this is a published
+    contract, and a contract whose field set is decided in two files is one that
+    can drift in either of them. `sense` supplies the inputs; the shape is this
+    module's.
+    """
+    return {
+        "schema_version": INVENTORY_SCHEMA_VERSION,
+        "generated_at": generated_at,
+        "root": str(root),
+        "projects": build_inventory(root, projects),
+    }

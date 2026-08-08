@@ -459,6 +459,21 @@ nextbrief init [dir]     创建 workspace   （-y、--no-scan）
 30 21 * * *  /usr/local/bin/nextbrief run >> ~/brief/log/cron.log 2>&1
 ```
 
+### 如果你是 agent：开工前先读这个文件
+
+两行，这就是全部约定：
+
+1. **读 `state/inventory.json`** —— 或者跑 `nextbrief context --json`，输出的是同一份字节。
+   它回答的是**有哪些东西、每个东西是什么**；不读它，你就得自己走一遍目录树来回答同一个问题，
+   每个会话走一次，费用自付。
+2. **先看 `schema_version`；不认识这个号就停下，别猜。** 逐字段的契约——哪些字段承诺稳定、
+   哪些可能变、`kind: "absent"` 这类哨兵值是什么意思——写在
+   [`docs/INVENTORY_SCHEMA.md`](docs/INVENTORY_SCHEMA.md)。
+
+除这两行之外唯一值得知道的是：里面每一句话都标了出处。`kind: "observed"` 表示它是从
+`source` 指名的那个文件里原样抄出来的，你可以去核；`kind: "declared"` 表示这是人写的一句话。
+**把后者当成一条发现**，正是这套标注要防的那个具体错误。
+
 ### 「确认」是什么意思
 
 `nextbrief ls` 里 `ok` 列是 `.` 的条目，是从你各项目文档里读出来、**替你起草**的——你还没点过头。

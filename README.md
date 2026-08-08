@@ -603,6 +603,25 @@ running nextbrief on a timer can branch on it without parsing text:
 30 21 * * *  /usr/local/bin/nextbrief run >> ~/brief/log/cron.log 2>&1
 ```
 
+### If you are an agent, read this file before you start
+
+Two lines, and they are the whole convention:
+
+1. **Read `state/inventory.json`** — or run `nextbrief context --json`, which
+   prints the same bytes. It answers *what exists and what each thing is*, which
+   is the question you would otherwise answer by walking the tree yourself, every
+   session, at your own expense.
+2. **Check `schema_version` first, and stop rather than guess if it is not a
+   number you know.** The field-by-field contract — which fields are promised
+   stable, which may change, and what sentinels like `kind: "absent"` mean — is
+   [`docs/INVENTORY_SCHEMA.md`](docs/INVENTORY_SCHEMA.md).
+
+The thing worth knowing beyond those two lines is that every sentence in there is
+labelled with where it came from. `kind: "observed"` means it was lifted out of a
+file that `source` names and you can go and check it; `kind: "declared"` means a
+person typed it. Treating the second as a finding is the specific mistake the
+labelling exists to prevent.
+
 ### What "confirmed" means
 
 Items with a `.` in the `ok` column of `nextbrief ls` were drafted *for* you by a
