@@ -1673,6 +1673,27 @@ class TheClosedListSeparatesWhatMovedFromWhatWasDone(TempCase):
     def _run(self, *args):
         return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
 
+    def _blocks(self, *args):
+        """`closed` output cut into one chunk per item, keyed by id.
+
+        A substring search over the whole page cannot tell "printed" from
+        "printed under the right item", and printing them apart from each other
+        is this view's entire claim. Item lines carry two spaces of indent and
+        their detail rows five, which is the shape every row here already has.
+        """
+        code, out, err = self._run("closed", *args)
+        self.assertEqual(code, 0, err)
+        blocks, current = {}, None
+        for line in out.splitlines():
+            if not line.startswith("  "):
+                current = None
+            elif not line.startswith("     "):
+                current = line.strip().split("  ")[0]
+                blocks[current] = []
+            elif current is not None:
+                blocks[current].append(line)
+        return {key: "\n".join(value) for key, value in blocks.items()}
+
     def test_a_criterion_the_design_moved_past_is_listed_under_its_own_mark(self):
         self._run("done", "NA-0005", "--summary", "shipped the exporter")
         code, out, err = self._run("closed")
@@ -1705,6 +1726,76 @@ class TheClosedListSeparatesWhatMovedFromWhatWasDone(TempCase):
         self._run("done", "NA-0009", "--summary", "done")
         _code, out, _err = self._run("closed")
         self.assertNotIn("Set aside", out)
+
+    def test_the_mark_stays_under_the_item_that_earned_it(self):
+        """Two items closed the same way, one of which stopped meaning to do a
+        third of what it promised.
+
+        Asserted per item rather than per page. Every other test here searches
+        the whole of stdout, and "somewhere in the output" is not what telling
+        them apart means -- a renderer that printed every set-aside criterion
+        under every closed item would satisfy all of them.
+        """
+        write_backlog_item(
+            self.ws, "NA-0006", title="Publish the crate index",
+            body=_acceptance((True, "the index lists every crate"),
+                             (False, "the index is regenerated nightly")))
+        git_commit_all(self.ws)
+        self._run("done", "NA-0005", "--summary", "Exporter ships.")
+        self._run("done", "NA-0006", "--summary", "Index is up.")
+        blocks = self._blocks()
+        # Both branches were reached: two items closed, one with nothing set
+        # aside. Without this the two assertions below pass on an empty page.
+        self.assertEqual(sorted(blocks), ["NA-0005", "NA-0006"])
+        self.assertIn("the legacy sidecar keeps working", blocks["NA-0005"])
+        self.assertNotIn(cli.AC_DROPPED, blocks["NA-0006"])
+
+    def test_the_footer_answers_to_the_view_rather_than_to_the_workspace(self):
+        """The legend is noise on an ordinary close, and most closes are ordinary.
+
+        Scoped to a second project rather than to a second workspace, because
+        the item from `setUp` is still here and still has a criterion set aside.
+        A footer computed from the backlog instead of from the rows actually
+        printed comes back for it, and a fresh workspace would never notice.
+        """
+        write_backlog_item(
+            self.ws, "NA-0006", title="Publish the crate index", project="birch",
+            body=_acceptance((True, "the index lists every crate")))
+        git_commit_all(self.ws)
+        self._run("done", "NA-0005", "--summary", "Exporter ships.")
+        self._run("done", "NA-0006", "--summary", "Index is up.")
+        _code, out, _err = self._run("closed", "birch")
+        # A page with an item on it, not a filter that matched nothing and said
+        # so -- which would suppress the footer for the wrong reason.
+        self.assertIn("Index is up.", out)
+        self.assertNotIn("the legacy sidecar", out)
+        self.assertNotIn("Set aside", out)
+
+    def test_it_survives_an_item_that_recorded_nothing_else(self):
+        """The thinnest close there is, and the one where this matters most.
+
+        Answering neither question writes no closing block at all, so the mark
+        in the body is the only thing the file has left to say about how the
+        item ended. Read off the row rather than off the closing record, which
+        is why it still appears -- and the assertion on `parse_closing` is what
+        keeps the fixture honest about being the thin case.
+        """
+        write_backlog_item(
+            self.ws, "NA-0006", title="Publish the crate index",
+            body=_acceptance((cli.AC_DROPPED, "the index is regenerated nightly")))
+        git_commit_all(self.ws)
+        # `done` offers the tick selector when there is no summary to skip it,
+        # so a suite run from an interactive shell would stop here for a keypress.
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=False):
+            self._run("done", "NA-0006")
+        self.assertIsNone(
+            items.parse_closing(
+                (self.ws / "backlog" / "NA-0006.md").read_text(encoding="utf-8")),
+            "the fixture wrote a closing record, so this is not the thin case")
+        block = self._blocks()["NA-0006"]
+        self.assertIn("(no closing record)", block)
+        self.assertIn("%s  #1 the index is regenerated nightly" % cli.AC_DROPPED,
+                      block)
 
 
 class ShowSaysHowMuchOfThisIsYours(TempCase):
