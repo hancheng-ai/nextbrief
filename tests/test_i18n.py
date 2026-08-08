@@ -10,6 +10,7 @@ a diff.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import unittest
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from helpers import TempCase
 
+from nextbrief import cli as cli_mod
 from nextbrief import html as html_mod
 from nextbrief import render as render_mod
 from nextbrief.i18n import DEFAULT_LOCALE, Catalog, available_locales, load_catalog
@@ -41,6 +43,33 @@ _LITERAL_CALL = re.compile(r"\.t\(\s*[\"']([\w.\-]+)[\"']")
 def keys_used_in(module) -> set:
     source = Path(module.__file__).read_text(encoding="utf-8")
     return set(_LITERAL_CALL.findall(source))
+
+
+def keys_passed_to_tr(module) -> set:
+    """Keys handed to ``tr(cat, "key", "fallback")``, which is how `cli` asks.
+
+    `cli` never calls ``.t()`` directly: it goes through ``tr``, which takes an
+    English fallback as its third argument and returns it when the key is absent.
+    That fallback is exactly why this test has to exist -- a missing key is not
+    loud here the way a bare key string is. It prints perfectly good English, in
+    the middle of a Chinese session, and the only person who finds out is the
+    reader who was relying on the translation.
+
+    Read from the syntax tree rather than by pattern, because two calls in `cli`
+    build their key by concatenation and a regex reports the prefix as a missing
+    key -- a failing test about a key nobody ever asked for, which is how a guard
+    like this gets deleted.
+    """
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    found = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == "tr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)):
+            found.add(node.args[1].value)
+    return found
 
 
 def load(locale):
@@ -82,6 +111,22 @@ class Catalogs(unittest.TestCase):
     def test_every_key_the_renderers_use_exists_in_both(self):
         used = keys_used_in(render_mod) | keys_used_in(html_mod) | set(_INDIRECT)
         # Sanity: if the scrape found nothing the test would pass vacuously.
+        self.assertGreater(len(used), 50)
+        for locale in ("en", "zh"):
+            strings = load(locale)
+            missing = sorted(k for k in used if k not in strings)
+            self.assertEqual(missing, [], "missing from %s: %s" % (locale, missing))
+
+    def test_every_key_the_cli_asks_for_exists_in_both(self):
+        """The half that was not covered, and it had already gone wrong.
+
+        `cli` was outside this check because it calls `tr` rather than `.t()`,
+        and two keys shipped in neither catalog: the tick prompts, which are the
+        first thing a person sees when closing an item. They did not look broken.
+        `tr` returned its English fallback, so a Chinese session printed English
+        instructions for the `-N` syntax and nothing anywhere said why.
+        """
+        used = keys_passed_to_tr(cli_mod)
         self.assertGreater(len(used), 50)
         for locale in ("en", "zh"):
             strings = load(locale)

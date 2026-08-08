@@ -140,6 +140,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own: the criteria are one flat list in one shape, and the two that need a
   person look exactly like the seven that do not.
 
+- **The locale check now covers the CLI's keys too.** It read `.t(key)`, and the
+  CLI does not use it -- the CLI asks through `tr(cat, key, fallback)`, and that
+  fallback is exactly what makes a missing key silent there. It is not a visible
+  breakage; it is perfectly good English printed in the middle of a Chinese
+  session, with nothing anywhere saying why. `tests/test_i18n.py` now reads the
+  keys out of the CLI's own syntax tree and requires every one of them in both
+  catalogs.
+
+  This closes the gap rather than a live bug: the two keys that had shipped
+  missing this way -- the tick prompts, the first thing a person sees when
+  closing an item -- were added to both catalogs in `556b90f`, and every key the
+  CLI asks for is present today. The check exists so the next one cannot repeat
+  it, which is the half that was missing when those two got through. Keys are
+  read from the syntax tree rather than by pattern because two of them are built
+  by concatenation, and a regex reports the prefix as absent -- a guard that
+  fails over a key nobody ever asked for is a guard somebody deletes.
+
 ## [0.2.0rc3] - 2026-08-07
 
 ### Fixed
