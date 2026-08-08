@@ -34,5 +34,14 @@ Icon?
 /BRIEF.md
 /BRIEF.html
 
+# Agent-tool state, none of it publishable. `nextbrief init` scaffolds
+# `.claude/settings.json` carrying absolute home paths, and an agent that runs
+# init inside this repo leaves one here. Until this line, `.claude/` was held
+# back only by a global excludesFile and .git/info/exclude -- neither of which
+# travels with a clone, so on anyone else's machine the protection was not
+# there at all. The shipped plugin lives in `.claude-plugin/`, which this
+# pattern does not match.
+.claude/
+
 # Icon build scratch
 packaging/icon/__pycache__/
