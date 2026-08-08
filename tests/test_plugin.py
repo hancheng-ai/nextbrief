@@ -31,7 +31,10 @@ here, so a command added to the engine tomorrow is covered tonight.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 import unittest
 
 from helpers import REPO_ROOT
@@ -242,6 +245,96 @@ class TheContractTheSkillQuotes(unittest.TestCase):
                 sorted(set(quoted)), [str(INVENTORY_SCHEMA_VERSION)],
                 "%s tells agents it understands schema_version %s; the engine "
                 "writes %d" % (path.name, sorted(set(quoted)), INVENTORY_SCHEMA_VERSION))
+
+
+class TheEngineMayNotBeInstalled(unittest.TestCase):
+    """A plugin ships skills. It does not ship a Python package.
+
+    So the complete path for somebody who finds this in a directory is
+    `/plugin install` -> success -> `nextbrief: command not found`, and the one
+    person who will never see it is the author, whose `PATH` has had the engine
+    on it the whole time. Both halves of that were verified before this was
+    written: the shell really does answer `command not found` when the binary is
+    absent, and the skill really did not mention the possibility.
+
+    Asserted here rather than trusted, because the failure is somebody else's
+    first screen and this repository will never run on their machine.
+    """
+
+    def _body(self):
+        bodies = [p.read_text(encoding="utf-8") for p in skill_files()]
+        self.assertTrue(bodies, "the plugin ships no SKILL.md at all")
+        return bodies
+
+    def test_the_first_thing_each_skill_runs_is_the_check_that_it_can_run(self):
+        """Position is the whole of it. Install guidance below three commands
+        that already failed is guidance nobody reaches."""
+        for path in skill_files():
+            runnable = runnable_text(path.read_text(encoding="utf-8"))
+            first = next((ln.strip() for ln in runnable.splitlines() if ln.strip()), "")
+            self.assertEqual(
+                "nextbrief --version", first,
+                "%s starts by running %r. The first command has to be the one "
+                "that establishes the engine exists." % (path.name, first))
+
+    def test_each_skill_says_how_to_install_the_engine(self):
+        for path, body in zip(skill_files(), self._body()):
+            for line in ("pipx install nextbrief", "uv tool install nextbrief"):
+                self.assertIn(line, body,
+                              "%s does not tell the reader %r" % (path.name, line))
+            self.assertIn("command not found", body,
+                          "%s never names the failure it is guarding against, so "
+                          "an agent cannot match what it sees to what it read"
+                          % path.name)
+
+    def test_no_skill_offers_to_install_the_engine_itself(self):
+        """The posture, not just the words. This skill reads; putting a package
+        on somebody's machine is their decision, and a skill that hedges on that
+        is one an agent will read as permission."""
+        for path, body in zip(skill_files(), self._body()):
+            self.assertRegex(
+                body, r"do not (run the install|install it) yourself",
+                "%s gives install commands without saying who runs them" % path.name)
+
+    def test_the_command_it_starts_with_really_does_fail_when_the_engine_is_gone(self):
+        """The behavioural half, and the reason the two above are not enough.
+
+        A skill can describe any failure it likes; what makes the description
+        useful is that it matches what the shell actually produces. So the first
+        command is run for real, on a `PATH` the engine is not on, and both the
+        wording and the exit code it comes back with have to be ones the skill
+        has already named.
+
+        The exit code is the half worth having. "command not found" appears in
+        the skill twice, once in passing, so requiring the phrase somewhere is a
+        bar an accidental mention clears -- which is how the first version of
+        this test survived the mutation that deleted the sentence that mattered.
+        The number is written down exactly once, and it is checked against the
+        number the shell really returned rather than against a constant here.
+        """
+        bare = os.pathsep.join(("/usr/bin", "/bin"))
+        if shutil.which("nextbrief", path=bare) is not None:
+            raise unittest.SkipTest(
+                "nextbrief is installed in %s, so no PATH here is without it" % bare)
+
+        first = next(ln.strip() for ln in runnable_text(
+            skill_files()[0].read_text(encoding="utf-8")).splitlines() if ln.strip())
+        proc = subprocess.run(["/bin/sh", "-c", first], env={"PATH": bare},
+                              capture_output=True, text=True)
+        output = (proc.stdout + proc.stderr).lower()
+
+        self.assertNotEqual(0, proc.returncode,
+                            "%r succeeded with the engine off the PATH, so this "
+                            "test is not measuring what it thinks" % first)
+        self.assertIn("not found", output,
+                      "the shell reported %r instead; the skill's guidance is "
+                      "keyed to wording that does not happen" % output.strip())
+        for path, body in zip(skill_files(), self._body()):
+            self.assertIn(
+                "`%d`" % proc.returncode, body,
+                "the shell exits %d when the engine is absent, and %s never "
+                "names that number -- so an agent cannot tell this failure from "
+                "any other non-zero exit" % (proc.returncode, path.name))
 
 
 class TheManifests(unittest.TestCase):

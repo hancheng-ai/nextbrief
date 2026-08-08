@@ -12,6 +12,38 @@ brief). Reading it costs one command and replaces walking a dozen directories.
 Everything in this skill only reads. Nothing here changes a file, opens a
 session, or takes an item off the page.
 
+## First: check the engine is actually here
+
+**This plugin ships a skill, not the engine.** Installing the plugin does not
+install `nextbrief`; the two travel separately, and on a machine that has never
+had the engine every command below is a `command not found` rather than an
+answer. Start here:
+
+```bash
+nextbrief --version
+```
+
+If that prints a version, carry on to the next section.
+
+If the shell answers `command not found` — exit `127` — **stop and say so.** Do
+not fall back to reading directories by hand: the whole value of this skill is
+that the answers are checked against evidence, and a hand-rolled substitute has
+none of that. Report that the engine is missing and give the person these two
+lines, which install it from PyPI:
+
+```
+pipx install nextbrief
+uv tool install nextbrief
+```
+
+It is a Python package with no dependencies and needs no virtualenv of its own.
+For a single run without installing anything, `uvx nextbrief` works too. The
+other install routes are in
+https://github.com/hancheng-ai/nextbrief#install.
+
+**Tell the person; do not run the install yourself.** Putting software on
+somebody's machine is their decision, and this skill only reads.
+
 ## Check the version before you trust the fields
 
 `state/inventory.json` is a published contract, and the first thing to read in

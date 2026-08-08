@@ -257,6 +257,40 @@
       "expect": "'--workspace' not found"
     },
     {
+      "label": "the engine check is no longer the first thing run",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "```bash\nnextbrief --version\n```",
+      "new": "```bash\nnextbrief context --json\n```",
+      "select": "test_the_first_thing_each_skill_runs_is_the_check_that_it_can_run",
+      "expect": "has to be the one",
+      "note": "Position is what the guard measures. Install guidance below three commands that have already failed is guidance nobody reaches."
+    },
+    {
+      "label": "the skill stops saying how to install the engine",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "pipx install nextbrief\nuv tool install nextbrief",
+      "new": "ask the owner",
+      "select": "test_each_skill_says_how_to_install_the_engine",
+      "expect": "does not tell the reader"
+    },
+    {
+      "label": "the skill names the wrong exit code for a missing engine",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "— exit `127` —",
+      "new": "— exit `1` —",
+      "select": "test_the_command_it_starts_with_really_does_fail_when_the_engine_is_gone",
+      "expect": "command not found",
+      "note": "First written against the phrase \"command not found\", which the skill happens to use twice; the mutation that deleted the sentence that mattered left the incidental mention behind and the guard stayed green. The number appears once and is checked against the code the shell really returns."
+    },
+    {
+      "label": "the skill offers to install the engine itself",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "**Tell the person; do not run the install yourself.**",
+      "new": "**Tell the person, or install it for them if they are in a hurry.**",
+      "select": "test_no_skill_offers_to_install_the_engine_itself",
+      "expect": "without saying who runs them"
+    },
+    {
       "label": "the dead $schema URL put back",
       "file": ".claude-plugin/marketplace.json",
       "old": "\"$schema\": \"https://json.schemastore.org/claude-code-marketplace.json\",",

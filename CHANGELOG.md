@@ -214,6 +214,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The skill no longer assumes the engine is installed.** A plugin ships
+  skills; it does not install a Python package. So the whole path for somebody
+  arriving from a directory was `/plugin install` → success → `nextbrief:
+  command not found`, and the one person who would never see it is the author,
+  whose `PATH` has had the engine on it the whole time. Same shape as the
+  dogfooding gap this project already knew about, moved out one layer: the
+  plugin had only ever been tried on the machine where its precondition was
+  already true.
+
+  `skills/portfolio-context/SKILL.md` now opens with `nextbrief --version`, and
+  says what to do when the shell answers `command not found` — report it, with
+  `pipx install nextbrief` or `uv tool install nextbrief`, and do not run the
+  install on somebody's behalf. Installing software is the owner's decision and
+  this skill only reads. Both manifests say the same thing where a directory
+  visitor sees it, before they install anything.
+
+  The guard runs the skill's own first command on a `PATH` the engine is not on
+  and requires the exit code the shell really returns to be one the skill has
+  named. Written first against the phrase "command not found", which the skill
+  happens to use twice — the mutation that deleted the sentence that mattered
+  left the incidental mention behind and the test stayed green. The number
+  appears once, and is compared against the live exit code rather than a
+  constant.
+
+  Shipping the engine inside the plugin was considered and rejected: `bin/` at
+  a plugin root does put executables on the Bash tool's `PATH`, and the zipapp
+  this repository already builds runs as a bare command on a system Python at
+  283 KB. Three things stopped it. Two builds of the same tree do not produce
+  the same bytes, so a committed artifact cannot be guarded by rebuild-and-
+  compare and would drift from `src/` silently. `/plugin install` could not be
+  exercised here, and choosing an install-time mechanism on the strength of a
+  documentation paragraph is the exact mistake this entry is about. And `bin/`
+  would put `done`, `drop`, `defer` and `do` one token away in every Bash call
+  of every session, which is a different plugin from the read-only one the
+  lint has been defending.
+
 - **The plugin manifests now cite a `$schema` that exists.**
   `.claude-plugin/marketplace.json` shipped
   `https://anthropic.com/claude-code/marketplace.schema.json` from the day it

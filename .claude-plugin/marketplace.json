@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "nextbrief",
-      "description": "The portfolio context an agent should read before it starts work: what projects exist, what each one is for, what is open, and what was just closed. Read-only.",
+      "description": "The portfolio context an agent should read before it starts work: what projects exist, what each one is for, what is open, and what was just closed. Read-only. Ships the skill only: the nextbrief engine installs separately with `pipx install nextbrief` or `uv tool install nextbrief`.",
       "author": {
         "name": "Hancheng Wang"
       },
