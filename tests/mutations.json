@@ -215,6 +215,48 @@
       "note": "`.gitignore` is the one init output this repository cannot hold back -- the rule would have to ignore a tracked file to reach it. The exemption in test_gitignore.py is only safe while this stays true."
     },
     {
+      "label": "a new subcommand slipped in without a workspace verdict",
+      "file": "src/nextbrief/cli.py",
+      "old": "    add(\"prune\", \"list items worth revisiting\")",
+      "new": "    add(\"prune\", \"list items worth revisiting\")\n    add(\"purge\", \"unsurveyed\")",
+      "select": "test_every_subcommand_has_a_verdict",
+      "expect": "'purge'",
+      "note": "The whole point of the survey being a fixture: the twenty-fifth command cannot join without somebody deciding what --workspace means for it."
+    },
+    {
+      "label": "main stops passing --workspace to the resolver",
+      "file": "src/nextbrief/cli.py",
+      "old": "        ws = resolve_workspace(_opt(args, \"workspace\"), _opt(args, \"out\"))",
+      "new": "        ws = resolve_workspace(None, _opt(args, \"out\"))",
+      "select": "test_every_command_that_honours_it_refuses_a_hollow_directory",
+      "expect": "did not stop at the flag"
+    },
+    {
+      "label": "the resolved workspace loses to the one the cwd sits in",
+      "file": "src/nextbrief/cli.py",
+      "old": "        ws = resolve_workspace(_opt(args, \"workspace\"), _opt(args, \"out\"))",
+      "new": "        ws = resolve_workspace(None, _opt(args, \"out\"))",
+      "select": "test_show_cannot_find_the_item_that_is_only_here",
+      "expect": "and it was not found there",
+      "note": "Same mutation, the other half of the question. The refusal test only proves main consults the flag; this one proves the handler acts on what it was handed."
+    },
+    {
+      "label": "init stops refusing the flag it cannot act on",
+      "file": "src/nextbrief/cli.py",
+      "old": "_INIT_REFUSES = (\"workspace\", \"out\")",
+      "new": "_INIT_REFUSES = (\"out\",)",
+      "select": "test_init_refuses_the_flag_by_name",
+      "expect": "init accepted --workspace"
+    },
+    {
+      "label": "--workspace stops being a global flag the stages are shielded from",
+      "file": "src/nextbrief/cli.py",
+      "old": "_GLOBAL_FLAGS = (\"--workspace\", \"--out\", \"--locale\")",
+      "new": "_GLOBAL_FLAGS = (\"--out\", \"--locale\")",
+      "select": "test_the_stages_are_handed_it_through_the_environment",
+      "expect": "'--workspace' not found"
+    },
+    {
       "label": "a first sentence that never ends inside the cap",
       "file": ".claude-plugin/plugin.json",
       "old": "The portfolio context an agent should read before it starts work:",
