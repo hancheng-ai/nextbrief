@@ -238,6 +238,47 @@ strains one, say so in the PR rather than working around it quietly.
      unit test on a hand-built dict confirmed the same reasoning three rounds
      running while the wiring underneath it was wrong.
 
+   **On macOS the loop itself can lie, so watch it too.** The pinned
+   `/usr/bin/python3` (3.9.6) caches bytecode *outside* the repository, under
+   `~/Library/Caches/com.apple.python/<absolute path of the source>/`. Those
+   `.pyc` files carry a `flags` field of `0` -- timestamp invalidation -- so the
+   cache is reused whenever it agrees with the source on **whole-second mtime
+   and byte size**. Both halves are coarse, and the edit this rule asks for
+   often changes neither: `INVENTORY_SCHEMA_VERSION = 1` to `= 2` preserves the
+   byte count, and a revert typed briskly preserves the second.
+
+   That buys two failures, and they point in opposite directions:
+
+   - **Revert inside the mutation's second and the mutant outlives the revert.**
+     The mutating run compiled and cached it; the revert restores the same size
+     and the same whole second, so the cache still matches and every later run
+     keeps executing the mutant. The guard looks red when it is not.
+   - **Mutate inside the warm run's second and the mutant never runs at all.**
+     The previous run's cache still matches, so nothing is recompiled and the
+     test passes on code you did not write. The guard looks unable to fail when
+     it is perfectly able to.
+
+   `git diff` is clean through both, which makes this the "reached the right
+   answer down the wrong path" case the rule exists to prevent -- so the rule
+   needs a guard of its own. Four defences, and they are cheap:
+
+   - run mutations under `python3 -B` **and** `PYTHONDONTWRITEBYTECODE=1`, so
+     neither the harness nor anything it spawns can write a cache;
+   - `os.utime()` a distinct mtime after every write, so a size-preserving edit
+     still invalidates a cache that survived anyway;
+   - purge `~/Library/Caches/com.apple.python/<repo path>/` before and after;
+   - after each revert require the same test to go **green again**, so a
+     poisoned cache surfaces on the mutation that caused it rather than as a
+     baffling result fifteen steps later.
+
+   The tell, if you ever meet a result you cannot explain: `grep`, `sed` and an
+   `ast.parse()` of the file all report the original while a fresh `import`
+   reports the mutant -- with `module.__file__` pointing at the very file you
+   just read.
+
+   `scripts/watch-red.py` implements all four and drives the mutation list in
+   `tests/mutations.json`. Prefer it to doing this by hand.
+
 ---
 
 ## The four extension points

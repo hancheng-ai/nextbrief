@@ -1,0 +1,183 @@
+{
+  "_readme": "Mutations for scripts/watch-red.py -- see rule 7 of CONTRIBUTING.md. Each entry breaks exactly one thing a guard claims to catch. `old` must appear exactly once in `file`; the test picked by `select` must go red, and its output must name `expect`, or the guard is red for the wrong reason and does not count as watched.",
+  "mutations": [
+    {
+      "label": "banned command in a code fence",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "```bash\nnextbrief projects\n```",
+      "new": "```bash\nnextbrief projects\nnextbrief do NA-0001\n```",
+      "select": "test_every_command_a_skill_runs_is_read_only",
+      "expect": "'do'"
+    },
+    {
+      "label": "banned command shielded by a global flag",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "```bash\nnextbrief projects\n```",
+      "new": "```bash\nnextbrief projects\nnextbrief --workspace /tmp/ws do NA-0001\n```",
+      "select": "test_every_command_a_skill_runs_is_read_only",
+      "expect": "'do'"
+    },
+    {
+      "label": "write command in bare prose, no backticks",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "## Reading the answers",
+      "new": "When you finish, run nextbrief done NA-0001 to record it.\n\n## Reading the answers",
+      "select": "test_no_skill_names_a_write_command_even_in_prose",
+      "expect": "'done'"
+    },
+    {
+      "label": "terminal-state command in a fence",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "```bash\nnextbrief ls\nnextbrief show <id>\n```",
+      "new": "```bash\nnextbrief ls\nnextbrief defer <id>\n```",
+      "select": "test_every_command_a_skill_runs_is_read_only",
+      "expect": "'defer'"
+    },
+    {
+      "label": "skill stripped of every runnable command",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "```bash\nnextbrief context --json\n```",
+      "new": "```bash\necho nothing\n```",
+      "select": "test_each_skill_actually_invokes_something",
+      "expect": "context"
+    },
+    {
+      "label": "extractor stops stepping over valued global flags",
+      "file": "tests/test_plugin.py",
+      "old": "VALUED_GLOBAL_FLAGS = (\"--workspace\", \"--out\", \"--locale\")",
+      "new": "VALUED_GLOBAL_FLAGS = ()",
+      "select": "test_it_sees_one_hidden_behind_a_global_flag",
+      "expect": "do"
+    },
+    {
+      "label": "extractor scans prose as if it were runnable",
+      "file": "tests/test_plugin.py",
+      "old": "return \"\\n\".join(_FENCE.findall(body) + _INLINE.findall(body))",
+      "new": "return body",
+      "select": "test_runnable_text_keeps_code_and_drops_prose",
+      "expect": "keeps"
+    },
+    {
+      "label": "extractor allowed to cross a newline",
+      "file": "tests/test_plugin.py",
+      "old": "_INVOCATION = re.compile(r\"\\b(?:nextbrief|nb)\\b([^\\n`]*)\")",
+      "new": "_INVOCATION = re.compile(r\"\\b(?:nextbrief|nb)\\b([^`]*)\", re.DOTALL)",
+      "select": "test_it_does_not_run_past_the_end_of_a_line",
+      "expect": "projects"
+    },
+    {
+      "label": "a session command added to the allowlist",
+      "file": "tests/test_plugin.py",
+      "old": "ALLOWED = frozenset({\"context\", \"projects\", \"brief\", \"show\", \"ls\", \"closed\"})",
+      "new": "ALLOWED = frozenset({\"context\", \"projects\", \"brief\", \"show\", \"ls\", \"closed\", \"do\"})",
+      "select": "test_the_session_and_terminal_state_commands_are_not_on_it",
+      "expect": "do"
+    },
+    {
+      "label": "a phantom command added to the allowlist",
+      "file": "tests/test_plugin.py",
+      "old": "ALLOWED = frozenset({\"context\", \"projects\", \"brief\", \"show\", \"ls\", \"closed\"})",
+      "new": "ALLOWED = frozenset({\"context\", \"projects\", \"brief\", \"show\", \"ls\", \"closd\"})",
+      "select": "test_the_allowlist_names_only_real_commands",
+      "expect": "closd"
+    },
+    {
+      "label": "the skills directory renamed out from under the loop",
+      "file": "tests/test_plugin.py",
+      "old": "SKILLS_DIR = REPO_ROOT / \"skills\"",
+      "new": "SKILLS_DIR = REPO_ROOT / \"skills-gone\"",
+      "select": "test_there_is_a_skill_to_check",
+      "expect": "ships no SKILL.md"
+    },
+    {
+      "label": "init named in bare prose",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "## Reading the answers",
+      "new": "If nothing resolves, run nextbrief init ~/ws to set one up.\n\n## Reading the answers",
+      "select": "test_no_skill_names_a_write_command_even_in_prose",
+      "expect": "'init'",
+      "note": "`init` is dispatched outside _HANDLERS, so this and the next two were silently uncovered until the derivation was widened."
+    },
+    {
+      "label": "init inside a code fence",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "```bash\nnextbrief projects\n```",
+      "new": "```bash\nnextbrief init ~/ws\nnextbrief projects\n```",
+      "select": "test_every_command_a_skill_runs_is_read_only",
+      "expect": "'init'"
+    },
+    {
+      "label": "init added to the allowlist",
+      "file": "tests/test_plugin.py",
+      "old": "ALLOWED = frozenset({\"context\", \"projects\", \"brief\", \"show\", \"ls\", \"closed\"})",
+      "new": "ALLOWED = frozenset({\"context\", \"projects\", \"brief\", \"show\", \"ls\", \"closed\", \"init\"})",
+      "select": "test_the_session_and_terminal_state_commands_are_not_on_it",
+      "expect": "init"
+    },
+    {
+      "label": "engine bumps the schema while the skill still says 1",
+      "file": "src/nextbrief/inventory.py",
+      "old": "INVENTORY_SCHEMA_VERSION = 1",
+      "new": "INVENTORY_SCHEMA_VERSION = 2",
+      "select": "test_the_version_it_names_is_the_version_sense_writes",
+      "expect": "!= ['2']",
+      "note": "Byte-for-byte the same length as the original. This is the mutation that poisoned the bytecode cache on macOS; it is kept deliberately, because a manifest with no size-preserving edit never exercises defence 3."
+    },
+    {
+      "label": "skill stops naming a schema version at all",
+      "file": "skills/portfolio-context/SKILL.md",
+      "old": "**This skill knows `schema_version: 1`.",
+      "new": "**This skill knows the current shape.",
+      "select": "test_the_version_it_names_is_the_version_sense_writes",
+      "expect": "never names a schema_version"
+    },
+    {
+      "label": "plugin renamed out of its marketplace listing",
+      "file": ".claude-plugin/plugin.json",
+      "old": "\"name\": \"nextbrief\",",
+      "new": "\"name\": \"nextbrief-cli\",",
+      "select": "test_the_marketplace_lists_this_plugin_under_the_name_it_has",
+      "expect": "nextbrief-cli"
+    },
+    {
+      "label": "marketplace source pointing somewhere that is not a plugin",
+      "file": ".claude-plugin/marketplace.json",
+      "old": "\"source\": \"./\",",
+      "new": "\"source\": \"./docs\",",
+      "select": "test_every_listed_source_resolves_to_a_plugin",
+      "expect": "not a plugin"
+    },
+    {
+      "label": "an unswept version literal added to plugin.json",
+      "file": ".claude-plugin/plugin.json",
+      "old": "\"name\": \"nextbrief\",",
+      "new": "\"name\": \"nextbrief\",\n  \"version\": \"9.9.9\",",
+      "select": "test_a_version_here_must_be_one_the_bump_script_moves",
+      "expect": "bump-version.sh"
+    },
+    {
+      "label": "plugin.json made unparseable",
+      "file": ".claude-plugin/plugin.json",
+      "old": "\"license\": \"Apache-2.0\",",
+      "new": "\"license\": \"Apache-2.0\",,",
+      "select": "test_both_manifests_exist_and_parse",
+      "expect": "Expecting"
+    },
+    {
+      "label": "a description emptied out",
+      "file": ".claude-plugin/plugin.json",
+      "old": "\"description\": \"The portfolio context an agent should read before it starts work:",
+      "new": "\"description\": \"\", \"unused\": \"",
+      "select": "test_the_first_sentence_is_the_one_the_inventory_will_print",
+      "expect": "empty description"
+    },
+    {
+      "label": "a first sentence that never ends inside the cap",
+      "file": ".claude-plugin/plugin.json",
+      "old": "The portfolio context an agent should read before it starts work:",
+      "new": "The portfolio context an agent should read before it starts work and before it proposes anything at all, gathered from the projects it can see and from the ones it cannot, which is to say:",
+      "select": "test_the_first_sentence_is_the_one_the_inventory_will_print",
+      "expect": "hard-cut"
+    }
+  ]
+}
