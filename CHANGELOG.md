@@ -233,6 +233,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prints how many references it left inside the boundary, so a marker doing its
   job and a marker somebody deleted stop looking the same in the log.
 
+- **`nextbrief --workspace DIR init` no longer scaffolds into the current
+  directory.** `--workspace` and `--out` are declared on the parent parser every
+  subcommand inherits, but `init` is dispatched before any workspace is resolved
+  -- it is the command that creates one -- and reads only its positional
+  argument. Both flags parsed, bound to nothing, and the run carried on as
+  though they had been honoured.
+
+  `nextbrief --workspace /tmp/safe init -y --no-scan`, typed from this
+  repository's root, scaffolded `config.jsonc`, `registry.jsonc`, `prompts/`,
+  `schema/`, `backlog/`, `log/`, `state/` and `.claude/settings.json` into the
+  public tree, the settings file carrying the owner's absolute home paths. The
+  output did name the directory it had really written to -- on the line nobody
+  reads, having just said where to go.
+
+  Both are now a usage error on `init`, named individually and answered with the
+  form that works (`nextbrief init DIR`), before anything is written. Refused
+  rather than reinterpreted: `--workspace` means "the existing workspace to
+  operate on" for every other command, and redefining it as "where to create
+  one" for this one alone would trade a visible failure for an invisible one.
+  `--locale` is read above the dispatch and genuinely acted on, so it still is.
+  This is the defect class the `ShippedConfigTemplate` docstring already
+  records -- a flag accepted and read by nothing is worse than a flag that does
+  not exist, because argparse's silence reads as consent.
+
 ## [0.2.0rc3] - 2026-08-07
 
 ### Fixed

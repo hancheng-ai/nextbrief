@@ -180,6 +180,12 @@ def _export_env(ws: Workspace, locale: Optional[str]) -> None:
 PASSTHROUGH = ("run", "v0", "sense", "render")
 _GLOBAL_FLAGS = ("--workspace", "--out", "--locale")
 
+# Of those, the ones `init` cannot act on, by ``dest``. It is dispatched before
+# any workspace is resolved -- being the command that creates one -- so these
+# parse and bind to nothing. Adding a global flag above means deciding which
+# list it joins: honoured, as --locale is, or refused here.
+_INIT_REFUSES = ("workspace", "out")
+
 
 def _stage_args(argv: Sequence[str], command: str) -> List[str]:
     """Everything typed after the subcommand, verbatim and in order, minus the
@@ -3473,6 +3479,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cat = None
 
     if args.command == "init":
+        # Refuse rather than reinterpret. `--workspace` means "the existing
+        # workspace to operate on" for every other command, and silently
+        # redefining it as "where to create one" for this command alone would
+        # trade a visible failure for an invisible one. Accepting it and reading
+        # nothing was the worst of the three: `nextbrief --workspace /tmp/safe
+        # init -y --no-scan` scaffolded a whole workspace into the current
+        # directory instead, and argparse's silence read as consent.
+        stray = [name for name in _INIT_REFUSES if _opt(args, name) is not None]
+        if stray:
+            parser.error(
+                "%s cannot be used with init, which creates a workspace rather "
+                "than operating on one. Say where to create it as the argument: "
+                "nextbrief init DIR" % " and ".join("--" + n for n in stray)
+            )
         return cmd_init(args, cat)
 
     try:

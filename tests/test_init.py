@@ -14,6 +14,7 @@ takes over when the textual substitution cannot be made.
 from __future__ import annotations
 
 import json
+import os
 import re
 import unittest
 
@@ -325,3 +326,114 @@ class AgentPermissions(TempCase):
         self.settings.write_text(json.dumps(mine), encoding="utf-8")
         capture(init_mod.init_workspace, str(self.target), yes=True, scan=False)
         self.assertEqual(json.loads(self.settings.read_text(encoding="utf-8")), mine)
+
+
+class GlobalFlagsThatInitCannotHonour(TempCase):
+    """`--workspace` / `--out` name a workspace to work on; init is making one.
+
+    Both are declared on the parent parser every subcommand inherits, but `init`
+    is dispatched before the workspace is ever resolved and reads only its
+    positional argument. So they parsed, bound to nothing, and the run carried
+    on as if they had been obeyed.
+
+    That is not a hypothetical. `nextbrief --workspace /tmp/safe init -y
+    --no-scan`, typed from this repository's root, scaffolded config.jsonc,
+    registry.jsonc, prompts/, schema/, backlog/, log/, state/ and
+    .claude/settings.json into the public tree -- the settings file carrying the
+    owner's absolute home paths. The output named the directory it had really
+    written to, and nobody reads that line when they have just said where to go.
+
+    Same defect class as the ShippedConfigTemplate docstring records: a flag
+    that is accepted and read by nothing is worse than a flag that does not
+    exist, because argparse's silence reads as consent.
+
+    Every case below asserts the refusal *and* that the filesystem is untouched.
+    Exit 2 alone would still be green if init scaffolded first and complained
+    after, which is the failure that actually happened.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.elsewhere = self.tmp / "safe"
+        self.elsewhere.mkdir()
+        # An empty directory to stand in for the repository root the incident
+        # was run from: anything appearing here is a workspace that escaped.
+        self.here = self.tmp / "cwd"
+        self.here.mkdir()
+        os.chdir(self.here)
+
+    #: Everything the guard can refuse, so that a message naming a flag nobody
+    #: typed fails as loudly as one naming none.
+    REFUSABLE = ("--workspace", "--out")
+
+    def _assert_refused(self, argv, *flags):
+        code, out, err = capture(cli.main, argv)
+        self.assertEqual(code, 2, "expected a usage error\nstdout: %s\nstderr: %s" % (out, err))
+
+        # Matched against the message alone, never against the whole of stderr.
+        # argparse prints its usage line first and that line reads "[--workspace
+        # DIR] [--out DIR]", so a substring search over all of stderr finds every
+        # flag name no matter what the message actually says. This was written
+        # the loose way first, and mutation testing found it: an error naming no
+        # flag at all was still green here.
+        self.assertIn("error: ", err)
+        message = err.split("error: ", 1)[1]
+        for flag in flags:
+            self.assertIn(flag, message,
+                          "the error does not say which flag was refused: %r" % message)
+        for flag in self.REFUSABLE:
+            if flag not in flags:
+                self.assertNotIn(flag, message,
+                                 "the error names %s, which was never typed" % flag)
+        # The whole point of erroring instead of guessing: say the form that works.
+        self.assertIn("nextbrief init DIR", message)
+
+        self.assertEqual(sorted(p.name for p in self.here.iterdir()), [],
+                         "init scaffolded into the current directory anyway")
+        self.assertEqual(sorted(p.name for p in self.elsewhere.iterdir()), [],
+                         "init treated --workspace as the target after all")
+        # init writes the pointer under XDG_CONFIG_HOME on every successful run,
+        # so its absence proves the refusal happened before any work, not after.
+        self.assertFalse(pointer_file().exists(),
+                         "init ran far enough to claim the default workspace")
+
+    def test_workspace_before_the_subcommand_is_refused(self):
+        self._assert_refused(
+            ["--workspace", str(self.elsewhere), "init", "-y", "--no-scan"], "--workspace")
+
+    def test_workspace_after_the_subcommand_is_refused(self):
+        # The subparser inherits the same flag, so this parses too and has to
+        # fail identically -- one mistake must not have two different outcomes.
+        self._assert_refused(
+            ["init", "--workspace", str(self.elsewhere), "-y", "--no-scan"], "--workspace")
+
+    def test_out_is_refused_too(self):
+        # Same wiring, same silence: --out is read only by resolve_workspace,
+        # which init never reaches.
+        self._assert_refused(
+            ["--out", str(self.elsewhere), "init", "-y", "--no-scan"], "--out")
+
+    def test_both_at_once_name_both(self):
+        self._assert_refused(
+            ["--workspace", str(self.elsewhere), "--out", str(self.elsewhere),
+             "init", "-y", "--no-scan"],
+            "--workspace", "--out")
+
+    def test_the_positional_form_still_works(self):
+        # Positive control. A guard that refuses everything would satisfy every
+        # assertion above and break the only spelling that was ever correct.
+        target = self.tmp / "made"
+        code, out, err = capture(cli.main, ["init", str(target), "-y", "--no-scan"])
+        self.assertEqual(code, 0, err)
+        self.assertTrue((target / "registry.jsonc").is_file())
+        self.assertEqual(sorted(p.name for p in self.here.iterdir()), [])
+
+    def test_locale_is_still_honoured(self):
+        # --locale rides the same parent parser but is read above the dispatch,
+        # so it is the one global flag init genuinely obeys. Refusing it would
+        # be the over-correction.
+        target = self.tmp / "zh"
+        code, out, err = capture(
+            cli.main, ["--locale", "zh", "init", str(target), "-y", "--no-scan"])
+        self.assertEqual(code, 0, err)
+        self.assertTrue((target / "registry.jsonc").is_file())
