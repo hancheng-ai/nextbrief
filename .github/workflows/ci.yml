@@ -415,3 +415,44 @@ jobs:
 
       - name: Scan for shapes that are never publishable
         run: python3 scripts/leak-shapes.py ${{ steps.range.outputs.mode }}
+
+  # The layer above the shape scan: not "is this push clean" but "is the fence
+  # that should have checked it still a fence at all".
+  #
+  # The job above can only ever report, and the fence it defers to had never been
+  # switched on -- `core.hooksPath` needs setting once per clone, and on the
+  # machine that mattered nobody set it. It stayed off for weeks and a borrowed
+  # project name went out in two releases underneath that silence. Nothing said
+  # anything, because a gate that was never installed and a gate that passed
+  # produce the same log: nothing.
+  #
+  # What a runner can honestly answer is enforced here, and what it cannot is
+  # said out loud rather than left to look like a pass:
+  #
+  #   enforced -- the hook is present, executable, and still calls the scanner;
+  #               the scanner is quiet on a clean tree AND rejects planted
+  #               shapes. Either half alone is satisfied by a scanner stuck on
+  #               one answer.
+  #   warned   -- whether the person pushing had the hook on. A runner clones
+  #               fresh and has none by construction, so failing on that would
+  #               make this job permanently red, and an always-red gate is one
+  #               people route around. It emits a ::warning:: instead, saying
+  #               that CI green means the fence is INTACT and never that it RAN.
+  #
+  # The half a runner cannot see is covered by tests/test_gate_selfcheck.py,
+  # which points the same check at whatever clone the suite is running in and
+  # fails there. That is the copy that would have caught this on the day.
+  gate-selfcheck:
+    name: pre-push fence is intact and can still fail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.9"
+
+      # No fetch-depth here: this job asks about the fence in the tree, not about
+      # any range of commits.
+      - name: Assert the fence is wired and provably red-capable
+        run: python3 scripts/gate-selfcheck.py --ci

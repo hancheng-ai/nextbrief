@@ -131,6 +131,36 @@ defence is the rule at the top of this section rather than the script. Concrete
 examples are much better than vague ones. **Invent the concreteness rather than
 borrowing it.**
 
+**This has already happened here, and it is worth knowing how it looked.** A
+command's `--until` example wanted a project to wait on, and a real one from the
+author's private notes was to hand. It read perfectly — that is the whole trouble
+with a borrowed example, it is concrete because it is real. It reached seven
+tracked files: a README in both languages, a docstring, a usage string, both
+locale catalogs, a schema comment, and a test. Two more names had come in the
+same way through a test fixture. All of it shipped in two release candidates
+before anyone looked, because the fence that would have stopped it had never been
+switched on.
+
+Three things that cost more than the fix did:
+
+- **The shape scan was green the entire time, correctly.** A borrowed name has no
+  shape. Whatever the `leak-shapes` job says, it has not read your examples.
+- **An example spreads.** One line in a README became ten occurrences across two
+  languages and a test suite, because a good example gets reused — which is what
+  makes borrowing one worse than it first looks, not better.
+- **The gate had never once been watched failing.** It was written, reviewed, and
+  documented, and `core.hooksPath` was never set, so it had never run at all. An
+  uninstalled gate and a gate that passed write the same thing in the log:
+  nothing. `scripts/gate-selfcheck.py` exists so that absence has a voice —
+  `tests/test_gate_selfcheck.py` runs it against your clone, and CI runs it to
+  confirm the fence is still able to fail.
+
+Run this once per clone and the story above stops being available to you:
+
+```
+git config core.hooksPath .githooks
+```
+
 ---
 
 ## The design contract
