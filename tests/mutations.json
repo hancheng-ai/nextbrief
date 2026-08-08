@@ -172,6 +172,49 @@
       "expect": "empty description"
     },
     {
+      "label": "a workspace rule written without its leading slash",
+      "file": ".gitignore",
+      "old": "/prompts/\n/schema/",
+      "new": "/prompts/\nschema/",
+      "select": "test_no_tracked_file_is_held_back_by_an_ignore_rule",
+      "expect": "src/nextbrief/schema/brief.schema.json",
+      "note": "The trap the rule exists for. `schema/` reads as the workspace directory init creates and matches the packaged one four levels down; nothing about it shows in `git status`."
+    },
+    {
+      "label": "an init output left with no ignore rule at all",
+      "file": ".gitignore",
+      "old": "/prompts/\n/schema/",
+      "new": "/schema/",
+      "select": "test_everything_init_writes_here_is_already_ignored",
+      "expect": "prompts/daily.en.md"
+    },
+    {
+      "label": "the tracked-file check stops passing --no-index",
+      "file": "tests/test_gitignore.py",
+      "old": "[\"check-ignore\", \"-z\", \"-v\", \"--no-index\", \"--stdin\"]",
+      "new": "[\"check-ignore\", \"-z\", \"-v\", \"--stdin\"]",
+      "select": "test_the_check_reports_one_when_there_is_one",
+      "expect": "did not reach the packaged prompts",
+      "note": "Without the flag git declines to consider a tracked path, so a check whose input is exactly the tracked paths reports nothing however wrong the rules are. This is the mutation that makes the other .gitignore guard mean something."
+    },
+    {
+      "label": "the tracked-file check handed an empty list",
+      "file": "tests/test_gitignore.py",
+      "old": "[\"git\", \"-C\", str(REPO_ROOT), \"ls-files\", \"-z\"]",
+      "new": "[\"git\", \"-C\", str(REPO_ROOT), \"ls-files\", \"-z\", \"--\", \"no-such-path\"]",
+      "select": "test_no_tracked_file_is_held_back_by_an_ignore_rule",
+      "expect": "asserting over nothing"
+    },
+    {
+      "label": "init overwrites a .gitignore that was already there",
+      "file": "src/nextbrief/init.py",
+      "old": "if not (root / \".gitignore\").exists():",
+      "new": "if True:",
+      "select": "test_init_does_not_overwrite_a_gitignore_that_is_already_there",
+      "expect": "# mine",
+      "note": "`.gitignore` is the one init output this repository cannot hold back -- the rule would have to ignore a tracked file to reach it. The exemption in test_gitignore.py is only safe while this stays true."
+    },
+    {
       "label": "a first sentence that never ends inside the cap",
       "file": ".claude-plugin/plugin.json",
       "old": "The portfolio context an agent should read before it starts work:",

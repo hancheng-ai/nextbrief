@@ -26,11 +26,22 @@ Icon?
 
 # A workspace must never live inside the engine repo. These are here so that a
 # stray local experiment cannot be committed by accident.
+#
+# Every one of these carries a leading slash, and on the last two that is the
+# whole point rather than a house style. A pattern with no slash in the middle
+# matches at every depth, and this package ships `src/nextbrief/prompts/` and
+# `src/nextbrief/schema/` as tracked data -- so a bare `schema/`, aimed at the
+# workspace directory `init` creates here, would instead stop git watching four
+# files it had no quarrel with. Nothing shows in `git status` when that happens.
+# Same near miss as `.claude/` against `.claude-plugin/` below;
+# tests/test_gitignore.py checks after the fact that no tracked file went under.
 /registry.jsonc
 /config.jsonc
 /backlog/
 /state/
 /log/
+/prompts/
+/schema/
 /BRIEF.md
 /BRIEF.html
 
