@@ -72,6 +72,65 @@ class Context(TempCase):
         self.assertIn("nextbrief done NA-0001", self.ctx.prompt)
 
 
+class ACriterionTheDesignMovedPastIsNotHandedOverAsWork(TempCase):
+    """★ The prompt is where an abandoned goal is cheapest to restart. ★
+
+    `- [~]` was carried into the session prompt verbatim, under the heading
+    "**Done when**". That is an instruction to go and do it -- and `~` reads as
+    "in progress" to anyone who does not know this convention, which is most
+    readers of this prompt. It is the same failure the mark was added to stop,
+    one step earlier in the chain than the follow-up drafts where it was caught
+    the first time: there, an abandoned goal minted a task; here, it opens a
+    session that starts on it.
+
+    The line is still shown, because deleting it would leave an agent free to
+    propose the abandoned thing back as a fresh idea. It is shown under a heading
+    that says what it is.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws_dir = self.workspace(with_git=False)
+        path = write_backlog_item(
+            self.ws_dir, "NA-0004",
+            body="\n".join(["<!-- AC:BEGIN -->",
+                            "- [x] #1 the exporter writes one file per crate",
+                            "- [~] #2 the legacy sidecar keeps working",
+                            "- [ ] #3 the migration guide names the new flag",
+                            "<!-- AC:END -->"]))
+        self.prompt = build_context(resolve_workspace(str(self.ws_dir)), path).prompt
+
+    def _section(self, heading):
+        """Everything after ``heading`` and before the next blank line."""
+        rest = self.prompt.split(heading, 1)[1]
+        return rest.split("\n\n", 1)[0]
+
+    def test_it_is_not_listed_under_done_when(self):
+        self.assertNotIn("legacy sidecar", self._section("**Done when**:"))
+
+    def test_the_criteria_that_do_apply_are_still_there(self):
+        section = self._section("**Done when**:")
+        self.assertIn("- [x] #1 the exporter writes one file per crate", section)
+        self.assertIn("- [ ] #3 the migration guide names the new flag", section)
+
+    def test_it_is_shown_under_a_heading_saying_not_to_do_it(self):
+        """Kept rather than hidden. An agent that cannot see the withdrawn goal
+        is an agent free to suggest it back as a good idea."""
+        self.assertIn("No longer applies", self.prompt)
+        self.assertIn("- [~] #2 the legacy sidecar keeps working",
+                      self._section("propose them back:"))
+
+    def test_an_item_with_nothing_set_aside_gains_no_heading(self):
+        path = write_backlog_item(
+            self.ws_dir, "NA-0005",
+            body="\n".join(["<!-- AC:BEGIN -->",
+                            "- [ ] #1 it works",
+                            "<!-- AC:END -->"]))
+        prompt = build_context(resolve_workspace(str(self.ws_dir)), path).prompt
+        self.assertNotIn("No longer applies", prompt)
+        self.assertIn("- [ ] #1 it works", prompt)
+
+
 class Failures(TempCase):
     def setUp(self):
         super().setUp()

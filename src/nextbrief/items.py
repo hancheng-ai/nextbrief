@@ -36,6 +36,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 __all__ = [
     "OPEN_STATUSES", "TERMINAL_STATUSES", "DEFERRED", "HUMAN_ONLY_STATUSES",
+    "AC_OPEN", "AC_DONE", "AC_DROPPED",
     "status_of", "defer_due", "is_live", "is_parked", "days_until_due",
     "Closing", "FutureWork", "CLOSING_BEGIN", "CLOSING_END",
     "SUMMARY_HUMAN", "SUMMARY_DRAFT", "SUMMARY_NONE",
@@ -52,6 +53,27 @@ DEFERRED = "deferred"
 # could park something would be able to hide work it did not want to be asked
 # about, which is the false-completion failure wearing a different word.
 HUMAN_ONLY_STATUSES = TERMINAL_STATUSES + (DEFERRED,)
+
+# The three marks an acceptance criterion can carry.
+#
+# Two boxes cannot say what happens after a design change. A criterion the design
+# moved past is neither done nor undone, and both existing marks are a lie about
+# it: `[x]` claims work that never happened, and `[ ]` claims work is outstanding
+# that nobody intends to do. The second lie does not sit still -- an unticked
+# criterion is what `done` drafts as `future_work`, and `followup` turns that
+# into a real backlog item, so the mistake walks downstream and mints a task for
+# work somebody deliberately abandoned.
+#
+# `~` is a MARK, not a deletion. The line stays in the file and so does its text,
+# exactly as `drop` keeps an item's file and its git history. Rewriting the
+# sentence would erase the one thing worth keeping: that the goal moved.
+#
+# They live here rather than in `cli` because `launch` needs them too: the
+# session prompt quotes the criteria at an agent, and a criterion that was set
+# aside must not arrive as part of the definition of done.
+AC_OPEN = " "
+AC_DONE = "x"
+AC_DROPPED = "~"
 
 
 def status_of(fm: Dict[str, Any]) -> str:

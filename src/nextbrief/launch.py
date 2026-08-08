@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .frontmatter import parse_frontmatter
 from .i18n import Catalog, load_catalog
+from .items import AC_DROPPED
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, expand
 
@@ -246,11 +247,30 @@ def build_context(ws: Workspace, item_path, cat: Optional[Catalog] = None) -> La
     # Acceptance criteria are checkbox lines in the body. Copied verbatim: they are
     # the definition of done a human wrote, and paraphrasing them would be a way of
     # quietly moving the goalposts.
+    #
+    # Except for the ones marked `[~]`, which are the definition of done a human
+    # wrote and then withdrew. Listed under "Done when", such a line is an
+    # instruction to go and do it -- and `~` reads as "in progress" to anyone who
+    # does not know this convention, which is most readers of this prompt. That
+    # would be the very failure the mark was added to stop: work being started on
+    # a goal somebody deliberately abandoned, one step earlier in the chain than
+    # the follow-up drafts where it was caught the first time.
     acs = [ln.strip() for ln in body.splitlines() if ln.strip().startswith("- [")]
-    if acs:
+    set_aside = [ln for ln in acs if ln[:5].endswith("[%s]" % AC_DROPPED)]
+    done_when = [ln for ln in acs if ln not in set_aside]
+    if done_when:
         lines.append("")
         lines.append(tr(cat, "launch.prompt.acceptance", "**Done when**:"))
-        lines.extend(acs)
+        lines.extend(done_when)
+    if set_aside:
+        # Kept, rather than dropped from the prompt. The sentence is the record
+        # that the goal moved, and an agent that cannot see it will propose the
+        # abandoned thing back as a good idea.
+        lines.append("")
+        lines.append(tr(cat, "launch.prompt.set_aside",
+                        "**No longer applies** -- the design moved past these. "
+                        "Do not work on them, and do not propose them back:"))
+        lines.extend(set_aside)
 
     lines.append("")
     lines.append(

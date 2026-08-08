@@ -1646,6 +1646,67 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
         self.assertIn("no (agent)/(you) marker", err)
 
 
+class TheClosedListSeparatesWhatMovedFromWhatWasDone(TempCase):
+    """`closed` has to answer two different questions at once.
+
+    What a project finished, and where its goals went instead. The second one had
+    no shape here at all: a criterion set aside appeared only if somebody had
+    happened to mention it in the summary, so a project's history read as though
+    it had always meant exactly what it shipped.
+
+    It also must not land in the follow-up list. Those lines are the work
+    somebody should pick up; a dropped criterion is precisely the work nobody
+    should, and mixing them is the original mistake in a new place.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        git_init(self.ws)
+        write_backlog_item(
+            self.ws, "NA-0005", title="Rewrite the crate exporter",
+            body=_acceptance((True, "the exporter writes one file per crate"),
+                             (cli.AC_DROPPED, "the legacy sidecar keeps working"),
+                             (False, "the migration guide names the new flag")))
+        git_commit_all(self.ws)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def test_a_criterion_the_design_moved_past_is_listed_under_its_own_mark(self):
+        self._run("done", "NA-0005", "--summary", "shipped the exporter")
+        code, out, err = self._run("closed")
+        self.assertEqual(code, 0, err)
+        self.assertIn("%s  #2 the legacy sidecar keeps working" % cli.AC_DROPPED, out)
+        self.assertIn("shipped the exporter", out)
+
+    def test_it_is_not_shown_as_something_to_pick_up(self):
+        """The follow-up lines are `->` when promoted and `-` when not. A dropped
+        criterion must wear neither, or `closed` reads as a list of work waiting
+        for somebody."""
+        self._run("done", "NA-0005", "--summary", "shipped",
+                  "--future-work", "port the docs")
+        _code, out, _err = self._run("closed")
+        lines = [ln.strip() for ln in out.splitlines()
+                 if "legacy sidecar" in ln or "port the docs" in ln]
+        self.assertEqual(lines, ["-  port the docs",
+                                 "~  #2 the legacy sidecar keeps working"])
+
+    def test_the_footer_says_nobody_is_meant_to_pick_them_up(self):
+        self._run("done", "NA-0005", "--summary", "shipped")
+        _code, out, _err = self._run("closed")
+        self.assertIn("Set aside (~): 1", out)
+        self.assertIn("nobody is meant to pick these up", out)
+
+    def test_an_item_with_nothing_set_aside_says_nothing_about_it(self):
+        write_backlog_item(self.ws, "NA-0009", title="Something else",
+                           body=_acceptance((True, "it works")))
+        git_commit_all(self.ws)
+        self._run("done", "NA-0009", "--summary", "done")
+        _code, out, _err = self._run("closed")
+        self.assertNotIn("Set aside", out)
+
+
 class ShowSaysHowMuchOfThisIsYours(TempCase):
     """`show` answers "how much of this needs me" before the file is read.
 

@@ -127,6 +127,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means out of date, and an awkwardly worded item is not a reason for a scheduler
   to re-run the pipeline.
 
+- **`closed` shows where the goals went, not only what shipped.** Criteria the
+  design moved past are listed under their own `~`, kept out of the follow-up
+  lines above them, and counted in a footer saying nobody is meant to pick them
+  up. They had no shape here at all before: a set-aside criterion appeared only
+  if somebody happened to mention it in the summary, so a project's history read
+  as though it had always meant exactly what it shipped.
+
 - **`show` says how much of an item is yours before you read it.** A header above
   the file prints the open criteria marked `(you)` in full and counts everything
   else, then the file follows byte for byte. The file cannot show this on its

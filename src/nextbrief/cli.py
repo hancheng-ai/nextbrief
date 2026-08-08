@@ -52,6 +52,9 @@ from .fs import rewrite_fields, write_outside_workspace, write_text
 from .i18n import Catalog, load_catalog
 from .inventory import INVENTORY_NAME
 from .items import (
+    AC_DONE,
+    AC_DROPPED,
+    AC_OPEN,
     DEFERRED,
     SUMMARY_DRAFT,
     SUMMARY_HUMAN,
@@ -953,23 +956,6 @@ def cmd_ok(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
 # never the first character of a sentence somebody meant to type.
 TICK_ALL = "a"
 ACCEPT_DRAFT = "="
-
-# The three marks an acceptance criterion can carry.
-#
-# Two boxes cannot say what happens after a design change. A criterion the design
-# moved past is neither done nor undone, and both existing marks are a lie about
-# it: `[x]` claims work that never happened, and `[ ]` claims work is outstanding
-# that nobody intends to do. The second lie does not sit still -- an unticked
-# criterion is what `done` drafts as `future_work`, and `followup` turns that
-# into a real backlog item, so the mistake walks downstream and mints a task for
-# work somebody deliberately abandoned.
-#
-# `~` is a MARK, not a deletion. The line stays in the file and so does its text,
-# exactly as `drop` keeps an item's file and its git history. Rewriting the
-# sentence would erase the one thing worth keeping: that the goal moved.
-AC_OPEN = " "
-AC_DONE = "x"
-AC_DROPPED = "~"
 
 # `-` drops the criterion under the cursor. One keypress, no prompt -- the reason
 # lands in the summary question that was going to be asked anyway, because a
@@ -1946,11 +1932,16 @@ def cmd_defer(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
 
 
 def _closed_entries(ws: Workspace, project: Optional[str] = None):
-    """``(path, frontmatter, closing)`` for every done item, newest first.
+    """``(path, frontmatter, closing, dropped)`` for every done item, newest first.
 
     No new store, which was the constraint and is also the point: a done item's
     file stays in ``backlog/`` forever and is already under version control, so
     the record was never missing a home -- only a reader.
+
+    ``dropped`` is the text of the criteria this item set aside, read off the
+    body. It travels with the row rather than being fetched later because it is
+    the same kind of fact as the closing record itself -- part of the answer to
+    "what became of this" -- and because the file has already been read here.
     """
     rows = []
     for path in sorted(ws.backlog.glob("*.md")):
@@ -1958,12 +1949,13 @@ def _closed_entries(ws: Workspace, project: Optional[str] = None):
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        fm, _body = parse_frontmatter(text)
+        fm, body = parse_frontmatter(text)
         if not fm or str(fm.get("status") or "").lower() != "done":
             continue
         if project and str(fm.get("project") or "") != project:
             continue
-        rows.append((path, fm, parse_closing(text)))
+        dropped = [t for _i, mark, t in _ac_lines(body or "") if mark == AC_DROPPED]
+        rows.append((path, fm, parse_closing(text), dropped))
     rows.sort(key=lambda r: (str((r[2].closed_on if r[2] else "")
                                  or r[1].get("updated_date") or ""),
                              str(r[1].get("id") or "")), reverse=True)
@@ -1971,7 +1963,22 @@ def _closed_entries(ws: Workspace, project: Optional[str] = None):
 
 
 def cmd_closed(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
-    """What each project has finished, and what it left behind."""
+    """What each project has finished, and what it left behind.
+
+    Three different things, and the reader has to be able to tell them apart at a
+    glance, because they call for three different responses:
+
+        (summary)   what was actually done
+        -> / -      work this uncovered, which is somebody's to pick up
+        ~           a promise the design moved past, which is nobody's
+
+    The third one had no shape here at all. A criterion set aside would show up
+    only if the person happened to have written about it in the summary, so a
+    project's history read as though it had always intended exactly what it
+    shipped -- and "we changed our minds, here is what we stopped meaning to do"
+    is not a footnote to that history, it is most of it. It gets the file's own
+    mark rather than a word, so the list and the item agree on sight.
+    """
     project = (getattr(args, "project", None) or "").strip() or None
     rows = _closed_entries(ws, project)
     if not rows:
@@ -1987,10 +1994,11 @@ def cmd_closed(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
     no_record = 0
     follow_ups = 0
     unpromoted = 0
+    set_aside = 0
     for name in sorted(by_project):
         print()
         print("== %s ==" % name)
-        for _path, fm, closing in by_project[name]:
+        for _path, fm, closing, dropped in by_project[name]:
             when = str((closing.closed_on if closing else "")
                        or fm.get("updated_date") or "")
             print("  %s  %s  %s" % (fm.get("id"), when or "-", fm.get("title") or ""))
@@ -2010,12 +2018,29 @@ def cmd_closed(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
                 else:
                     unpromoted += 1
                     print("     -  %s" % entry.text)
+            for text in dropped:
+                # Never abbreviated by `--full`, and never folded into the
+                # follow-ups above it. A dropped criterion is the one line here
+                # that nobody is going to act on, and mixing it into the list of
+                # things somebody should pick up is the original mistake wearing
+                # a different hat.
+                set_aside += 1
+                print("     %s  %s" % (AC_DROPPED, text))
 
     print()
     print(tr(cat, "cli.closed.footer",
              "{n} closed item(s); {blank} with no record of what happened; "
              "{fw} piece(s) of future work, {open} still not turned into items.",
              n=len(rows), blank=no_record, fw=follow_ups, open=unpromoted))
+    if set_aside:
+        # Worded so the number never has to agree with a noun. `t()` has no
+        # plural mechanism, and the first line written against it here shipped as
+        # "dropped 1 criteria" -- which is a small enough wart to leave and a
+        # cheap enough one to not repeat.
+        print(tr(cat, "cli.closed.set_aside",
+                 "Set aside ({mark}): {n}. Promised, then the design moved past "
+                 "them -- nobody is meant to pick these up.",
+                 n=set_aside, mark=AC_DROPPED))
     if unpromoted:
         print(tr(cat, "cli.closed.how",
                  "nextbrief followup <id> turns those into backlog items."))
