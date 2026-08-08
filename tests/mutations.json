@@ -286,7 +286,7 @@
       "label": "the mark dropped from the Chinese README",
       "file": "README.zh.md",
       "old": "<p align=\"center\">\n  <img src=\"packaging/icon/nextbrief.svg\" alt=\"\" width=\"96\" height=\"96\">\n</p>\n\n",
-      "new": "",
+      "new": "<!-- the mark used to be here -->\n\n",
       "select": "test_both_readmes_open_with_the_same_mark",
       "expect": "README.zh.md does not show the mark",
       "note": "The two READMEs drifting apart is the likeliest way this regresses: one gets edited, the other does not."
