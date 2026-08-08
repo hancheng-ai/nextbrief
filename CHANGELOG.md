@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **nextbrief installs as a Claude Code plugin, and the skill is read-only by
+  lint.** `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
+  make this repository its own marketplace, and the one skill it ships,
+  `skills/portfolio-context/SKILL.md`, hands a session the portfolio context
+  before it starts work.
+
+  The rhythm is the argument. The brief fires once a day; the context an agent
+  reads before it begins fires once per session, which for anyone running many
+  projects at once is the stronger habit. It is also why this waited on
+  `inventory.json` getting a `schema_version` first: a plugin gives that file
+  consumers outside this repository, and versioning a contract after its first
+  consumer arrives is versioning it after the first breakage.
+
+  The skill names six commands and no others — `context --json`, `projects`,
+  `brief`, `ls`, `show`, `closed`. `nextbrief do` opens a working session and
+  `done` / `drop` / `defer` write terminal state, so none of them may appear in
+  a skill body. `tests/test_plugin.py` enforces that against the CLI's own
+  dispatch table rather than a typed-out list, so a command added to the engine
+  tomorrow is covered tonight. Two directions, because they fail differently: an
+  allowlist over anything inside a code fence or backtick span, and a denylist
+  over the whole file, which catches the state-changing command written in bare
+  prose that an agent will act on just the same. Global flags are stepped over,
+  so `nextbrief --workspace DIR do NA-0001` is caught as `do` rather than read
+  as a command named after the path.
+
+  A skill body is not documentation — it is text another person's agent reads
+  and then executes, on a machine this repository will never see. That puts it
+  in the category the design contract is already careful about, and makes a
+  five-line lint worth more than a paragraph asking a model to be careful.
+
 - **`inventory.json` is a versioned contract.** The document produced by `sense`
   and printed by `nextbrief context --json` now carries a top-level
   `schema_version`, starting at `1`, and

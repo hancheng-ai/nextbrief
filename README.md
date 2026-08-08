@@ -240,6 +240,47 @@ reviewed alongside the change that would break it. It is pinned to the
 `brew tap` plus `brew install nextbrief` — has not been created yet; the header
 comment in the formula has the steps.
 
+**5 · Claude Code plugin** — *the skill, not the engine*
+
+If you use Claude Code, this hands a session the portfolio context before it
+starts work. That is a different rhythm from the brief: the brief fires once a
+day, and this fires once per session.
+
+This repository is its own marketplace — [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)
+is in the tree, so there is nothing else to add:
+
+```
+/plugin marketplace add hancheng-ai/nextbrief
+/plugin install nextbrief@nextbrief
+```
+
+From a local checkout instead, which is also how you try a change to the skill
+before sending it:
+
+```
+/plugin marketplace add ./nextbrief
+/plugin install nextbrief@nextbrief
+```
+
+It installs the skill and not the engine, so pick one of 1–4 above first: the
+commands come from whichever `nextbrief` is on your `PATH`, and the workspace is
+resolved the usual way — `$NEXTBRIEF_WORKSPACE`, the pointer `init` wrote, or the
+nearest `registry.jsonc`.
+
+The one skill it ships, `portfolio-context`, **only reads**: `nextbrief context
+--json` for the inventory, and `projects`, `brief`, `ls`, `show` and `closed`
+for the same data shaped for a person. Nothing in it can open a working session
+or take an item off the page. That is enforced rather than promised —
+[`tests/test_plugin.py`](tests/test_plugin.py) lints every skill body against
+the CLI's own command table and fails the build on anything outside those six,
+including one written in bare prose or hidden behind a global flag. A skill is
+text that somebody else's agent will execute, which makes a lint worth more than
+a careful paragraph.
+
+Reading it is also the point of [`docs/INVENTORY_SCHEMA.md`](docs/INVENTORY_SCHEMA.md):
+`inventory.json` now has consumers outside this repository, so its field set is a
+published contract with a `schema_version` to check before parsing.
+
 ### Distribution
 
 Which channels are live and which are not, at a glance. Everything here is
@@ -253,6 +294,7 @@ Which channels are live and which are not, at a glance. Everything here is
 | PyPI | **not yet**: the release workflow routes pre-release versions to TestPyPI and only a final version to PyPI. `pip install nextbrief` with no index URL will not resolve |
 | GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.2.0rc3`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc3), with a build-provenance attestation. Use the tagged URL: `/releases/latest/` skips prereleases |
 | Homebrew tap | **pending**: the formula exists and installs from a local path, the tap repository does not |
+| Claude Code plugin — `/plugin marketplace add hancheng-ai/nextbrief` | **live from this repository**: it is its own marketplace, so a clone or the GitHub repo is the source. Not listed in any third-party marketplace |
 
 ## A brief
 

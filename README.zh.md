@@ -183,6 +183,42 @@ brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 
 formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.2.0rc3` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
 
+**5 · Claude Code 插件** —— *装的是 skill，不是引擎*
+
+如果你用 Claude Code，这个插件让每个会话在开工之前先拿到整盘的上下文。
+它和简报的节奏不一样：简报一天响一次，这个**每开一个会话响一次**。
+
+本仓自己就是 marketplace——[`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)
+就在仓里，不需要再挂别的源：
+
+```
+/plugin marketplace add hancheng-ai/nextbrief
+/plugin install nextbrief@nextbrief
+```
+
+也可以直接用本地检出——想改 skill、改完先自己试一遍，走的就是这条：
+
+```
+/plugin marketplace add ./nextbrief
+/plugin install nextbrief@nextbrief
+```
+
+它装的是 skill 不是引擎，所以先按上面 1–4 任选一种把引擎装上：命令来自你 `PATH` 上的那个
+`nextbrief`，工作区还是照老规矩解析——`$NEXTBRIEF_WORKSPACE`、`init` 写下的指针文件、
+或者最近的一个 `registry.jsonc`。
+
+它只带一个 skill，`portfolio-context`，而且**只读**：`nextbrief context --json` 取清单，
+`projects`、`brief`、`ls`、`show`、`closed` 是同一批数据给人看的形状。
+里面没有任何东西能开一个工作会话，也不能把条目从板上拿下来。
+这一条是**守住的，不是承诺的**——[`tests/test_plugin.py`](tests/test_plugin.py)
+拿 CLI 自己的命令表去 lint 每一份 skill 正文，只要出现这六条以外的命令就让构建失败，
+包括「写在散文里没打反引号的」和「藏在全局 flag 后面的」。
+skill 正文是**别人的 agent 会照着执行的文本**，所以一条 lint 比一段叮嘱可靠。
+
+这也正是 [`docs/INVENTORY_SCHEMA.md`](docs/INVENTORY_SCHEMA.md) 的意义：
+`inventory.json` 从此有了仓外的消费者，它的字段集就是一份公开契约，
+解析之前先看 `schema_version`。
+
 （各发布渠道当前是「已生效」还是「待发布」，见英文版的 [Distribution](README.md#distribution) 一节。）
 
 ## 一份简报长什么样

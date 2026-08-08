@@ -1,0 +1,18 @@
+{
+  "name": "nextbrief",
+  "description": "The portfolio context an agent should read before it starts work: what projects exist, what each one is for, what is open, and what was just closed. Wraps the read-only half of the nextbrief CLI. Every command the skill names only reads, so it is safe to run at the top of a session; taking an item off the page stays a human action.",
+  "author": {
+    "name": "Hancheng Wang"
+  },
+  "homepage": "https://github.com/hancheng-ai/nextbrief",
+  "repository": "https://github.com/hancheng-ai/nextbrief",
+  "license": "Apache-2.0",
+  "keywords": [
+    "portfolio",
+    "backlog",
+    "context",
+    "read-only",
+    "agents",
+    "briefing"
+  ]
+}

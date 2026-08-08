@@ -1,0 +1,29 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "nextbrief",
+  "description": "The nextbrief plugin, served from the engine's own repository.",
+  "owner": {
+    "name": "Hancheng Wang"
+  },
+  "plugins": [
+    {
+      "name": "nextbrief",
+      "description": "The portfolio context an agent should read before it starts work: what projects exist, what each one is for, what is open, and what was just closed. Read-only.",
+      "author": {
+        "name": "Hancheng Wang"
+      },
+      "category": "productivity",
+      "source": "./",
+      "homepage": "https://github.com/hancheng-ai/nextbrief",
+      "license": "Apache-2.0",
+      "keywords": [
+        "portfolio",
+        "backlog",
+        "context",
+        "read-only",
+        "agents",
+        "briefing"
+      ]
+    }
+  ]
+}
