@@ -37,10 +37,29 @@
     // about itself the weakest. The brief must name the kind of signal --
     // "76 files touched (file timestamps; this project has no VCS)" and
     // "178 commits" should not read the same.
-    "confidence_order": ["commit", "session", "file_mtime", "doc_declared", "human", "none"],
+    // `probe` sits under `session` on purpose. It is a real observation of the
+    // outside world, but it is the only kind that is not on this machine, so it
+    // is the only one the reader cannot go and check.
+    "confidence_order": ["commit", "session", "probe", "file_mtime", "doc_declared",
+                         "human", "none"],
     // kind: none may only be phrased this one way. Having exactly one sentence for
     // "nothing happened" is what stops absence from being dressed up as a finding.
     "none_allowed_pattern": "no signal"
+  },
+
+  // External probes -- see `evidence_probe` in registry.jsonc.
+  //
+  // ★ These settings are read by `nextbrief probe` and by nothing else. `sense`
+  //   never opens a socket: it reads state/probes.json, which this command
+  //   writes. That separation is deliberate and is covered by a test.
+  "probe": {
+    // How long a reading stays current. Past this the brief keeps printing the
+    // number -- it is still the best fact available -- but prints its age next
+    // to it and suggests re-sampling. A number that does not say how old it is
+    // is indistinguishable from prose somebody typed once and forgot.
+    "ttl_days": 7,
+    // Per request. A probe that hangs must not hold up the person who ran it.
+    "timeout_seconds": 10
   },
 
   "scoring": {

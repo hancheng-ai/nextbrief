@@ -119,6 +119,13 @@ class Workspace:
     def brief_json(self) -> Path:
         return self.state / "brief.json"
 
+    @property
+    def probes(self) -> Path:
+        """Cached probe readings. Written only by ``nextbrief probe``; ``sense``
+        reads it like any other file on disk, which is what keeps stage 1
+        offline."""
+        return self.state / "probes.json"
+
     def ensure_dirs(self) -> None:
         for d in (self.state, self.log, self.backlog):
             d.mkdir(parents=True, exist_ok=True)

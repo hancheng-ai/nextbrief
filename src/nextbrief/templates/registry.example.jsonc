@@ -157,6 +157,51 @@
       "status_docs": [
         { "path": "orchard-api/apps/beacon-portal/ARCHITECTURE.md", "kind": "status", "authority": "high" }
       ],
+
+      // ★ evidence_probe -- for work whose output is not on this disk.
+      //
+      // git, file timestamps and agent sessions all answer the same question:
+      // what happened in this filesystem? For a growing share of real work the
+      // answer is "nothing", while the project itself is moving -- posts written
+      // into a database behind an editor, a migration finished on a hosted CMS,
+      // a deck on somebody's design tool. A filesystem-only sensor gets blinder
+      // as its user gets more modern.
+      //
+      // A probe fetches ONE url and takes TWO numbers out of it: a count and a
+      // date. That is the same shape a commit already has, so this is one more
+      // sensor on existing machinery, not a new subsystem. Keep it that way --
+      // the moment a probe needs a login, it is not a probe; it is something
+      // only you can report.
+      //
+      // ⚠ `sense` NEVER fetches. Only `nextbrief probe` does, and only when you
+      //   run it. Sample before closing an item, before calling a project
+      //   stalled, or when you want to know where something really stands.
+      //   Readings are therefore always somewhat old, and the brief always says
+      //   how old -- past `ttl_days` it prints the age and suggests re-sampling.
+      "evidence_probe": {
+        // https only, no user:pass@, and off-origin redirects are refused. This
+        // exact url is the only thing that gets requested.
+        "url": "https://status.example.com/api/public/posts.json",
+
+        // Selectors. A deliberately tiny, non-executable path language:
+        //   header:X-WP-Total     a response header
+        //   posts[]               the array at `posts`  -> counted by length
+        //   posts[].published_at  that field of each     -> the NEWEST is taken
+        //   [].modified           same, for a top-level array
+        //   total                 a plain scalar
+        // A shape the selector cannot find is reported as a named failure, which
+        // is how a site redesign announces itself. It is never reported as 0 --
+        // a broken sensor reads 0, and 0 is indistinguishable from "no work".
+        "count": "posts[]",
+        "date": "posts[].published_at",
+
+        // Rendered as "{count} {label}", so write it the way it should read.
+        "label": "published posts",
+
+        // Overrides config.probe.ttl_days for this project alone.
+        "ttl_days": 7
+      },
+
       "automation_surface": ["ci", "static-site"],
       "notes": "Ships from the same repo but on its own cadence; keep it out of orchard-api's counts."
     },

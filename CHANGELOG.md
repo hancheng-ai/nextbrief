@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nextbrief probe`: evidence for work that never lands on disk.** A new
+  registry field, `evidence_probe`, names one URL, one count and one date; the
+  new command fetches it and caches the reading to `state/probes.json`. The
+  result becomes a fourth evidence kind, `probe`, alongside `commit`,
+  `file_mtime` and `session`.
+
+  The three original senses all answer the same question -- what happened in this
+  filesystem? -- and that question is increasingly the wrong one. Posts written
+  into a database behind an admin editor, a migration finished on a hosted CMS, a
+  deck on a design tool: the project is moving and the repository is silent, so
+  the brief reports a cold project and is wrong in the most confident way
+  available to it. A count and a date is exactly the shape a commit already has,
+  which is why this is one more sensor on existing machinery and not a new
+  subsystem. Keeping it that shape is the design.
+
+  **`sense` never fetches.** Stage 1 reads `state/probes.json` like any other
+  file; only the explicit command opens a socket, and
+  `test_sense_never_touches_the_network` runs a whole sensing pass with the
+  socket layer disabled -- not `urlopen`, the socket layer, so that a fetch added
+  later by any path fails the suite. An unattended sensor phoning out nightly
+  would convert somebody else's downtime into your failed brief, a site redesign
+  into local noise, and a daily outbound request into something you have to
+  explain. Reading only your own disk is worth more than the number.
+
+  The cost of that choice is admitted rather than hidden: **a probe reading is
+  born old.** Every reading carries `sampled_at`, and past its `ttl_days` the
+  brief keeps printing the number -- it is still the best fact available -- with
+  its age beside it and a re-sample suggestion carrying the command. An undated
+  number is prose, and prose going stale unnoticed is the problem this engine
+  exists to solve; introducing a new thing that expires without dating it would
+  have been solving it in one direction while breaking it in another.
+
+  **A failed probe is never a zero.** Timeouts, non-200s, and a route that
+  quietly starts serving HTML are each recorded with their own error code and
+  announced in the brief as a banner above the fold, keeping the last good
+  reading beside them with its age. A broken sensor reads 0, and 0 is
+  indistinguishable from "nothing happened".
+
+  The boundary is checked rather than promised: https only, GET only, no
+  `Authorization`, no cookies, no userinfo in the URL, only URLs the registry
+  declared, no redirect off that origin, a 2 MiB cap and a timeout. The selector
+  language has no evaluation in it. `probe` joins `commit` and `session` as a
+  kind the evidence gate checks strictly -- it is the only kind whose facts are
+  not on your machine, so it is the only one the reader cannot go and verify by
+  looking, and a claim dressing a file mtime up as a probe reading borrows that
+  authority without earning it.
+
 - **A criterion the design moved past can now say so.** `-` in the `done` tick
   selector drops the criterion under the cursor: not done, not outstanding, no
   longer applicable. The instruction line is now move / toggle / drop / finish,

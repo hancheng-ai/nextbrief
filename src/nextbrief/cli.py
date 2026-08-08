@@ -106,6 +106,9 @@ commands:
   ls           list every open item
   prune        list items worth revisiting, with what to do about them
 
+  probe [id…]  sample the declared external URLs -- the ONLY command that
+               goes online. Run it to verify, not on a schedule.
+
   projects     one line per project: what is here, and how fresh it is
   context      what each project IS -- for other tools; --json to pipe it
   describe     say what a project is, in one sentence
@@ -2933,8 +2936,102 @@ def cmd_describe(ws, args, cat):
     return EXIT_OK
 
 
+def cmd_probe(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Sample the declared external probes. **The only command that goes online.**
+
+    Deliberately explicit, and deliberately not part of `run`. A probe answers
+    "is this actually true?", which is a question you ask at specific moments --
+    before closing an item, before calling a project stalled, when you want to
+    know where something really stands. Wiring it into the nightly schedule would
+    answer it 365 times a year unasked, and would pay for that with three
+    properties worth more than the number: a brief that fails when somebody
+    else's site is down, local noise every time that site is redesigned, and a
+    daily outbound request from a tool whose whole pitch is that it reads only
+    your disk.
+
+    Writes `state/probes.json` and nothing else. `sense` reads that file.
+    """
+    from . import probe as probe_mod
+
+    try:
+        reg = load_jsonc(ws.registry_path)
+    except (JSONCError, OSError) as exc:
+        _err("error: cannot read %s (%s)" % (ws.registry_path, exc))
+        return EXIT_FAIL
+
+    problems: List[dict] = []
+    specs = probe_mod.probes_of(reg, problems)
+    for bad in problems:
+        _err("warning: %s: %s" % (bad.get("path"), bad.get("why")))
+
+    wanted = list(getattr(args, "project", None) or [])
+    if wanted:
+        unknown = [p for p in wanted if p not in specs]
+        if unknown:
+            _err(tr(cat, "cli.probe.unknown",
+                    "no probe declared for: {ids}", ids=", ".join(sorted(unknown))))
+            # Usage, not failure: the id may be a typo, or the project may simply
+            # have no `evidence_probe`. Either way nothing was sampled.
+            return EXIT_USAGE
+        specs = {k: v for k, v in specs.items() if k in wanted}
+
+    if not specs:
+        print(tr(cat, "cli.probe.none",
+                 "No project declares `evidence_probe`. Nothing to sample."))
+        return EXIT_OK
+
+    cfg = _load_config(ws)
+    pcfg = cfg.get("probe") or {}
+    timeout = getattr(args, "timeout", None) or pcfg.get("timeout_seconds") \
+        or probe_mod.DEFAULT_TIMEOUT
+
+    # Printed before the first request, not after the last: these are outbound
+    # requests from a tool that otherwise makes none, so the URLs being touched
+    # are named where the person who typed the command can see them.
+    for pid in sorted(specs):
+        print(tr(cat, "cli.probe.fetching", "→ {id}  {url}", id=pid, url=specs[pid]["url"]))
+
+    cache = probe_mod.load_cache(ws.probes)
+    cache, results = probe_mod.run_probes(specs, cache, timeout=float(timeout))
+
+    ws.ensure_dirs()
+    write_text(ws, ws.probes, json.dumps(cache, ensure_ascii=False, indent=2,
+                                         sort_keys=True) + "\n", skip_identical=False)
+
+    failed = 0
+    for entry in results:
+        if entry.get("ok"):
+            bits = []
+            if entry.get("count") is not None:
+                bits.append(str(entry["count"]) + (
+                    " " + entry["label"] if entry.get("label") else ""))
+            if entry.get("date"):
+                bits.append(tr(cat, "cli.probe.newest", "newest {date}", date=entry["date"]))
+            print("  %s  %s" % (tr(cat, "cli.probe.ok", "ok"),
+                                " · ".join(bits) or tr(cat, "cli.probe.empty", "(no fields)")))
+        else:
+            failed += 1
+            print("  %s  %s: %s" % (tr(cat, "cli.probe.failed", "FAILED"),
+                                    entry.get("error_code"), entry.get("error_detail") or ""))
+            aged = entry.get("last_ok") or {}
+            if aged.get("sampled_at"):
+                print("    " + tr(cat, "cli.probe.keeping",
+                                  "keeping the reading from {at}", at=aged["sampled_at"]))
+
+    print("")
+    print(tr(cat, "cli.probe.footer",
+             "{n} probe(s), {failed} failed. Written to {path}; `sense` reads it from there.",
+             n=len(results), failed=failed, path="state/probes.json"))
+    # A failed probe is a fact about the world that the brief will report, not a
+    # broken command -- so this exits 0. Exiting non-zero would make the shell
+    # treat "that site is down" as "nextbrief is broken", and a `&&` chain would
+    # stop on it.
+    return EXIT_OK
+
+
 _HANDLERS = {
     "run": cmd_run,
+    "probe": cmd_probe,
     "v0": cmd_v0,
     "sense": cmd_sense,
     "render": cmd_render,
@@ -3068,6 +3165,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deferred", action="store_true",
                    help="list what is parked and when it comes back, instead")
     add("prune", "list items worth revisiting")
+
+    p = add("probe", "sample declared external URLs (the only command that goes online)")
+    p.add_argument("project", nargs="*",
+                   help="project ids to sample; default every project that declares one")
+    p.add_argument("--timeout", type=float, metavar="SECONDS",
+                   help="per-request timeout (default %g)" % 10.0)
 
     add("projects", "one line per project")
     p = add("context", "what each project is, for other tools")

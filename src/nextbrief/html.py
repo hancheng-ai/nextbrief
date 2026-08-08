@@ -321,6 +321,16 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
     if notes.get("reverted_fields"):
         A("<div class=banner>%s</div>" % md_inline(cat.t(
             "html.banner.reverted", count=notes["reverted_fields"], path="log/rejected.jsonl")))
+    # Computed once in the Markdown renderer and passed through, so the two
+    # cannot drift. A broken sensor has to be visible on the page `nextbrief
+    # open` shows, or it is not reported at all.
+    for f in notes.get("probe_failures") or []:
+        line = cat.t("html.banner.probe_failed", project=f.get("name", ""),
+                     code=f.get("code", ""), detail=f.get("detail", ""),
+                     url=f.get("url", ""), at=f.get("attempted_at", ""))
+        if f.get("aged_days") is not None:
+            line += " " + cat.t("brief.banner.probe_failed_aged", days=f["aged_days"])
+        A("<div class=banner>%s</div>" % md_inline(line))
 
     # ---------- do these first ----------
     nexts = (brief or {}).get("next_actions") or []

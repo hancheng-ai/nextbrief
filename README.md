@@ -41,7 +41,7 @@ answer before you install it, not on line 600.
 | **Never reads** | any path you mark `privacy.never_read`. Those get a single integer count — not the contents, and **not the filenames either**, because the name is often the sensitive part. |
 | **Writes** | only inside the workspace you chose: `state/`, `log/`, `BRIEF.md`, `BRIEF.html`. Your `registry.jsonc` and `config.jsonc` are yours; the tool never edits them. |
 | **Sends** | one file — `state/digest.json` — to whichever model you configured, and only in stage 2. **`nextbrief v0` sends nothing at all**, which is why it is the first command in the quickstart. |
-| **Network** | none, except that model call. No telemetry, no analytics, no update check. |
+| **Network** | that model call, and `nextbrief probe` when *you* run it — a GET against URLs your registry names, no credentials, results cached to disk. Nothing else: no telemetry, no analytics, no update check. **The nightly pipeline never opens a socket except for the model**, and a test runs the whole sensing stage with sockets disabled to keep it that way. |
 | **Dependencies** | zero at runtime. Nothing to audit but this repository. |
 
 Content read out of your projects is **data to report, never a command to
@@ -441,6 +441,76 @@ Three properties of that picker are deliberate:
 - **The session is interactive, never headless.** These tasks touch real files. You
   should be at the keyboard when they do.
 
+## `nextbrief probe` — evidence for work that is not on your disk
+
+Commits, file timestamps and agent sessions all answer one question: *what
+happened in this filesystem?* For a growing share of real work the answer is
+"nothing", while the project is plainly moving — posts written into a database
+behind an editor, a migration finished on a hosted CMS, a deck on a design tool.
+A filesystem-only sensor gets blinder as its user gets more modern.
+
+A probe fetches one URL and takes **two numbers** out of it: a count and a date.
+That is the same shape a commit already has, so this is one more sensor on
+existing machinery rather than a new subsystem.
+
+```jsonc
+{
+  "id": "beacon-portal",
+  "paths": ["orchard-api/apps/beacon-portal"],
+  "evidence_probe": {
+    "url": "https://status.example.com/api/public/posts.json",
+    "count": "posts[]",                  // an array → its length
+    "date": "posts[].published_at",      // that field → the newest one
+    "label": "published posts",          // renders as "9 published posts"
+    "ttl_days": 7
+  }
+}
+```
+
+Selectors are a deliberately tiny, non-executable path language: `header:X-WP-Total`
+reads a response header, `posts[]` counts an array, `posts[].published_at` takes
+the newest date across it, `[].modified` does the same for a top-level array.
+
+**`sense` never fetches.** Only this command does, and only when you run it:
+
+```console
+$ nextbrief probe beacon-portal
+→ beacon-portal  https://status.example.com/api/public/posts.json
+  ok  9 published posts · newest 2026-07-06
+
+1 probe(s), 0 failed. Written to state/probes.json; `sense` reads it from there.
+```
+
+That separation is the point. A sensor reaching the internet unattended every
+night converts three of somebody else's problems into yours: a network blip
+becomes a failed brief, a site redesign becomes local noise, and a daily outbound
+request becomes a thing you have to explain. Probe before closing an item, before
+calling a project stalled, or when you want to know where something really
+stands — **the probe serves verification, not monitoring.**
+
+The cost of that choice is admitted rather than hidden: **a probe reading is
+always somewhat old.** So the brief prints its age once it passes `ttl_days`, and
+asks for a fresh one:
+
+> | Beacon Portal | ❄️ cold | last commit 2026-06-25 · 9 published posts · newest 2026-07-06 · ⏳ *probed 12d ago* |
+>
+> **Reminders**
+> - Beacon Portal: the probe reading is 12 days old (TTL 7) — re-sample with `nextbrief probe beacon-portal`.
+
+And when the sensor breaks, it says so, in the loudest place on the page:
+
+> ⚠️ **Beacon Portal: probe failed** — http_status at https://status.example.com/api/public/posts.json (2026-08-08T08:12:00+00:00). HTTP 404
+>   The number shown is the reading from 7 day(s) ago. This is a failed sensor, not a quiet project.
+
+That last line is the whole reason the failure path exists. A broken sensor reads
+zero, and zero is indistinguishable from "nothing happened" — the most expensive
+sentence this tool could get wrong.
+
+The boundaries are checks, not conventions: https only, GET only, no credentials,
+no cookies, only URLs the registry declared, no redirect off that origin, a size
+cap and a timeout. Anything behind a login is deliberately not a probe's job.
+See [SECURITY.md](SECURITY.md).
+
 ## Release history
 
 Newest first. Every entry links to the full detail in
@@ -494,6 +564,9 @@ nextbrief followup <id>  list a closed item's future work
 nextbrief closed [proj]  what each project finished, and what it left behind (--full)
 nextbrief ls             list every open item   (--deferred: what is parked, and until when)
 nextbrief prune          list items worth revisiting
+
+nextbrief probe [proj…]  sample the external URLs your registry declares.
+                         The ONLY command that goes online (--timeout SECONDS)
 
 nextbrief projects       one line per project: signal, phase, last evidence
 nextbrief describe <id> "<one sentence>"

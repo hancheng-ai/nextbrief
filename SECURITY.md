@@ -29,6 +29,27 @@ model you configured. Nothing else leaves the machine — no telemetry, no
 analytics, no update check. `nextbrief v0` runs stages 1 and 3 only and sends
 nothing at all.
 
+**One command fetches, and only when you run it.** `nextbrief probe` issues a GET
+against URLs your `registry.jsonc` declares in `evidence_probe`, so that projects
+whose output lives on a hosted service can still produce checkable evidence. It
+is constrained by design, and the constraints are tested rather than promised:
+
+* **https only**, GET only, no request body.
+* **No credentials.** No `Authorization`, no cookies, no userinfo in the URL.
+  Anything behind a login is deliberately out of scope.
+* **Only URLs you declared.** The registry is the allowlist; a redirect that
+  leaves the declared origin is refused rather than followed.
+* **Size-capped**, timeout-bounded, and the response is parsed by a selector
+  language with no evaluation in it.
+* **Stage 1 never fetches.** `nextbrief probe` writes `state/probes.json`;
+  `sense` reads that file like any other file on disk. The unattended nightly
+  run therefore opens no socket except the model call, and a test executes the
+  whole sensing stage with the socket layer disabled to keep that true.
+
+A probe that fails is recorded and reported as a failure. It never degrades into
+a count of zero — a broken sensor and a quiet project must not produce the same
+sentence.
+
 **It has no runtime dependencies.** Nothing to audit but this repository and the
 standard library.
 

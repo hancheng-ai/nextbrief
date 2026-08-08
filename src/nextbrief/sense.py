@@ -71,6 +71,14 @@ from .inventory import INVENTORY_NAME, build_inventory
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
+# Only the cache-reading and parsing half of `probe` is imported here. Stage 1
+# must never open a socket, so nothing in this module may call `probe.fetch`,
+# `probe.sample` or `probe.run_probes` -- `test_sense_never_touches_the_network`
+# runs the whole stage with sockets disabled to keep that true by test rather
+# than by intention.
+from .probe import load_cache as load_probe_cache
+from .probe import probes_of, reading_for
+
 __all__ = ["main", "build", "build_digest", "canonical", "engine_output_globs",
            "status_of", "STATUSES",
            "SenseError"]
@@ -1866,6 +1874,17 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
     # in someone else's `needs` and a cycle through one is still caught.
     needs_graph = resolve_needs(reg.get("projects") or [], parse_failed)
 
+    # ---- probes: read from disk, never from the network ---------------------
+    #
+    # Both halves are file operations. `probes_of` parses the registry (and
+    # records malformed probes as parse failures, so a typo is visible rather
+    # than a sensor you think you have); `load_probe_cache` reads whatever
+    # `nextbrief probe` last wrote. Nothing here reaches a socket, and that is
+    # the whole design: an unattended nightly run that phones out converts
+    # somebody else's downtime into your failed brief.
+    probe_specs = probes_of(reg, parse_failed)
+    probe_cache = (load_probe_cache(ws.probes) if probe_specs else {"probes": {}})
+
     projects_out = []
     for pr in reg.get("projects", []) or []:
         pid = pr["id"]
@@ -2115,6 +2134,10 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             serves.append(oid)
             outcomes_by_id[oid]["contributors"].append(pid)
 
+        # ---- probe ----
+        probe_view = reading_for(probe_specs.get(pid), (probe_cache.get("probes") or {}).get(pid),
+                                 as_of)
+
         # ---- freshest evidence ----
         sess = sessions.get(pid) or {}
         cands: List[Tuple[str, str]] = []
@@ -2126,6 +2149,14 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             cands.append(("file_mtime", fs_agg["newest_file_date"]))
         if sess.get("last_active_date"):
             cands.append(("session", sess["last_active_date"]))
+        # A probe date is a fact about the world, not about when we looked: "the
+        # newest published post is dated 2026-07-06" stays true however old the
+        # sample is, and its age against `as_of` grows correctly on its own. So a
+        # stale reading can never make a stalled project look busy -- the worst it
+        # can do is fail to notice new work, which is what the TTL warning is for.
+        # That asymmetry is why an aged reading is still allowed to compete here.
+        if probe_view and probe_view.get("date"):
+            cands.append(("probe", probe_view["date"]))
 
         best_kind, best_date, days_since = None, None, None
         conf = cfg["evidence"]["confidence_order"]
@@ -2175,6 +2206,15 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         # have it printed under a footer promising every claim was checked.
         if sess.get("session_files"):
             add_ev("session:" + pid, "session", sess.get("last_active_date"))
+
+        # Minted only when there is something to cite -- a declared-but-never-run
+        # probe, or one whose every attempt has failed with no earlier reading to
+        # fall back on, has no fact behind it. Advertising the handle anyway would
+        # let a model write "9 posts published" about a project the engine has
+        # never successfully read, and have it pass a gate that only checks that
+        # the source resolves.
+        if probe_view and (probe_view.get("count") is not None or probe_view.get("date")):
+            add_ev("probe:" + pid, "probe", probe_view.get("date"))
 
         # A declaration about the world, checked against the world.
         #
@@ -2294,6 +2334,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 pr.get("neglect_days", cfg["neglect"]["default_days"]),
                 cfg["neglect"]["default_days"], pid, "neglect_days", parse_failed),
             "live_url": pr.get("live_url"),
+            "probe": probe_view,
             "registry_notes": pr.get("notes"),
             "evidence": {
                 "best_kind": best_kind,
@@ -2463,6 +2504,10 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         # block.
         if (p.get("sessions") or {}).get("session_files"):
             cite.append("session:" + p["id"])
+        # Same rule as the handle itself: offered only when a reading exists.
+        pv = p.get("probe") or {}
+        if pv.get("count") is not None or pv.get("date"):
+            cite.append("probe:" + p["id"])
         for d in p.get("status_docs") or []:
             if d.get("exists"):
                 cite.append(d["path"])
@@ -2494,6 +2539,18 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
                 "session_days": (p.get("sessions") or {}).get("distinct_session_days"),
                 "newest_file": p["fs"].get("newest_file_path"),
             },
+            # Handed to the model with its age and its failure state attached,
+            # never as a bare number. A count with no sampling time is the exact
+            # shape of the hand-written prose this engine exists to replace, and
+            # stage 2 cannot ask how old something is if it was not told.
+            "probe": ({"count": pv.get("count"), "date": pv.get("date"),
+                       "label": pv.get("label"),
+                       "sampled_days_ago": pv.get("age_days"),
+                       "stale": pv.get("stale"),
+                       "failed": bool(pv.get("error_code")),
+                       "error_code": pv.get("error_code"),
+                       "never_sampled": pv.get("never_sampled")}
+                      if pv.get("declared") else None),
             "deadlines": [d for d in (p.get("deadlines") or [])
                           if d["in_lead_window"] or d["overdue"]],
             "all_deadlines": [{"date": d["date"], "label": d["label"],

@@ -453,7 +453,7 @@ def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
                              "evidence_kind": kind if isinstance(kind, str) else repr(kind)[:60],
                              "why": "source does not resolve in snapshot.evidence_index"})
             return False
-        # ★ Only commit / session get their kind checked. ★
+        # ★ Only commit / session / probe get their kind checked. ★
         #
         # This gate exists to stop *fabrication*, not *imprecision*. An
         # unresolvable source is fabrication and must go. But one source often
@@ -463,16 +463,23 @@ def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
         # would silently delete correct claims, which is far worse than an
         # occasionally loose label.
         #
-        # commit and session are the exception: they assert visibly more
+        # commit, session and probe are the exception: they assert visibly more
         # confidence ("178 commits" vs "some file was touched"). Citing a file
         # path to support a commit count really is misleading.
+        #
+        # probe joined them for a sharper reason than the other two. It is the
+        # only kind whose facts are not on this machine, so it is the only one a
+        # reader cannot check by looking -- "9 posts published" has to be taken on
+        # the engine's word. A claim that dresses a file mtime up as a probe
+        # reading borrows that authority without having earned it, and the
+        # handles are minted only where a real reading exists (see `sense`).
         entry = index.get(src) or {}
         if not isinstance(entry, dict):
             entry = {}
         kinds = entry.get("kinds") or ([entry["kind"]] if entry.get("kind") else [])
         if not isinstance(kinds, list):
             kinds = [kinds]
-        if kind in ("commit", "session") and kinds and kind not in kinds:
+        if kind in ("commit", "session", "probe") and kinds and kind not in kinds:
             rejected.append({"kind": "evidence_kind_mismatch", "where": where,
                              "source": src, "declared": kind, "actual": kinds,
                              "why": "that source cannot supply %s-grade evidence" % kind})
@@ -1020,6 +1027,72 @@ TIER_KEYS = {"hook": "action.tier.hook", "skill": "action.tier.skill",
              "explore": "action.tier.explore"}
 
 
+def probe_bits(p, cat: Catalog) -> List[str]:
+    """The probe's contribution to a project's evidence cell.
+
+    Three rules, each one a thing that would otherwise go wrong:
+
+    * a reading always carries its age when it is past its TTL, because a number
+      that does not say how old it is reads exactly like the hand-written prose
+      this engine exists to replace;
+    * a reading recovered from before a failure says so, so nobody reads a stale
+      number as tonight's;
+    * a probe that has failed with nothing behind it contributes **no bits at
+      all** here, and is announced as a failure elsewhere instead. Rendering it
+      as an absence is precisely how a broken sensor becomes "no progress".
+    """
+    pv = p.get("probe") or {}
+    if not pv.get("declared"):
+        return []
+    bits: List[str] = []
+    if pv.get("count") is not None:
+        label = pv.get("label")
+        bits.append(cat.t("evidence.probe_count", count=pv["count"], label=label)
+                    if label else cat.t("evidence.probe_count_bare", count=pv["count"]))
+    if pv.get("date"):
+        bits.append(cat.t("evidence.probe_newest", date=pv["date"]))
+    if not bits:
+        return []
+    age = pv.get("age_days")
+    if pv.get("from_last_ok"):
+        bits.append(cat.t("evidence.probe_from_last_ok", days=age if age is not None else 0))
+    elif pv.get("stale"):
+        bits.append(cat.t("evidence.probe_stale", days=age if age is not None else 0))
+    return bits
+
+
+def probe_problems(listed, cat: Catalog):
+    """Split declared probes into the two things the brief has to say out loud.
+
+    Returns ``(failures, needs_resampling)``. Kept separate because they are
+    different messages to a reader: a failure is "the sensor is broken, go look",
+    a stale or never-taken reading is "go take one". Both are ordered by project
+    id so two runs over the same snapshot produce identical bytes.
+    """
+    failures, resample = [], []
+    for p in sorted(listed, key=lambda q: str(q.get("id") or "")):
+        pv = p.get("probe") or {}
+        if not pv.get("declared"):
+            continue
+        name = p.get("name") or p.get("id") or ""
+        if pv.get("error_code"):
+            failures.append({
+                "id": p.get("id"), "name": name,
+                "code": pv["error_code"],
+                "detail": pv.get("error_detail") or "",
+                "url": pv.get("url") or "",
+                "attempted_at": pv.get("attempted_at") or "",
+                "aged_days": pv.get("age_days") if pv.get("from_last_ok") else None,
+            })
+        elif pv.get("never_sampled"):
+            resample.append({"id": p.get("id"), "name": name, "reason": "never",
+                             "days": None, "ttl": pv.get("ttl_days")})
+        elif pv.get("stale"):
+            resample.append({"id": p.get("id"), "name": name, "reason": "stale",
+                             "days": pv.get("age_days"), "ttl": pv.get("ttl_days")})
+    return failures, resample
+
+
 def evidence_phrase(p, cat: Catalog) -> str:
     """★ The brief must name the kind of signal it is quoting.
     "76 files changed (file mtimes; no git here)" and "178 commits" should not
@@ -1047,6 +1120,7 @@ def evidence_phrase(p, cat: Catalog) -> str:
     s = p.get("sessions") or {}
     if s.get("distinct_session_days"):
         bits.append(cat.t("evidence.session_days", count=s["distinct_session_days"]))
+    bits.extend(probe_bits(p, cat))
     if not bits:
         bits.append(cat.t("evidence.no_signal_since",
                           date=ev.get("best_date") or cat.t("evidence.unknown_date")))
@@ -1254,6 +1328,29 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         L.append("> " + cat.t("brief.banner.backlog_full",
                               max=limits["max_open_items_total"],
                               command="nextbrief prune"))
+        L.append("")
+
+    # ---- a broken sensor says so, in the loudest place available ----
+    #
+    # A banner rather than a reminder, and above the fold rather than below it,
+    # because of what the alternative costs. A probe that fails quietly leaves
+    # the project's row looking like every other quiet project -- and "no signal"
+    # is the one conclusion this engine must never reach by accident. The failure
+    # has to outrank the tidiness of the page.
+    probe_failures, probe_resample = probe_problems(listed, cat)
+    # Handed to the HTML through `notes` rather than re-derived there, for the
+    # reason `decision_notes` had to learn once already: two renderers computing
+    # the same warning independently is two renderers that will eventually
+    # disagree, and `nextbrief open` shows the HTML one. A failure that reaches
+    # BRIEF.md and not the page most people actually look at has not been
+    # reported.
+    notes["probe_failures"] = probe_failures
+    for f in probe_failures:
+        L.append("> " + cat.t("brief.banner.probe_failed", project=f["name"],
+                              code=f["code"], detail=f["detail"], url=f["url"],
+                              at=f["attempted_at"]))
+        if f["aged_days"] is not None:
+            L.append("> " + cat.t("brief.banner.probe_failed_aged", days=f["aged_days"]))
         L.append("")
 
     # ---- do these first (whole portfolio) ----
@@ -1540,6 +1637,17 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                       tool=str(t.get("tool", "?")), why=str(t.get("why", "")))
                 for t in sorted(snap["tool_missing"], key=lambda t: str(t.get("tool", "")))
             )))
+    # Re-sampling is an action, so it is phrased as one and carries the command
+    # that performs it. A brief that reports its own number is stale without
+    # saying how to refresh it has told the reader to go find out how.
+    for r in probe_resample:
+        if r["reason"] == "never":
+            rem.append(cat.t("reminder.probe_never", project=r["name"],
+                             command="nextbrief probe %s" % r["id"]))
+        else:
+            rem.append(cat.t("reminder.probe_stale", project=r["name"],
+                             days=r["days"], ttl=r["ttl"],
+                             command="nextbrief probe %s" % r["id"]))
     if snap.get("parse_failed"):
         rem.append(cat.t("reminder.parse_failed", count=len(snap["parse_failed"])))
     if notes.get("deferred"):

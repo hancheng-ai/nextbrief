@@ -26,8 +26,14 @@
   },
 
   "evidence": {
-    "confidence_order": ["commit", "session", "file_mtime", "doc_declared", "human", "none"],
+    "confidence_order": ["commit", "session", "probe", "file_mtime", "doc_declared",
+                         "human", "none"],
     "none_allowed_pattern": "no signal"
+  },
+
+  "probe": {
+    "ttl_days": 7,
+    "timeout_seconds": 10
   },
 
   "scoring": {
