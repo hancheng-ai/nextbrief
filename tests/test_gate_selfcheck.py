@@ -55,11 +55,28 @@ class ScratchClone(TempCase):
         subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q",
                         str(self.clone)], check=True)
 
-    def check(self, *args):
-        """Run the copied self-check inside the copied clone."""
+    def check(self, *args, ci=False):
+        """Run the copied self-check inside the copied clone.
+
+        The environment is PINNED, not inherited. `gate-selfcheck` decides
+        between failing and warning by reading `CI` / `GITHUB_ACTIONS`, so a
+        test that inherits them asserts one thing on a laptop and the opposite
+        on a runner -- which is exactly what happened: the local-case tests
+        below passed here and failed on every CI leg from 2026-08-08, and the
+        red went unnoticed for three pushes because the suite was green in
+        front of the person running it.
+
+        Pass `ci=True` to assert the runner behaviour deliberately. The point of
+        the split is that both halves get tested wherever the suite runs.
+        """
+        env = dict(os.environ)
+        env.pop("CI", None)
+        env.pop("GITHUB_ACTIONS", None)
+        if ci:
+            env["CI"] = "true"
         proc = subprocess.run(
             [sys.executable, "scripts/gate-selfcheck.py", *args],
-            cwd=str(self.clone), capture_output=True, text=True)
+            cwd=str(self.clone), capture_output=True, text=True, env=env)
         return proc.returncode, proc.stdout + proc.stderr
 
     # -- the activation question, which is answered differently per context ----
@@ -83,6 +100,18 @@ class ScratchClone(TempCase):
         self.assertEqual(code, EXIT_OK, out)
         self.assertIn("::warning::", out)
         self.assertIn("green build is not the privacy gate", out)
+
+    @requires_git
+    def test_a_runner_is_also_recognised_without_the_flag(self):
+        """`--ci` was covered; the environment variables were not, and they are
+        the half that actually fires. A real runner sets `GITHUB_ACTIONS`, and
+        nothing passes `--ci` for it -- so the flag was tested and the live path
+        never was. That gap is why every CI leg from 2026-08-08 was red while
+        the suite was green locally: the same inheritance made the local-case
+        tests take this branch by accident."""
+        code, out = self.check(ci=True)
+        self.assertEqual(code, EXIT_OK, out)
+        self.assertIn("::warning::", out)
 
     @requires_git
     def test_hooks_path_pointing_somewhere_empty_still_fails(self):
