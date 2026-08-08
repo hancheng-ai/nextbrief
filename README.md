@@ -520,6 +520,11 @@ Dates are the day the tag was published. `0.1.0rc*` are prereleases and live on
 **TestPyPI** — the release workflow routes any version carrying `rc`, `a`, `b` or
 `.dev` there, and only a final version goes to PyPI.
 
+<!-- bump-version:skip:begin -->
+<!-- Append-only. Every row states what a release that already happened
+     contained, with its own anchor and its own date, so scripts/bump-version.sh
+     must not sweep the new version through it. Add a row here when you cut a
+     release; never edit one. -->
 | Version | Published | What it brought |
 |---|---|---|
 | [Unreleased](CHANGELOG.md#unreleased) | — | — |
@@ -536,6 +541,7 @@ Dates are the day the tag was published. `0.1.0rc*` are prereleases and live on
 | [0.1.0rc7](CHANGELOG.md#010rc7---2026-07-28) | 2026-07-28 | Projects are discovered, not declared. A portfolio with a hole in it is indistinguishable from a calm one. |
 | [0.1.0rc6](CHANGELOG.md#010rc6---2026-07-28) | 2026-07-28 | Containment and delete gates: the engine writes only its own directory, and nothing automated may remove a human's file. |
 | [0.1.0rc5](CHANGELOG.md#010rc5---2026-07-27) | 2026-07-27 | The three-stage pipeline, and the evidence gate in the renderer that the rest is arranged around. |
+<!-- bump-version:skip:end -->
 
 ## Commands
 

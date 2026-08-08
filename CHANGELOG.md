@@ -157,6 +157,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by concatenation, and a regex reports the prefix as absent -- a guard that
   fails over a key nobody ever asked for is a guard somebody deletes.
 
+### Fixed
+
+- **A release bump no longer deletes the previous release from the README.**
+  `scripts/bump-version.sh` sweeps the new version through the READMEs and the
+  Homebrew formula, because it also lives in badges, install commands and
+  download URLs. The sweep was an unbounded `replace`, and README.md had since
+  grown an append-only release-history table -- so every bump rewrote the newest
+  row's version into the release being cut while leaving that row's CHANGELOG
+  anchor and publication date pointing at the release it used to describe. The
+  row still parsed, the table still rendered, nothing went red, and a release
+  vanished from the public index. It happened on `0.2.0rc1` and again on
+  `0.2.0rc2`, corrected by hand both times.
+
+  The sweep is now bounded by a marker pair in the document itself
+  (`<!-- bump-version:skip:begin -->` … `:end`), rather than by a heading name --
+  the heading differs between the two languages and either can be renamed by
+  someone who never opens the script. An unclosed marker stops the release
+  instead of guessing which of its two readings was meant, and the run now
+  prints how many references it left inside the boundary, so a marker doing its
+  job and a marker somebody deleted stop looking the same in the log.
+
 ## [0.2.0rc3] - 2026-08-07
 
 ### Fixed

@@ -70,6 +70,65 @@ for name, pattern, replacement in edits:
 # [Unreleased]. It gets its own handling below.
 SWEEP = ["README.md", "README.zh.md", "packaging/homebrew/nextbrief.rb"]
 
+# ...and the same reasoning applies *inside* a swept file, which is the part this
+# script missed. README.md carries a release-history table, and a row in it is
+# the same kind of statement a changelog heading is: this version, this anchor,
+# this publication date. The replace below used to be unbounded, so every bump
+# rewrote the newest row's version into the release being cut while leaving that
+# row's anchor and date pointing at the release it used to describe. The row
+# still parsed, the table still rendered, CI stayed green, and a release
+# disappeared from the public record. It happened twice and was fixed by hand
+# twice, which is how long a defect survives when its symptom is that nothing
+# looks wrong.
+#
+# The boundary is a pair of markers in the document:
+#
+#     <!-- bump-version:skip:begin -->
+#     ...append-only history...
+#     <!-- bump-version:skip:end -->
+#
+# Not a heading: it is "## Release history" in English, something else in
+# README.zh.md, and either can be renamed by someone who has never opened this
+# script. Not "the file that has the table" either -- README.zh.md is swept as
+# well and has no table today, so the boundary has to already be correct on the
+# day it gains one. tests/test_bump_version.py holds both ends of this: the
+# behaviour, and the fact that no swept file in this repository files release
+# history outside the markers.
+SKIP_BEGIN = "<!-- bump-version:skip:begin -->"
+SKIP_END = "<!-- bump-version:skip:end -->"
+
+
+def sweep(text, name):
+    """Replace `previous` with `new` outside the skip markers.
+
+    Returns (text, swept, kept). A file with no markers behaves exactly as it
+    did before, which is what keeps the formula and the Chinese README swept.
+    """
+    out, swept, kept, pos = [], 0, 0, 0
+    while True:
+        begin = text.find(SKIP_BEGIN, pos)
+        if begin < 0:
+            break
+        end = text.find(SKIP_END, begin)
+        if end < 0:
+            # Refused rather than guessed. An unclosed marker has two readings
+            # -- "everything below is history" and "the author forgot the close"
+            # -- and quietly picking one is the habit that cost two releases.
+            sys.exit("error: %s in %s is never closed by %s"
+                     % (SKIP_BEGIN, name, SKIP_END))
+        end += len(SKIP_END)
+        live, frozen = text[pos:begin], text[begin:end]
+        swept += live.count(previous)
+        kept += frozen.count(previous)
+        out.append(live.replace(previous, new))
+        out.append(frozen)
+        pos = end
+    tail = text[pos:]
+    swept += tail.count(previous)
+    out.append(tail.replace(previous, new))
+    return "".join(out), swept, kept
+
+
 changelog = root / "CHANGELOG.md"
 changelog_text = changelog.read_text(encoding="utf-8")
 
@@ -83,10 +142,15 @@ for name in SWEEP:
     if not path.is_file() or not previous or previous == new:
         continue
     text = path.read_text(encoding="utf-8")
-    updated = text.replace(previous, new)
+    updated, swept, kept = sweep(text, name)
     if updated != text:
         path.write_text(updated, encoding="utf-8")
-        print("  %-28s -> %s (%d reference(s))" % (name, new, text.count(previous)))
+        # The kept count is printed rather than dropped: a marker that is doing
+        # its job and a marker somebody deleted look identical in a log that
+        # only reports what changed, and this defect's whole character is that
+        # it looks fine.
+        print("  %-28s -> %s (%d reference(s)%s)"
+              % (name, new, swept, ", %d left in history" % kept if kept else ""))
 
 # --- the changelog -------------------------------------------------------
 #
