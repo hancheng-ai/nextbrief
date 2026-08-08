@@ -51,8 +51,8 @@ One concrete physical action. "Open X and run Y", not "finish Z".
 <!-- SECTION:NEXT_ACTION:END -->
 
 <!-- AC:BEGIN -->
-- [ ] #1 a verifiable completion condition
-- [ ] #2 ...
+- [ ] #1 (agent) a verifiable completion condition
+- [ ] #2 (you) one only you can settle
 <!-- AC:END -->
 
 <!-- SECTION:NOTES:BEGIN -->
@@ -60,6 +60,28 @@ The daily pass replaces only what is inside this block; it never rewrites the
 whole file. That is what stops an agent from "regenerating the document" and
 quietly swallowing your annotations.
 <!-- SECTION:NOTES:END -->
+
+## Acceptance criteria — three marks and one label
+
+`- [ ]` open · `- [x]` done · `- [~]` the design moved past this one. The third is
+written by `-` in the `done` selector, never by hand and never by an agent. It is a
+mark, not a deletion: the line and its sentence stay, because erasing them would
+erase the one fact worth keeping, which is that the goal moved. Dropped criteria
+stay in the denominator and are reported beside it (`1/3 ticked, 1 dropped`), and
+they are never drafted as future work — nobody is meant to pick them up.
+
+`(agent)` or `(you)`, right after the number, says **who can tell that it is
+true** — not who does the work. Those come apart constantly: only you can choose
+the illustrations, but "three files appeared in `assets/`" is something one
+command can see, so that criterion is the agent's. `(agent)` is the default.
+Reserve `(you)` for what only you can settle: direction, UAT, access, resources an
+agent cannot obtain, and your own judgement as the user.
+
+`done` asks you about the `(you)` ones and holds the rest back (`--all-criteria`
+puts them on the list, which is what dropping one of the agent's looks like).
+`check` warns when an item has more than two on you, or has criteria carrying no
+label at all. An unlabelled criterion is treated as yours, because nobody has said
+otherwise yet.
 
 ## The closing record — do not write this by hand
 

@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -545,11 +546,85 @@ def cmd_check(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
     Sense first, and short-circuited: if stage 1 is stale then stage 3 is stale
     by construction, and rendering against a snapshot already known to be out of
     date would answer a question nobody asked.
+
+    The criteria warnings ride along here rather than getting a command of their
+    own, because a lint nobody runs is a lint that does not exist -- and they do
+    not touch the exit code. Exit 3 means "out of date", a scheduler acts on it,
+    and an item worded awkwardly is not a reason to re-run the pipeline.
     """
     rc = _run_sense(["--check"])
+    for line in _criteria_warnings(ws, cat):
+        _err("warning: " + line)
     if rc != EXIT_OK:
         return rc
     return _run_render(["--check", "--no-notify"])
+
+
+# More than this many criteria needing a person is a design problem in the item,
+# not a person who will not cooperate. Two is the author's own number, arrived at
+# by counting: across three items that jammed, 20 criteria, 2 of which genuinely
+# needed him.
+MAX_YOURS = 2
+
+# How many ids a warning names before it stops. A warning that prints thirty ids
+# is a warning people learn to scroll past, and the count carries the size.
+NAMED = 3
+
+
+def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
+    """Items whose acceptance criteria are shaped wrong, as at most two lines.
+
+    ★ Two lines total, however big the backlog. ★
+
+    One line per offending item is what this obviously wanted to be, and it is
+    what would have killed it: every criterion written before the marker existed
+    is unmarked, so on a real backlog the first run would print twenty-odd
+    warnings, and a warning that fires twenty times on day one teaches people to
+    stop reading warnings -- after which the one that matters goes past unread
+    too. So each rule gets one line, naming a few ids and counting the rest.
+
+    Live items only. A closed item's criteria are history: the warning would be
+    true, permanent, and impossible to act on, which is the same thing as noise.
+    """
+    unmarked: List[str] = []
+    crowded: List[Tuple[str, int]] = []
+    today = dt.date.today()
+    for path in sorted(ws.backlog.glob("*.md")):
+        try:
+            fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if not fm or not is_live(fm, today):
+            continue
+        criteria = [t for _i, _m, t in _ac_lines(body or "")]
+        if not criteria:
+            continue
+        item_id = str(fm.get("id") or path.stem)
+        if any(_ac_owner(t) is None for t in criteria):
+            unmarked.append(item_id)
+        yours = sum(1 for t in criteria if _ac_owner(t) == AC_YOU)
+        if yours > MAX_YOURS:
+            crowded.append((item_id, yours))
+
+    def named(ids: Sequence[str]) -> str:
+        head = ", ".join(ids[:NAMED])
+        return head if len(ids) <= NAMED else "%s (+%d)" % (head, len(ids) - NAMED)
+
+    out: List[str] = []
+    if unmarked:
+        out.append(tr(cat, "cli.check.unmarked_criteria",
+                      "{n} open item(s) have criteria with no ({agent})/({you}) "
+                      "marker, so `done` has to ask you about all of them: {ids}",
+                      n=len(unmarked), ids=named(unmarked),
+                      agent=AC_AGENT, you=AC_YOU))
+    if crowded:
+        out.append(tr(cat, "cli.check.crowded_criteria",
+                      "{n} open item(s) put more than {max} criteria on you, "
+                      "which is a problem with the item rather than with you: "
+                      "{ids}",
+                      n=len(crowded), max=MAX_YOURS,
+                      ids=named(["%s (%d)" % (i, c) for i, c in crowded])))
+    return out
 
 
 def cmd_v0(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
@@ -778,11 +853,78 @@ def cmd_log(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> 
 
 
 def cmd_show(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """The item in full, under a header saying how much of it is yours.
+
+    ★ The header exists to answer one question in the second the file opens:
+    how much of this needs me? ★
+
+    That question was being answered by reading all nine criteria and working it
+    out again from scratch, every time, and the answer was almost always "two of
+    them". The file cannot show it: the criteria are one flat list, in one shape,
+    and the two that need a person look exactly like the seven that do not.
+
+    The file itself is printed byte for byte after it, unchanged. It is the
+    record, and the header is a reading of it -- so nothing here is allowed to
+    stand between a reader and the words somebody actually wrote.
+    """
     path = _find_item(ws, args.item_id, cat)
     if path is None:
         return EXIT_FAIL
-    sys.stdout.write(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    _fm, body = parse_frontmatter(text)
+    for line in _criteria_header(body or "", cat):
+        print(line)
+    sys.stdout.write(text)
     return EXIT_OK
+
+
+def _criteria_header(body: str, cat: Optional[Catalog]) -> List[str]:
+    """The two-or-three line summary `show` prints above an item.
+
+    Empty for an item with no criteria, where every line here would be zero.
+    """
+    criteria = _ac_lines(body)
+    if not criteria:
+        return []
+    ticked, dropped, total = _ac_progress(body)
+    yours = [(m, t) for _i, m, t in criteria if _ac_owner(t) == AC_YOU]
+    unmarked = [(m, t) for _i, m, t in criteria if _ac_owner(t) is None]
+    theirs = len(criteria) - len(yours) - len(unmarked)
+
+    try:
+        columns = shutil.get_terminal_size().columns
+    except Exception:
+        columns = 80
+
+    out = [tr(cat, "cli.show.criteria",
+              "Acceptance criteria: {total} · {done} ticked · {dropped} set aside",
+              total=total, done=ticked, dropped=dropped)]
+    # The open ones you own are printed in full rather than counted, because a
+    # number cannot be acted on and by design there are never more than two of
+    # them. Everything else is a count: it is precisely the part not worth
+    # reading right now, and that is the whole claim being made.
+    open_yours = [t for m, t in yours if m == AC_OPEN]
+    if yours:
+        out.append("  " + tr(cat, "cli.show.yours",
+                             "{open} of {n} marked ({you}) still open",
+                             open=len(open_yours), n=len(yours), you=AC_YOU))
+    for t in open_yours:
+        out.append("    " + _clip(t, max(20, columns - 6)))
+    if theirs:
+        out.append("  " + tr(cat, "cli.show.theirs",
+                             "{n} marked ({agent}), for the agent to verify",
+                             n=theirs, agent=AC_AGENT))
+    if unmarked:
+        # Named as unclassified rather than silently counted with yours. They ARE
+        # treated as yours everywhere else -- `done` asks about them -- and the
+        # honest thing is to say that this is a default standing in for an answer
+        # nobody has given, not a decision somebody made.
+        out.append("  " + tr(cat, "cli.show.unmarked",
+                             "{n} with no ({agent})/({you}) marker, asked as "
+                             "though they were yours",
+                             n=len(unmarked), agent=AC_AGENT, you=AC_YOU))
+    out.append("")
+    return out
 
 
 def cmd_ok(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
@@ -833,6 +975,49 @@ AC_DROPPED = "~"
 # lands in the summary question that was going to be asked anyway, because a
 # third question is precisely the friction this flow exists to remove.
 DROP_KEY = "-"
+
+# Who can SAY whether a criterion is met, written into the criterion's own text
+# right after its number:  `- [ ] #4 (you) the brief reads right on a phone`.
+#
+# ★ The question is "who can tell that it is true", not "who does the work". ★
+# Those come apart constantly: only a person can choose the illustrations, but
+# "three files appeared in assets/" is something one command can see, so that
+# criterion belongs to the agent.
+#
+# Counted on a real week: across three items that could not be closed, 20
+# criteria, of which exactly 2 needed the author -- one UAT, one set of
+# credentials. The other 18 were things a command could settle, and they sat in
+# the same list, in the same shape, in front of the same person. The cost was
+# never the ticking. It was that "which of these actually need me" had to be
+# worked out again from scratch every single time, and that recomputation is the
+# switch this tool exists to spend rather than charge.
+AC_YOU = "you"
+AC_AGENT = "agent"
+
+_AC_OWNER = re.compile(r"^(?:#\d+\s*)?\((you|agent)\)", re.IGNORECASE)
+
+
+def _ac_owner(text: str) -> Optional[str]:
+    """``"you"``, ``"agent"``, or ``None`` for a criterion carrying no marker."""
+    m = _AC_OWNER.match(text.strip())
+    return m.group(1).lower() if m else None
+
+
+def _needs_you(text: str) -> bool:
+    """Whether this criterion is one to put in front of a person.
+
+    ★ Unmarked counts as yours, and that is the load-bearing half. ★
+
+    An unmarked criterion is not the agent's -- it is one nobody has classified
+    yet, and *every criterion written before the marker existed is unmarked*.
+    Reading the absence as "the agent's" would empty the tick selector for the
+    entire existing backlog in one move, and empty is the one thing it must never
+    be: `done` could not ask at all until recently, measured at 1 ticked box
+    across 25 items, and being askable is the whole point of the step. So the
+    default is to ask, and `check` reports how many are still unclassified rather
+    than the engine guessing on their behalf.
+    """
+    return _ac_owner(text) != AC_AGENT
 
 
 def _ac_lines(body: str) -> List[Tuple[int, str, str]]:
@@ -1158,7 +1343,8 @@ def _select_ticks(rows: Sequence[Tuple[int, str]],
             pass
 
 
-def _ask_ticks(body: str, cat: Optional[Catalog]) -> Tuple[List[int], List[int]]:
+def _ask_ticks(body: str, cat: Optional[Catalog],
+               include_agent: bool = False) -> Tuple[List[int], List[int]]:
     """Which criteria are done -- and which no longer apply -- asked at the only
     moment anyone can answer. Returns ``(ticked, dropped)`` line indexes.
 
@@ -1184,11 +1370,37 @@ def _ask_ticks(body: str, cat: Optional[Catalog]) -> Tuple[List[int], List[int]]
     Only criteria that are still open are offered. A tick and a drop are both
     decisions already recorded in the file, and re-asking them would make this
     step a place where one could be taken back by accident.
+
+    ★ And only the ones only a person can answer. ★
+
+    Criteria marked `(agent)` are held back, because the thing being protected
+    here is not keystrokes -- it is the question "which of these actually need
+    me", which was being asked and answered from scratch on every close. Held
+    back is not hidden: the count is printed, and what stays open still drafts as
+    follow-up work exactly as before. `--all-criteria` puts them back on the
+    list, which is what the day you need to DROP one looks like -- an item whose
+    criteria are all the agent's would otherwise have no way to record that its
+    design moved, and that is the state this whole third mark exists for.
     """
-    rows = [(i, text) for i, mark, text in _ac_lines(body) if mark == AC_OPEN]
-    if not rows:
+    open_rows = [(i, text) for i, mark, text in _ac_lines(body) if mark == AC_OPEN]
+    rows = open_rows if include_agent else [r for r in open_rows if _needs_you(r[1])]
+    held_back = len(open_rows) - len(rows)
+    if not rows and not held_back:
         return [], []
     print()
+    if held_back:
+        # Said out loud, always. A list that is shorter than the file without
+        # saying why is this repo's characteristic bug: it does not read as
+        # something missing, it reads as an item that was always this small.
+        # Worded so the count never has to agree with a noun: `t()` has no plural
+        # mechanism, and "dropped 1 criteria" already shipped once.
+        print("  " + tr(cat, "cli.done.agent_criteria",
+                        "{n} still open and the agent's to verify, so not asked "
+                        "here. They still draft as follow-ups; --all-criteria "
+                        "puts them back on this list.",
+                        n=held_back))
+    if not rows:
+        return [], []
     # The selector first, the numbers as the fallback. Both exist because the
     # terminal is not always one that can do the first, and a `done` that cannot
     # ask is a `done` that goes back to being unanswerable. That applies to
@@ -1532,7 +1744,8 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
             original = ""
         if original:
             try:
-                picked, dropped = _ask_ticks(original, cat)
+                picked, dropped = _ask_ticks(
+                    original, cat, bool(getattr(args, "all_criteria", False)))
             except KeyboardInterrupt:
                 print()
                 _err(tr(cat, "cli.done.cancelled",
@@ -3142,6 +3355,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="what actually happened, especially where it differed from the item")
     p.add_argument("--future-work", dest="future_work", metavar="TEXT", action="append",
                    help="something this turned up that does not belong to it; repeatable")
+    p.add_argument("--all-criteria", dest="all_criteria", action="store_true",
+                   help="also ask about criteria marked (agent), which are held back by default")
 
     p = add("defer", "park an item until a date")
     p.add_argument("item_id", metavar="<id>")

@@ -555,6 +555,7 @@ nextbrief show <id>      print one item in full
 nextbrief ok <id>        confirm an item: it is real, and written the way you meant it
 nextbrief done <id>      close it, and record what actually happened
                          (--summary "<text>", --future-work "<text>" — repeatable)
+                         (--all-criteria: also ask about the (agent) ones)
 nextbrief drop <id>      drop it. The file stays, and so does its git history
 nextbrief defer <id> --until <date|"what you are waiting on">
                          park it. It comes back into the brief on its own
@@ -666,6 +667,40 @@ the list get the same choice as numbers, where `1 3` ticks and `-2` drops.
 Dropped criteria stay in the count, reported beside it rather than folded into it:
 `1/3 ticked, 1 dropped`. A denominator that shrank would hide the promise along
 with the decision to abandon it.
+
+#### `(agent)` and `(you)`: which of these actually need you
+
+A criterion says who can settle it, right after its number:
+
+```markdown
+- [ ] #1 (agent) the exporter writes one file per crate
+- [ ] #2 (you) the sample export reads right to you
+```
+
+Three items that could not be closed carried 20 criteria between them, and
+exactly 2 needed the author — one UAT, one set of credentials. The other 18 were
+things a command could settle, and they sat in the same list, in the same shape,
+in front of the same person. The expense was never the ticking. It was that
+**"which of these actually need me" had to be worked out again on every close**.
+
+**The question is who can tell it is true, not who does the work.** Only you can
+choose the illustrations, but "three files appeared in `assets/`" is something one
+command can see — so that criterion is the agent's. `(agent)` is the default.
+Reserve `(you)` for direction, UAT, access, resources an agent cannot obtain, and
+your own judgement as the user.
+
+`done` asks about yours and counts the rest out loud; they still draft as
+follow-up work. `--all-criteria` puts them back on the list, which is what
+dropping one of the agent's looks like. An unmarked criterion counts as yours —
+nobody has said otherwise, and reading the absence as "the agent's" would empty
+the selector for every item written before the marker existed.
+
+`nextbrief check` warns when an item has more than two criteria on you, or has
+criteria carrying no marker at all. One line per rule, however large the backlog.
+
+`nextbrief show <id>` prints the open ones that are yours above the file, and
+counts the rest, so "how much of this needs me" is answerable without reading all
+nine.
 
 Before any of that, `done`, `drop` and `defer` each print `> {id} · {title}`, the
 project, and the acceptance count. All three write `human_confirmed: true` and

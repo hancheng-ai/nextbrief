@@ -1410,6 +1410,302 @@ class DroppingACriterionTheDesignMovedPast(TempCase):
         self.assertNotIn(cli.AC_DROPPED, "".join(self._criteria()))
 
 
+class WhoCanSayThisIsDone(TempCase):
+    """`(you)` and `(agent)`: which criteria are actually a person's to answer.
+
+    The count that produced this: three items that could not be closed carried 20
+    acceptance criteria between them, of which exactly 2 needed the author -- one
+    UAT, one set of credentials. The other 18 were things a command could settle,
+    and every one of them was sitting in the same list, in the same shape, in
+    front of the same person.
+
+    So the expense was never the ticking. It was that "which of these actually
+    need me" had to be worked out from scratch on every close, and that is
+    precisely the recomputation this tool exists to spend rather than charge.
+
+    Marked, held back, and SAID. A shorter list with no explanation is this
+    repository's characteristic failure -- it does not read as something missing,
+    it reads as an item that was always this small.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        git_init(self.ws)
+        write_backlog_item(
+            self.ws, "NA-0005", title="Ship the exporter",
+            body=_acceptance((False, "(agent) the exporter writes one file per crate"),
+                             (False, "(you) the sample export reads right to you"),
+                             (False, "(agent) the migration guide names the new flag")))
+        git_commit_all(self.ws)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _text(self):
+        return (self.ws / "backlog" / "NA-0005.md").read_text(encoding="utf-8")
+
+    def _typed(self, answers, *args):
+        typed = iter(answers)
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch("builtins.input", lambda _p="": next(typed)):
+            return self._run(*args)
+
+    def _criteria(self):
+        return [ln.strip() for ln in self._text().splitlines()
+                if ln.strip().startswith(("- [", "* ["))]
+
+    # -- reading the marker --------------------------------------------------
+
+    def test_the_marker_is_read_off_the_criterion_after_its_number(self):
+        self.assertEqual(cli._ac_owner("#4 (you) the brief reads right on a phone"),
+                         cli.AC_YOU)
+        self.assertEqual(cli._ac_owner("#1 (agent) ruff is clean"), cli.AC_AGENT)
+        self.assertIsNone(cli._ac_owner("#2 nobody has classified this one"))
+
+    def test_an_unmarked_criterion_counts_as_yours(self):
+        """★ The half that keeps the existing backlog working. ★
+
+        Every criterion written before the marker existed carries none, so
+        reading "no marker" as "the agent's" would empty the tick selector for
+        the whole backlog in one move -- and empty is the one thing it must not
+        be. `done` could not ask at all until recently: 1 ticked box across 25
+        items is what that measured.
+        """
+        self.assertTrue(cli._needs_you("#2 nobody has classified this one"))
+        self.assertTrue(cli._needs_you("#3 (you) you have to look at it"))
+        self.assertFalse(cli._needs_you("#1 (agent) ruff is clean"))
+
+    # -- what the selector offers --------------------------------------------
+
+    def test_only_the_ones_marked_for_you_are_asked_about(self):
+        """The numbered fallback is what a captured stdout drives, so the list it
+        prints is the list. One entry, and it is the `(you)` one."""
+        _code, out, _err = self._typed(["", "", ""], "done", "NA-0005")
+        self.assertIn("1. #2 (you) the sample export reads right to you", out)
+        self.assertNotIn("the exporter writes one file per crate", out)
+        self.assertNotIn("the migration guide names the new flag", out)
+
+    def test_the_ones_held_back_are_counted_out_loud(self):
+        """Never silently. A list shorter than the file, with nothing saying so,
+        is indistinguishable from an item that only ever had one criterion."""
+        _code, out, _err = self._typed(["", "", ""], "done", "NA-0005")
+        self.assertIn("2 still open and the agent's to verify", out)
+        self.assertIn("--all-criteria", out)
+
+    def test_numbering_follows_the_list_that_was_shown(self):
+        """`1` means the first row on screen, not the first criterion in the
+        file. Getting this wrong ticks a criterion nobody was asked about, which
+        is the same falsehood as ticking one yourself."""
+        code, _out, err = self._typed(["1", "", ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._criteria(), [
+            "- [ ] #1 (agent) the exporter writes one file per crate",
+            "- [x] #2 (you) the sample export reads right to you",
+            "- [ ] #3 (agent) the migration guide names the new flag"])
+
+    def test_an_item_that_is_all_the_agents_asks_nothing_but_still_reports(self):
+        write_backlog_item(
+            self.ws, "NA-0009", title="Ship the exporter",
+            body=_acceptance((False, "(agent) ruff is clean"),
+                             (False, "(agent) the suite is green")))
+        git_commit_all(self.ws)
+        _code, out, _err = self._typed(["", ""], "done", "NA-0009")
+        self.assertIn("2 still open and the agent's to verify", out)
+        self.assertNotIn("ruff is clean", out)
+
+    # -- the escape hatch, which is what dropping one needs -------------------
+
+    def test_all_criteria_puts_them_back_so_one_can_be_set_aside(self):
+        """★ Why holding them back could not be the only behaviour. ★
+
+        A criterion the design moved past is most often one of the agent's --
+        this very feature's own item has nine and not one of them is the
+        author's. With no way to reach them, the third mark would exist and be
+        unreachable for the exact case it was built for, and the only remaining
+        way to record it would be hand-editing the file, which is where this
+        whole flow started.
+        """
+        code, out, err = self._typed(["-1", "", ""], "done", "NA-0005",
+                                     "--all-criteria")
+        self.assertEqual(code, 0, err)
+        self.assertIn("1. #1 (agent) the exporter writes one file per crate", out)
+        self.assertEqual(self._criteria()[0],
+                         "- [~] #1 (agent) the exporter writes one file per crate")
+
+    def test_nothing_is_held_back_and_nothing_is_announced_with_the_flag(self):
+        _code, out, _err = self._typed(["", "", ""], "done", "NA-0005",
+                                       "--all-criteria")
+        self.assertNotIn("the agent's to verify", out)
+
+    # -- what happens to the ones nobody was asked about ----------------------
+
+    def test_an_open_agent_criterion_still_drafts_as_future_work(self):
+        """Held back from the question, not from the record. An agent criterion
+        left open is outstanding work, and the follow-up draft is where
+        outstanding work has always gone -- so the criteria that stop occupying a
+        person's attention do not stop being tracked."""
+        code, _out, err = self._typed(["1", "", cli.ACCEPT_DRAFT, ""],
+                                      "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        recorded = [e.text for e in items.parse_closing(self._text()).future_work]
+        self.assertEqual(recorded, ["#1 (agent) the exporter writes one file per crate",
+                                    "#3 (agent) the migration guide names the new flag"])
+
+    def test_the_header_still_counts_every_criterion(self):
+        """The denominator is the item's promise, and it does not shrink because
+        some of the promise is not this person's to check."""
+        _code, out, _err = self._typed(["1", "", ""], "done", "NA-0005")
+        self.assertIn("0/3", out)
+
+
+class WarningAboutCriteriaNobodyCanAnswer(TempCase):
+    """`check` says when an item's criteria are shaped wrong.
+
+    Two shapes, both measured rather than invented. More than two criteria
+    needing a person is a problem with the item -- across the three items that
+    jammed, 20 criteria and 2 that genuinely needed the author. And a criterion
+    with no marker at all is one nobody has classified, which is why `done` still
+    has to ask about it.
+
+    One line per rule, however large the backlog, and that is the load-bearing
+    part: the obvious shape -- one line per item -- would print twenty-odd
+    warnings on the first run of any real workspace, and a warning that fires
+    twenty times on day one is a warning people stop reading, after which the one
+    that matters goes past unread too.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+
+    def _warnings(self):
+        return cli._criteria_warnings(Workspace(self.ws, self.ws, "test"), None)
+
+    def test_an_item_with_no_markers_is_reported_once(self):
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "it works"), (False, "it is fast")))
+        got = "\n".join(self._warnings())
+        self.assertIn("NA-0005", got)
+        self.assertIn("no (agent)/(you) marker", got)
+
+    def test_a_fully_marked_item_is_not_reported(self):
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "(agent) it works"),
+                                            (True, "(you) it reads right")))
+        self.assertEqual(self._warnings(), [])
+
+    def test_too_many_criteria_on_a_person_is_reported_with_the_count(self):
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "(you) one"), (False, "(you) two"),
+                                            (False, "(you) three")))
+        got = "\n".join(self._warnings())
+        self.assertIn("NA-0005 (3)", got)
+        self.assertIn("more than 2", got)
+
+    def test_exactly_two_is_not_too_many(self):
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "(you) one"), (False, "(you) two")))
+        self.assertEqual(self._warnings(), [])
+
+    def test_one_line_per_rule_however_many_items_are_wrong(self):
+        """The property that keeps this readable, asserted at a size where the
+        naive shape would already be unreadable."""
+        for n in range(12):
+            write_backlog_item(self.ws, "NA-00%02d" % (n + 10),
+                               body=_acceptance((False, "unmarked and open")))
+        got = self._warnings()
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("12 open item(s)", got[0])
+        self.assertIn("(+9)", got[0], "the ids were not capped: %s" % got[0])
+
+    def test_a_closed_item_is_never_warned_about(self):
+        """True, permanent and impossible to act on, which is the definition of
+        noise. Its criteria are history now."""
+        write_backlog_item(self.ws, "NA-0005", status="done",
+                           body=_acceptance((False, "unmarked"), (False, "also unmarked")))
+        self.assertEqual(self._warnings(), [])
+
+    def test_an_item_with_no_criteria_at_all_is_not_warned_about(self):
+        write_backlog_item(self.ws, "NA-0005", body="Nothing to verify here.")
+        self.assertEqual(self._warnings(), [])
+
+    def test_check_prints_them_without_touching_its_exit_code(self):
+        """★ Exit 3 means "out of date". ★
+
+        A scheduler branches on it, and an item worded awkwardly is not a reason
+        to re-run the pipeline. So the warnings ride along on stderr and the
+        contract the exit code carries is left exactly as it was.
+        """
+        ws = self.workspace("wsb", with_git=False)
+        write_backlog_item(ws, "NA-0005", body=_acceptance((False, "unmarked")))
+        code, _out, err = capture(cli.main, ["--workspace", str(ws), "v0", "--no-notify"])
+        self.assertEqual(code, 0, err)
+        code, _out, err = capture(cli.main, ["--workspace", str(ws), "check"])
+        self.assertEqual(code, 0, "the warning changed the exit code")
+        self.assertIn("no (agent)/(you) marker", err)
+
+
+class ShowSaysHowMuchOfThisIsYours(TempCase):
+    """`show` answers "how much of this needs me" before the file is read.
+
+    That question was being answered by reading all nine criteria and working it
+    out again, every time, and the answer was almost always "two of them". The
+    file itself cannot show it: the criteria are one flat list in one shape, and
+    the two that need a person look exactly like the seven that do not.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        write_backlog_item(
+            self.ws, "NA-0005", title="Ship the exporter",
+            body=_acceptance((True, "(agent) ruff is clean"),
+                             (cli.AC_DROPPED, "(agent) the legacy sidecar keeps working"),
+                             (False, "(agent) the guide names the new flag"),
+                             (False, "(you) the sample export reads right to you")))
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def test_the_open_ones_that_need_you_are_printed_in_full(self):
+        """A count cannot be acted on, and by design there are never more than
+        two of these. Everything else is counted, which is the claim."""
+        code, out, err = self._run("show", "NA-0005")
+        self.assertEqual(code, 0, err)
+        head = out.split("---")[0]
+        self.assertIn("#4 (you) the sample export reads right to you", head)
+        self.assertIn("1 of 1 marked (you) still open", head)
+        self.assertIn("3 marked (agent)", head)
+
+    def test_the_totals_come_from_the_same_counter_as_everywhere_else(self):
+        _code, out, _err = self._run("show", "NA-0005")
+        self.assertIn("Acceptance criteria: 4 · 1 ticked · 1 set aside",
+                      out.split("---")[0])
+
+    def test_the_file_is_still_printed_byte_for_byte(self):
+        """★ The header is a reading of the record, never a layer over it. ★"""
+        _code, out, _err = self._run("show", "NA-0005")
+        raw = (self.ws / "backlog" / "NA-0005.md").read_text(encoding="utf-8")
+        self.assertTrue(out.endswith(raw),
+                        "the file did not come through unchanged")
+
+    def test_unmarked_criteria_are_named_as_unclassified(self):
+        """They are treated as yours everywhere else, and saying so is the honest
+        version: that is a default standing in for an answer nobody gave, not a
+        decision somebody made."""
+        write_backlog_item(self.ws, "NA-0009", title="Older item",
+                           body=_acceptance((False, "it works"), (False, "it is fast")))
+        _code, out, _err = self._run("show", "NA-0009")
+        self.assertIn("2 with no (agent)/(you) marker", out.split("---")[0])
+
+    def test_an_item_with_no_criteria_gets_no_header(self):
+        write_backlog_item(self.ws, "NA-0010", title="No criteria",
+                           body="Nothing to verify here.")
+        _code, out, _err = self._run("show", "NA-0010")
+        self.assertTrue(out.startswith("---"), out[:80])
+
+
 class TheDraftEitherAnswersOrIsNotOffered(TempCase):
     """Reported from real use: `done` on an item with seven commits and 0/9
     ticked offered `nextbrief · 7 commits since 2026-08-06 · AC 0/9` under

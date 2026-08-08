@@ -83,6 +83,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `=`, editable, and skipped by Enter exactly like every other draft. The closing
   questions stay at two, both skippable.
 
+- **`(agent)` and `(you)`: criteria now say who can settle them, and `done` only
+  asks you about yours.** The marker goes in the criterion's own text, after its
+  number -- `- [ ] #4 (you) the sample export reads right to you`.
+
+  This was measured, not designed. Three items that could not be closed carried
+  20 acceptance criteria between them, and exactly 2 needed the author: one UAT
+  and one set of credentials. The other 18 were things a command could settle,
+  and every one of them sat in the same list, in the same shape, in front of the
+  same person. So the expense was never the ticking -- it was that "which of
+  these actually need me" had to be worked out from scratch on every single
+  close, which is precisely the context switch this tool exists to spend rather
+  than charge.
+
+  **The question is who can tell it is true, not who does the work.** Those come
+  apart constantly: only a person can choose the illustrations, but "three files
+  appeared in `assets/`" is something one command can see, so that criterion is
+  the agent's. `(agent)` is the default; `(you)` is for direction, UAT, access,
+  resources an agent cannot obtain, and judgement given as the user.
+
+  Held back is not hidden. The ones `done` does not ask about are counted out
+  loud, and what stays open still drafts as follow-up work exactly as before -- a
+  list quietly shorter than the file is this project's characteristic bug, the
+  one that reads as an item that was always this small. `--all-criteria` puts
+  them back on the list, which is what setting one of the agent's aside looks
+  like: a criterion the design moved past is most often the agent's, and without
+  a way to reach them the `- [~]` mark would be unreachable for the case it was
+  built for.
+
+  **An unmarked criterion counts as yours**, and that is load-bearing rather than
+  lenient. Every criterion written before this existed carries no marker, so
+  reading the absence as "the agent's" would empty the tick selector for an
+  entire backlog in one move -- and being askable at all is the whole point of
+  the step. `check` reports how many are still unclassified instead of the engine
+  guessing on their behalf.
+
+- **`check` warns about criteria nobody can answer.** Two rules, one line each
+  however large the backlog: items with criteria carrying no `(agent)`/`(you)`
+  marker, and items putting more than two criteria on you -- which is a problem
+  with the item, not with the person. One line *per item* is what this obviously
+  wanted to be and is exactly what would have killed it, at twenty-odd warnings
+  on the first run of any real workspace. The exit code is untouched: 3 still
+  means out of date, and an awkwardly worded item is not a reason for a scheduler
+  to re-run the pipeline.
+
+- **`show` says how much of an item is yours before you read it.** A header above
+  the file prints the open criteria marked `(you)` in full and counts everything
+  else, then the file follows byte for byte. The file cannot show this on its
+  own: the criteria are one flat list in one shape, and the two that need a
+  person look exactly like the seven that do not.
+
 ## [0.2.0rc3] - 2026-08-07
 
 ### Fixed
