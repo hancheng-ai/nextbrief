@@ -214,6 +214,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The plugin manifests now cite a `$schema` that exists.**
+  `.claude-plugin/marketplace.json` shipped
+  `https://anthropic.com/claude-code/marketplace.schema.json` from the day it
+  was written, and that URL has never resolved -- so the file carried the one
+  field whose presence says it has been validated, while never having been
+  validated against anything. `plugin.json` claimed no schema at all, which was
+  the more honest of the two states and also useless.
+
+  Both now point at the SchemaStore schemas generated from Claude Code's own
+  definitions: `claude-code-marketplace.json` and
+  `claude-code-plugin-manifest.json`. Checked rather than guessed -- each
+  returns 200 with a draft-07 schema whose `$id` is the URL it was fetched
+  from, the SchemaStore catalog maps them to `**/.claude-plugin/marketplace.json`
+  and `**/.claude-plugin/plugin.json`, and Anthropic's own repository replaced
+  the dead link with the same URL. A plausible-looking `$schema` that also 404s
+  would be worse than none, because it looks like the check was done.
+
+  `tests/test_plugin.py` pins the two URLs *per file*, because they differ by
+  one word and the copy-paste that swaps them resolves, validates, and validates
+  against the wrong shape. It also repeats the required-field sets those schemas
+  declare, since `$schema` is ignored at load time and nothing at runtime would
+  notice a manifest that failed it.
+
+  Neither manifest gains a `version`, deliberately. With none set, the plugin's
+  version resolves to the source repository's commit SHA, so an installed plugin
+  updates whenever this repository moves; an explicit version would mean users
+  receive a skill fix only when the field is bumped, and the skill changes
+  between releases. `claude plugin validate` passes with a warning about it;
+  only `--strict` treats that warning as an error.
+
 - **A release bump no longer deletes the previous release from the README.**
   `scripts/bump-version.sh` sweeps the new version through the READMEs and the
   Homebrew formula, because it also lives in badges, install commands and

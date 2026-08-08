@@ -276,14 +276,90 @@ class TheManifests(unittest.TestCase):
             self.assertTrue((root / "skills").is_dir(),
                             "%s points at %s, which ships no skills" % (entry.get("name"), source))
 
-    def test_a_version_here_must_be_one_the_bump_script_moves(self):
-        """Neither manifest carries a version today, and that is the point.
+    def test_each_manifest_points_at_the_schema_for_its_own_shape(self):
+        """A `$schema` that 404s is worse than no `$schema` at all.
 
-        `scripts/bump-version.sh` rewrites three literals and sweeps three more
-        files. A fourth version string outside both lists is the one nothing
-        moves, and it goes stale at the next release while looking exactly like
-        the others. This does not forbid versioning the plugin -- it requires
-        that whoever does it teaches the bump script first.
+        `marketplace.json` shipped `https://anthropic.com/claude-code/
+        marketplace.schema.json` from the day it was written. That URL has never
+        resolved -- Anthropic's own template carried it for eighteen months and
+        replaced it for the same reason. So the manifest had never been checked
+        against anything, while carrying the one field whose presence says it
+        had. `plugin.json` never claimed a schema at all, which was the more
+        honest of the two states.
+
+        The real ones are hosted by SchemaStore, generated from Claude Code's
+        own definitions. Verified on 2026-08-08 rather than assumed: both return
+        200 with a draft-07 schema whose `$id` is the URL it was fetched from;
+        the SchemaStore catalog maps them to `**/.claude-plugin/plugin.json` and
+        `**/.claude-plugin/marketplace.json` respectively; the plugins reference
+        prints the first as the example value for this very field; and
+        `anthropics/claude-code` ships the second in its own marketplace file.
+
+        Pinned as an exact pair rather than a pattern, and pinned per file,
+        because the two URLs differ by one word and the copy-paste that swaps
+        them still resolves, still validates, and validates against the wrong
+        shape -- which is the same failure as the dead link, minus the tell.
+        A test cannot fetch a URL without making the suite depend on somebody
+        else's uptime, so what it can do is refuse anything nobody has checked.
+        """
+        expected = {
+            "plugin.json": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+            "marketplace.json": "https://json.schemastore.org/claude-code-marketplace.json",
+        }
+        for path, doc in ((PLUGIN_JSON, self._plugin()),
+                          (MARKETPLACE_JSON, self._marketplace())):
+            want = expected[path.name]
+            got = doc.get("$schema")
+            self.assertEqual(
+                want, got,
+                "%s cites %r. Only the two SchemaStore URLs have been checked to "
+                "exist and to describe the right file; anything else is a claim "
+                "of validation nobody has verified." % (path.name, got))
+
+    def test_the_manifests_hold_what_those_schemas_require(self):
+        """The half of the schema that can be checked without the network.
+
+        Both schemas are `required`-driven and short about it: a plugin manifest
+        needs `name`, a marketplace needs `name`, `owner` and `plugins`, and each
+        listed plugin needs `name` and `source`. Repeated here so that pointing
+        at a schema is not the whole of the claim -- `$schema` is ignored at load
+        time, so nothing at runtime would notice a manifest that failed it.
+        """
+        plugin, market = self._plugin(), self._marketplace()
+        self.assertTrue(str(plugin.get("name") or "").strip(),
+                        "plugin.json has no name, the one field the schema requires")
+        for key in ("name", "owner", "plugins"):
+            self.assertIn(key, market, "marketplace.json is missing required %r" % key)
+        self.assertTrue(str((market["owner"] or {}).get("name") or "").strip(),
+                        "marketplace.json owner has no name")
+        self.assertTrue(market["plugins"], "marketplace.json lists no plugins")
+        for entry in market["plugins"]:
+            for key in ("name", "source"):
+                self.assertIn(key, entry,
+                              "marketplace entry %r is missing required %r"
+                              % (entry.get("name"), key))
+
+    def test_a_version_here_must_be_one_the_bump_script_moves(self):
+        """Neither manifest carries a version today, and there are two reasons.
+
+        The second one is the one that would change somebody's mind, so it goes
+        first. `source` here is `./` in a git-hosted marketplace, and with no
+        `version` set the plugin's version resolves to the source's commit SHA --
+        which means users get an update whenever this repository moves. Setting
+        an explicit `version` swaps that for "users get updates only when you
+        bump this field", and the thing being shipped is a skill body that
+        changes between releases. Pinned to the package version, a skill fix
+        landing between tags would reach nobody, and `/plugin update` would tell
+        them they were already current. That is a worse default than the warning
+        it silences: `claude plugin validate` passes with a warning about the
+        missing version, and only `--strict` turns that into an exit 1.
+
+        And the older reason, which still holds: `scripts/bump-version.sh`
+        rewrites three literals and sweeps three more files. A fourth version
+        string outside both lists is the one nothing moves, and it goes stale at
+        the next release while looking exactly like the others. This does not
+        forbid versioning the plugin -- it requires that whoever does it teaches
+        the bump script first, and decides about the paragraph above.
         """
         bump = (REPO_ROOT / "scripts" / "bump-version.sh").read_text(encoding="utf-8")
         for path, doc in ((PLUGIN_JSON, self._plugin()),

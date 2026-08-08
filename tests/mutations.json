@@ -257,6 +257,40 @@
       "expect": "'--workspace' not found"
     },
     {
+      "label": "the dead $schema URL put back",
+      "file": ".claude-plugin/marketplace.json",
+      "old": "\"$schema\": \"https://json.schemastore.org/claude-code-marketplace.json\",",
+      "new": "\"$schema\": \"https://anthropic.com/claude-code/marketplace.schema.json\",",
+      "select": "test_each_manifest_points_at_the_schema_for_its_own_shape",
+      "expect": "anthropic.com/claude-code/marketplace.schema.json",
+      "note": "The state this repository shipped in for its whole life. It reads as validated and has never resolved."
+    },
+    {
+      "label": "the two $schema URLs swapped between the files",
+      "file": ".claude-plugin/plugin.json",
+      "old": "\"$schema\": \"https://json.schemastore.org/claude-code-plugin-manifest.json\",",
+      "new": "\"$schema\": \"https://json.schemastore.org/claude-code-marketplace.json\",",
+      "select": "test_each_manifest_points_at_the_schema_for_its_own_shape",
+      "expect": "claude-code-marketplace.json",
+      "note": "Both URLs are real and both return 200, so a fetch proves nothing here. Only the pairing does."
+    },
+    {
+      "label": "the marketplace loses a field its schema requires",
+      "file": ".claude-plugin/marketplace.json",
+      "old": "  \"owner\": {\n    \"name\": \"Hancheng Wang\"\n  },",
+      "new": "  \"holder\": {\n    \"name\": \"Hancheng Wang\"\n  },",
+      "select": "test_the_manifests_hold_what_those_schemas_require",
+      "expect": "missing required 'owner'"
+    },
+    {
+      "label": "a listed plugin with nowhere to install from",
+      "file": ".claude-plugin/marketplace.json",
+      "old": "      \"source\": \"./\",",
+      "new": "      \"origin\": \"./\",",
+      "select": "test_the_manifests_hold_what_those_schemas_require",
+      "expect": "missing required 'source'"
+    },
+    {
       "label": "a first sentence that never ends inside the cap",
       "file": ".claude-plugin/plugin.json",
       "old": "The portfolio context an agent should read before it starts work:",
