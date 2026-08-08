@@ -257,6 +257,32 @@
       "expect": "'--workspace' not found"
     },
     {
+      "label": "the privacy page softened into a retention promise",
+      "file": "PRIVACY.md",
+      "old": "None. There is no service to write to, no account to close, and nothing on the",
+      "new": "We retain your data only as long as necessary. There is nothing on the",
+      "select": "test_it_promises_nothing_it_would_need_a_server_to_keep",
+      "expect": "we retain",
+      "note": "The exact edit somebody makes to sound professional. There is no server, so the sentence is not reassuring, it is false."
+    },
+    {
+      "label": "the privacy page stops naming the command that sends nothing",
+      "file": "PRIVACY.md",
+      "old": "**`nextbrief v0` runs stages 1 and 3 and sends nothing.**",
+      "new": "**one command runs stages 1 and 3 and sends nothing.**",
+      "select": "test_it_names_both_paths_out_and_the_control_over_them",
+      "expect": "never mentions 'v0'",
+      "note": "Without the name, the page says a choice exists without saying how to take it."
+    },
+    {
+      "label": "the privacy page unlinked from the Chinese README",
+      "file": "README.zh.md",
+      "old": "\n\n[PRIVACY.md](PRIVACY.md) 把同一件事写成了一页政策",
+      "new": "\n\n这一段就是全部说明",
+      "select": "test_it_is_linked_from_the_documents_that_would_send_someone_to_it",
+      "expect": "README.zh.md never links PRIVACY.md"
+    },
+    {
       "label": "the mark dropped from the Chinese README",
       "file": "README.zh.md",
       "old": "<p align=\"center\">\n  <img src=\"packaging/icon/nextbrief.svg\" alt=\"\" width=\"96\" height=\"96\">\n</p>\n\n",

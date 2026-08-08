@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PRIVACY.md`, and it does not say "nothing leaves your machine".** That
+  sentence writes itself for a local tool and is false twice here: stage 2 sends
+  `state/digest.json` to whichever model you configured, and `nextbrief probe`
+  fetches URLs your own registry declares. The page says which is which, that
+  `probe` is opt-in per run and never part of the nightly job, that `nextbrief
+  v0` sends nothing at all, and what the digest actually carries — paths, commit
+  subjects and prose you wrote, not the contents of your source files. It also
+  says what `privacy.never_read` does *not* cover: it is a path filter rather
+  than a content filter, it is not retroactive, and it has nothing to do with
+  `probe`. [SECURITY.md](SECURITY.md) remains the detailed version and wins
+  wherever the two could be read differently.
+
+  No retention or deletion policy is claimed, because there is no server to
+  retain anything — and a test refuses the phrases that would imply one, a
+  negated mention included. The first draft said there was nothing to "request
+  deletion" from, which is true and still the wrong sentence: a reader takes
+  "we do not retain your data beyond 30 days" as a promise about a system that
+  exists.
+
+- **The icon appears in the READMEs.** `packaging/icon/` has held the artwork
+  since the icon was built and neither README had ever shown any of it. The
+  colour mark, not the monochrome one: the latter is drawn in `currentColor`,
+  which through an `<img>` resolves to black and disappears on GitHub's dark
+  theme. Both files were rendered and composited over white and over `#0d1117`
+  to check, and a test refuses a mark that depends on `currentColor` so the
+  obvious-looking fix for dark mode cannot be applied by mistake.
+
 - **nextbrief installs as a Claude Code plugin, and the skill is read-only by
   lint.** `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
   make this repository its own marketplace, and the one skill it ships,

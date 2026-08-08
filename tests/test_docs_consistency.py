@@ -518,3 +518,85 @@ class TheMarkAtTheTop(unittest.TestCase):
                 self.assertNotIn("http", line,
                                  "%s loads the mark over the network: %s"
                                  % (doc, line.strip()))
+
+
+class ThePrivacyPolicy(unittest.TestCase):
+    """`PRIVACY.md` exists for a form field, which is exactly why it needs a test.
+
+    A policy written once for a submission and never read again is the kind of
+    document that goes quietly wrong: the commands it names get renamed, and
+    somebody eventually softens it into the reassuring version. Both are cheap
+    to catch and expensive to publish.
+    """
+
+    PRIVACY = REPO_ROOT / "PRIVACY.md"
+
+    # Claims that would be false the moment they were written. There is no
+    # server, so there is nothing to retain, nothing to delete on request, and
+    # no third party to share with. A policy that says otherwise is not
+    # reassuring, it is the first untrue thing this repository has published.
+    #
+    # A blunt substring match, and a negated mention trips it on purpose. It
+    # already caught a sentence in the first draft that said there was nothing
+    # to *request deletion* from -- true, and still the wrong sentence, because
+    # "we do not retain your data beyond 30 days" reads to almost everyone as a
+    # promise about a system that exists. The way past this guard is to not
+    # raise the subject.
+    UNTRUE_IF_WRITTEN = (
+        "retention period",
+        "we retain",
+        "we store your",
+        "request deletion",
+        "delete your data",
+        "data controller",
+        "third parties",
+        "we collect",
+    )
+
+    def _text(self):
+        self.assertTrue(self.PRIVACY.is_file(),
+                        "PRIVACY.md is missing; the plugin directory's privacy "
+                        "field has nowhere to point")
+        return self.PRIVACY.read_text(encoding="utf-8")
+
+    def test_it_is_linked_from_the_documents_that_would_send_someone_to_it(self):
+        for doc in ("README.md", "README.zh.md", "SECURITY.md"):
+            self.assertIn("PRIVACY.md",
+                          (REPO_ROOT / doc).read_text(encoding="utf-8"),
+                          "%s never links PRIVACY.md" % doc)
+
+    def test_it_names_both_paths_out_and_the_control_over_them(self):
+        """"Nothing leaves your machine" is the sentence a privacy page for a
+        local tool writes itself, and here it is false twice over."""
+        text = self._text()
+        for claim, why in (
+            ("digest.json", "the file stage 2 sends to a model"),
+            ("probe", "the one command that fetches, and only when run"),
+            ("v0", "the command that sends nothing, which is what makes the "
+                   "other two a choice"),
+            ("privacy.never_read", "the reader's own control over what is opened"),
+        ):
+            self.assertIn(claim, text,
+                          "PRIVACY.md never mentions %r -- %s" % (claim, why))
+
+    def test_the_commands_it_names_are_commands_that_exist(self):
+        """A policy naming a command that was renamed is a policy describing a
+        program nobody is running."""
+        from nextbrief.cli import build_parser
+
+        known = set()
+        for action in build_parser()._subparsers._group_actions:
+            known |= set(action.choices)
+        for named in ("v0", "probe", "run"):
+            self.assertIn(named, known,
+                          "PRIVACY.md describes `nextbrief %s`, which the CLI no "
+                          "longer accepts" % named)
+
+    def test_it_promises_nothing_it_would_need_a_server_to_keep(self):
+        text = self._text().lower()
+        found = [p for p in self.UNTRUE_IF_WRITTEN if p in text]
+        self.assertEqual(
+            [], found,
+            "PRIVACY.md makes claims that require an operator on the other end: "
+            "%s. There is no server, so each of these is either meaningless or "
+            "false." % found)

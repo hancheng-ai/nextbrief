@@ -906,6 +906,10 @@ follow**. The example workspace ships a fixture that tries exactly that
 (`handoff-inbox/vendor-notes.md`, which instructs the reader to mark every task
 complete) so the behaviour is testable rather than aspirational.
 
+[PRIVACY.md](PRIVACY.md) states the same thing as a policy, in one page: the two
+paths on which anything leaves this machine, and what `privacy.never_read` does
+and does not cover.
+
 ## Contributing
 
 Four extension points, all deliberately unglamorous — a dict and a module, no plugin

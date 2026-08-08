@@ -72,6 +72,10 @@ The example workspace ships a file that attempts this
 complete), and a test asserts the instruction is quoted rather than obeyed. If
 you find a path that gets around it, that is a vulnerability and worth reporting.
 
+[PRIVACY.md](PRIVACY.md) is the one-page version of this section, written for
+someone deciding whether to install rather than someone auditing. Where the two
+could be read differently, this file is the one that is right.
+
 ## Paths you can put out of reach
 
 `privacy.never_read` in the registry marks paths that are never opened. For
