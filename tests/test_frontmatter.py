@@ -94,6 +94,49 @@ class Parsing(unittest.TestCase):
         self.assertNotIn("id: NA-0001", self.body)
 
 
+class CarriageReturns(unittest.TestCase):
+    """The same document with CRLF endings has to parse to the same thing.
+
+    Not reachable through a file read, which is the trap: every ``read_text`` in
+    the package gets Python's universal-newline translation for free, so a CRLF
+    file on disk arrives here already normalised. A test that wrote a CRLF file
+    and read it back would pass without the fix and prove nothing.
+
+    The caller that does hand this function untranslated bytes is
+    ``render._baseline_by_id``, which parses ``git show HEAD:<item>`` straight
+    off the subprocess pipe. A repository checked out on Windows -- or anywhere
+    with ``core.autocrlf`` on -- has CRLF in that blob, and the write-permission
+    gate compares what comes back against a ``read_text`` parse of the same
+    file. Two parses of one file that disagree about line endings is the whole
+    problem, so the property asserted here is the parser's own: the result must
+    not depend on which ending the caller happened to have.
+    """
+
+    def setUp(self):
+        self.lf = parse_frontmatter(DOC)
+        self.crlf = parse_frontmatter(DOC.replace("\n", "\r\n"))
+
+    def test_the_body_does_not_start_with_the_closing_markers_own_newline(self):
+        # `text[end + 4:]` hardcodes len("\n---"), so under CRLF the slice
+        # starts on the delimiter's own \r, and `.lstrip("\n")` cannot remove
+        # it. The body arrives with the marker's tail welded to the front.
+        _fields, body = self.crlf
+        self.assertTrue(body.startswith("# Body"), repr(body[:24]))
+
+    def test_a_block_scalar_does_not_keep_its_carriage_returns(self):
+        # The accumulator appends line content verbatim and joins with "\n", so
+        # every line but the last keeps the \r that split("\n") left behind.
+        # `.strip()` only reaches the two ends, so an interior one survives.
+        fields, _body = self.crlf
+        self.assertEqual(
+            fields["notes"],
+            "Two paragraphs of context that belong to the field,\nnot to the body.",
+        )
+
+    def test_the_parse_is_identical_either_way(self):
+        self.assertEqual(self.crlf, self.lf)
+
+
 class TheDocumentedSchema(unittest.TestCase):
     """The shared fixture, parsed as the rest of the engine will parse it."""
 
