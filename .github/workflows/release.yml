@@ -346,9 +346,27 @@ jobs:
   # ---------------------------------------------------------------------------
   homebrew:
     name: formula digest PR
-    # No `if`: a skipped or failed github-release skips this too, which is what
-    # should happen. A digest for an asset nobody can download is not useful.
     needs: [build, github-release]
+    # This `if` is what makes the job reachable at all. Observed on v0.2.0:
+    # `build` succeeded, `github-release` succeeded, and this was still SKIPPED --
+    # because a skip propagates transitively through the graph, and `always()`
+    # rescues only the job that carries it, not the ones downstream of it.
+    # `github-release` needs [build, testpypi, pypi] and uses always() to survive
+    # whichever publish job did not run. That rescue does not reach here.
+    #
+    # It was not an edge case. Exactly one publish job ever runs -- testpypi on a
+    # prerelease, pypi on a final, neither with publishing off -- so an upstream
+    # job is ALWAYS skipped, so this job could never run on any release at all.
+    # It was written, fixture-tested, and reviewed for whether it could break the
+    # publish. Nobody asked whether it could execute.
+    #
+    # Both dependencies are named explicitly rather than reusing the
+    # `!contains(needs.*.result, 'failure')` form above: this job pushes a branch
+    # and opens a pull request, so it must run only when the release it describes
+    # actually happened -- not merely when nothing failed.
+    if: >-
+      always() && needs.build.result == 'success'
+      && needs.github-release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write         # push the branch

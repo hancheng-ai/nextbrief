@@ -810,3 +810,83 @@ class ThePrivacyPolicy(unittest.TestCase):
             "PRIVACY.md makes claims that require an operator on the other end: "
             "%s. There is no server, so each of these is either meaningless or "
             "false." % found)
+
+
+def _release_jobs():
+    """`{name: {"needs": [...], "if": "..."}}` read out of release.yml as text.
+
+    Text, not `yaml`, because the pinned interpreter this suite runs on --
+    /usr/bin/python3, 3.9.6 -- has no PyYAML, and adding a test-only dependency
+    to check a zero-dependency project is a poor trade. Jobs sit at two spaces
+    and their keys at four, which is enough structure for this.
+    """
+    jobs, cur = {}, None
+    inside = False
+    for line in RELEASE_WORKFLOW.read_text(encoding="utf-8").splitlines():
+        if re.match(r"^jobs:\s*$", line):
+            inside = True
+            continue
+        if not inside or not line.strip() or line.lstrip().startswith("#"):
+            continue
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if m:
+            cur = m.group(1)
+            jobs[cur] = {"needs": [], "if": ""}
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"^    needs:\s*\[(.*)\]\s*$", line)
+        if m:
+            jobs[cur]["needs"] = [n.strip() for n in m.group(1).split(",") if n.strip()]
+            continue
+        if re.match(r"^    if:", line):
+            jobs[cur]["if"] = line.split(":", 1)[1].strip()
+            continue
+        if jobs.get(cur) and jobs[cur]["if"] and re.match(r"^      \S", line):
+            jobs[cur]["if"] += " " + line.strip()
+    return jobs
+
+
+class AJobDownstreamOfAlwaysMustCarryAlways(unittest.TestCase):
+    """A skip propagates through the graph; `always()` rescues only its own job.
+
+    Found the expensive way on v0.2.0. The `homebrew` job needed `[build,
+    github-release]`, both of which SUCCEEDED, and it was skipped anyway --
+    because `github-release` had itself been rescued from a skipped `testpypi`
+    by `always()`, and that rescue does not reach downstream.
+
+    It could never have run. Exactly one publish job executes per release, so
+    something upstream is always skipped. The job was written, fixture-tested and
+    reviewed for whether it could break the publish; nobody asked whether it
+    could execute, and a job that never runs looks exactly like one with nothing
+    to do.
+    """
+
+    def test_every_such_job_has_it(self):
+        jobs = _release_jobs()
+        self.assertIn("homebrew", jobs, "release.yml no longer parses as expected")
+        rescued = {n for n, j in jobs.items() if "always()" in j["if"]}
+        missing = [
+            "%s needs %s" % (name, sorted(set(job["needs"]) & rescued))
+            for name, job in jobs.items()
+            if set(job["needs"]) & rescued and "always()" not in job["if"]
+        ]
+        self.assertEqual(
+            [], missing,
+            "these jobs depend on a job that uses always() but do not use it "
+            "themselves, so they are skipped whenever that rescue fires -- which "
+            "for a release is every time: %s" % missing)
+
+    def test_the_reader_can_actually_see_the_conditions(self):
+        """The guard above passes trivially if the parser returns nothing.
+
+        Asserted separately because a silent parse failure and a clean repo are
+        the same green -- and this test file was itself briefly deleted by a
+        `git checkout --` during the work that added it, which reported
+        `Ran 0 tests ... OK`.
+        """
+        jobs = _release_jobs()
+        self.assertGreaterEqual(len(jobs), 5, jobs)
+        self.assertIn("always()", jobs["github-release"]["if"])
+        self.assertIn("always()", jobs["homebrew"]["if"])
+        self.assertEqual(["build", "github-release"], jobs["homebrew"]["needs"])
