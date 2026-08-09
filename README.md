@@ -642,10 +642,16 @@ PyPI.
 <!-- Append-only. Every row states what a release that already happened
      contained, with its own anchor and its own date, so scripts/bump-version.sh
      must not sweep the new version through it. Add a row here when you cut a
-     release; never edit one. -->
+     release; never edit one.
+
+     The Unreleased row carries no link, and that is the one deliberate gap in
+     this table. Every other row points into the tag it describes, where its
+     anchor is guaranteed to exist. Unreleased has no tag: pinned, it lands on a
+     section that is empty at every tag by construction, and on `main` it is the
+     one thing test_no_link_is_pinned_to_a_branch exists to refuse. -->
 | Version | Published | What it brought |
 |---|---|---|
-| [Unreleased](https://github.com/hancheng-ai/nextbrief/blob/v0.2.0/CHANGELOG.md#unreleased) | — | — |
+| Unreleased | — | — |
 | [0.2.0](https://github.com/hancheng-ai/nextbrief/blob/v0.2.0/CHANGELOG.md#020---2026-08-09) | 2026-08-09 | The first release on PyPI proper, so `pip install nextbrief` resolves — every version before it carried a pre-release segment and lived on TestPyPI, which is why the plugin shipped a week earlier handed people an install command that returned "no matching distribution". Both READMEs lose the index URLs and the pinned versions that cost, keep the pinned interpreter that does not, and now state which index a version routes to rather than which one today's happens to be on. They also open on an excerpt of a brief the tool actually printed, re-rendered on every build so it cannot quietly stop matching, above a mark that resolves on PyPI instead of rendering as a broken image there. |
 | [0.2.0rc4](https://github.com/hancheng-ai/nextbrief/blob/v0.2.0/CHANGELOG.md#020rc4---2026-08-08) | 2026-08-08 | Closing an item stopped asking you about things you cannot answer. Criteria now carry `(agent)` or `(you)`, and `done` only asks about the second kind; `-` marks one the design moved past, so it is neither claimed as done nor drafted into a follow-up nobody meant to create. Plus `nextbrief probe` for projects whose output never lands on disk, `inventory.json` as a versioned contract, and a Claude Code plugin whose skill is read-only by lint and says so when the engine is missing rather than failing at `command not found`. |
 | [0.2.0rc3](https://github.com/hancheng-ai/nextbrief/blob/v0.2.0/CHANGELOG.md#020rc3---2026-08-07) | 2026-08-07 | An interrupted `done` no longer closes the item: Ctrl-C shared a branch with EOF, so stopping the command still wrote `human_confirmed: true` and committed. The engine stopped counting its own `BRIEF.md` and `log/` as the project's uncommitted work, which is what kept `check` from ever settling. Plus headers on every command that cannot be undone, and drafts for the two closing questions. |
