@@ -384,14 +384,14 @@ class TheContractDocument(unittest.TestCase):
         return SCHEMA_DOC.read_text(encoding="utf-8")
 
     def _field_rows(self):
-        """Rows of the tables headed `| Field | Promise | …`, as (name, promise).
+        """Rows of the tables headed `| Field | Values | …`, as (name, column).
 
         Only those tables: the value-domain tables are headed `| Value |` and
         their first cell is a `kind` value, not a field name.
         """
         rows, inside = [], False
         for line in self._text().splitlines():
-            if line.startswith("| Field | Promise |"):
+            if line.startswith("| Field | Values |"):
                 inside = True
                 continue
             if not inside:
@@ -430,14 +430,18 @@ class TheContractDocument(unittest.TestCase):
                          "docs/INVENTORY_SCHEMA.md and the shipped field set "
                          "disagree: %s" % sorted(documented ^ promised))
 
-    def test_every_field_is_marked_stable_or_may_change(self):
-        # The whole reason a consumer reads this file. A field with no promise
-        # against it is one they cannot make a decision about.
+    def test_every_field_says_who_owns_its_vocabulary(self):
+        # The whole reason a consumer reads this file, and the one thing
+        # `schema_version` cannot tell them. The version covers shape, equally
+        # for every field; what it cannot cover is a value set that lives in the
+        # user's own config and moves without any bump at all. A field with no
+        # answer in this column is one a consumer cannot decide whether to
+        # branch on.
         rows = self._field_rows()
         self.assertTrue(rows)
-        for name, promise in rows:
-            self.assertIn(promise, ("stable", "may change"),
-                          "%r carries no usable promise (%r)" % (name, promise))
+        for name, owner in rows:
+            self.assertIn(owner, ("fixed here", "not ours"),
+                          "%r does not say who owns its value set (%r)" % (name, owner))
 
     def test_the_kind_domains_are_pinned_and_match_the_code(self):
         self.assertEqual(self._domain_values("### `description.kind`"),

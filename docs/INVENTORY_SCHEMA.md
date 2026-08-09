@@ -51,63 +51,74 @@ only promise that they keep matching.
 
 ---
 
-## The promise column
+## The value-vocabulary column
 
-> **The `stable` tier below is a proposal awaiting the owner's sign-off.** It is
-> written out as a concrete table rather than left open because ratifying a table
-> is a five-minute job and answering "which fields should be stable?" is not.
-> Until it is signed off, treat `stable` as "intended stable".
+**This column is not about shape.** `schema_version` already covers shape, and it
+covers every field equally: nothing here can be renamed, removed, retyped or
+added without a bump, so *within a version* the structure is fixed throughout.
+A per-field stability tier would only restate that.
 
-- **stable** — depend on it. It will not be renamed, removed or retyped without
-  a `schema_version` bump.
-- **may change** — read it if you like, but branch on it at your own risk. These
-  are fields that are derived heuristically, or whose vocabulary lives in the
-  user's own config rather than in this repo.
+What a version number cannot tell you is **who decides the values**. That is what
+this column is for.
 
-Every key documented here is **always present**. `null` means "we looked and
-there was nothing there"; a *missing* key means you are reading a different
-`schema_version` than you think.
+- **fixed here** — the set of values this field can take is defined in this
+  repository. Safe to compare, join on, or switch over exhaustively.
+- **not ours** — the value arrives from the user's own config, or from a
+  heuristic reading their files. Safe to display; **unsafe to branch on**. The
+  shape will not move without a version bump, and the vocabulary will move
+  without one, because it was never ours to freeze.
+
+The distinction is load-bearing rather than tidy. `status` is a plain string in
+both versions of this document, and its vocabulary **has already been renamed
+once** — `tier` became `status` plus `positioning`. No `schema_version` bump
+announced that to a consumer switching on the old words, because the *document*
+did not change shape; somebody's registry did. That failure is invisible to
+versioning by construction, and this column is the only warning of it.
+
+Every key documented here is **always present** regardless of column. `null`
+means "we looked and there was nothing there"; a *missing* key means you are
+reading a different `schema_version` than you think.
 
 ---
 
 ## The envelope
 
-| Field | Promise | Type, and what it is |
+| Field | Values | Type, and what it is |
 |---|---|---|
-| `schema_version` | stable | integer. The version of this contract. |
-| `generated_at` | stable | string. ISO-8601 local time, second precision, no zone suffix. Copied from the snapshot's run, so a brief and an inventory produced by the same run carry the same instant. |
-| `root` | may change | string. Absolute path to the directory the projects were sensed under, on the machine that produced the file. Meaningless anywhere else, and the field that would have to change if an inventory ever covered more than one root. |
-| `projects` | stable | array of objects, **sorted by `id`**, one per sensed project. May be empty. Never `null`. |
+| `schema_version` | fixed here | integer. The version of this contract. |
+| `generated_at` | fixed here | string. ISO-8601 local time, second precision, no zone suffix. Copied from the snapshot's run, so a brief and an inventory produced by the same run carry the same instant. |
+| `root` | not ours | string. Absolute path to the directory the projects were sensed under, on the machine that produced the file. Meaningless anywhere else, and the field that would have to change if an inventory ever covered more than one root. |
+| `projects` | fixed here | array of objects, **sorted by `id`**, one per sensed project. May be empty. Never `null`. |
 
 ## A project entry
 
-| Field | Promise | Type, and what it is |
+| Field | Values | Type, and what it is |
 |---|---|---|
-| `id` | stable | string. The join key — the same id the backlog, the digest and the brief use. |
-| `name` | stable | string. Display name; falls back to `id`. |
-| `path` | stable | string or `null`. The project's directory **relative to `root`**. `null` when the project declares no path. |
-| `description` | stable | object. What this project is, plus where that sentence came from. See below. |
-| `capability` | stable | object. What was built here that generalises past its current purpose. See below. |
-| `goal` | may change | string or `null`. One line, free text, from the registry's `goal_one_line`. The field and the registry key already disagree on their name, which is exactly the kind of thing that gets tidied. |
-| `stacks` | stable | array of strings, sorted, from the manifests actually present: `node`, `python`, `claude-plugin`, `rust`, `php`, `go`. May be empty. |
-| `run` | may change | array of strings, at most 8. How a person runs this, lifted from `package.json` scripts (first 6, sorted) and `pyproject.toml` entry points. Heuristic and capped, so its contents are a convenience rather than a promise. |
-| `declared` | stable | boolean. `true` if the owner listed this project in the registry, `false` if discovery found it. The difference matters: one is a decision, the other is a directory. |
-| `status` | may change | string or `null`. The project's lifecycle tier — conventionally `active`, `maintenance`, `frozen`, `done`. **Do not switch exhaustively on it**: the vocabulary is scored from the user's own `config.jsonc` and has been renamed once already. |
-| `positioning` | may change | string or `null`. Free text the owner typed about where this sits in the portfolio. |
-| `serves` | stable | array of strings. Project ids this one serves. Empty array, never `null`. |
-| `needs` | stable | array of strings. Project ids this one depends on. Empty array, never `null`. |
-| `unlocks` | stable | array of strings. Project ids unblocked by this one. Empty array, never `null`. |
-| `has_git` | stable | boolean. Whether the project directory is a git repository. |
+| `id` | fixed here | string. The join key — the same id the backlog, the digest and the brief use. |
+| `name` | fixed here | string. Display name; falls back to `id`. |
+| `path` | fixed here | string or `null`. The project's directory **relative to `root`**. `null` when the project declares no path. |
+| `description` | fixed here | object. What this project is, plus where that sentence came from. See below. |
+| `capability` | fixed here | object. What was built here that generalises past its current purpose. See below. |
+| `goal` | not ours | string or `null`. One line, free text, from the registry's `goal_one_line`. The field and the registry key already disagree on their name, which is exactly the kind of thing that gets tidied. |
+| `stacks` | fixed here | array of strings, sorted, from the manifests actually present: `node`, `python`, `claude-plugin`, `rust`, `php`, `go`. May be empty. |
+| `run` | not ours | array of strings, at most 8. How a person runs this, lifted from `package.json` scripts (first 6, sorted) and `pyproject.toml` entry points. Heuristic and capped, so its contents are a convenience rather than a promise. |
+| `declared` | fixed here | boolean. `true` if the owner listed this project in the registry, `false` if discovery found it. The difference matters: one is a decision, the other is a directory. |
+| `status` | not ours | string or `null`. The project's lifecycle tier — conventionally `active`, `maintenance`, `frozen`, `done`. **Do not switch exhaustively on it**: the vocabulary is scored from the user's own `config.jsonc` and has been renamed once already. |
+| `positioning` | not ours | string or `null`. Free text the owner typed about where this sits in the portfolio. |
+| `serves` | fixed here | array of strings. Project ids this one serves. Empty array, never `null`. |
+| `needs` | fixed here | array of strings. Project ids this one depends on. Empty array, never `null`. |
+| `unlocks` | fixed here | array of strings. Project ids unblocked by this one. Empty array, never `null`. |
+| `has_git` | fixed here | boolean. Whether the project directory is a git repository. |
 
 ## `description` and `capability`
 
 Both are the same three fields, and the third one is the point.
 
-| Field | Promise | Type, and what it is |
+| Field | Values | Type, and what it is |
 |---|---|---|
-| `what` | stable | string or `null`. The sentence itself. `null` exactly when `kind` is `absent`. |
-| `kind` | stable | string, from a closed set. Where the sentence came from — see the domains below. |
-| `source` | stable | string or `null`. What to go and check: a filename like `package.json` or `README.md`, or the literal `registry`. `null` exactly when `kind` is `absent`. |
+| `what` | fixed here | string or `null`. The sentence itself. `null` exactly when `kind` is `absent`. |
+| `kind` | fixed here | string, from a closed set. Where the sentence came from — see the domains below. |
+| `source` | fixed here | string or `null`. What to go and check: a filename like `package.json` or `README.md`, or the literal `registry`. `null` exactly when `kind` is `absent`. |
 
 **Why the split is load-bearing.** "orchard is a tenancy API" is in its
 `package.json` and you can go and read it. "orchard is our flagship" is a thing a

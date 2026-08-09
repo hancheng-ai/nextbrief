@@ -115,6 +115,24 @@
       "expect": "init"
     },
     {
+      "label": "a documented field stops saying who owns its value set",
+      "file": "docs/INVENTORY_SCHEMA.md",
+      "old": "| `status` | not ours |",
+      "new": "| `status` | may change |",
+      "select": "test_every_field_says_who_owns_its_vocabulary",
+      "expect": "'status'",
+      "note": "The column answers a different question from the one it used to. `may change` is the old per-field stability tier, which `schema_version` already covered for every field equally -- so it reads plausible and says nothing."
+    },
+    {
+      "label": "a field table renamed out of the parser's sight",
+      "file": "docs/INVENTORY_SCHEMA.md",
+      "old": "| Field | Values | Type, and what it is |\n|---|---|---|\n| `schema_version` | fixed here | integer. The version of this contract. |",
+      "new": "| Field | Promise | Type, and what it is |\n|---|---|---|\n| `schema_version` | fixed here | integer. The version of this contract. |",
+      "select": "test_it_documents_exactly_the_fields_that_ship",
+      "expect": "schema_version",
+      "note": "The header is the parser's only anchor, so a renamed column drops a whole table silently -- the doc still renders, and the fields in it stop being checked against the shipped set."
+    },
+    {
       "label": "engine bumps the schema while the skill still says 1",
       "file": "src/nextbrief/inventory.py",
       "old": "INVENTORY_SCHEMA_VERSION = 1",
