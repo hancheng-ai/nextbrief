@@ -61,27 +61,49 @@ class Nextbrief < Formula
   # kind of string Homebrew's parser is entitled to read as `0.1.0-rc1`, and the
   # test block compares `version` against what the binary prints.
   version "0.2.0"
+  # The markers are the repository-wide "do not sweep this" fence, defined in
+  # scripts/bump-version.sh and spelled the same in every file it edits -- an
+  # HTML comment inside a Ruby one because the fence is a contract with that
+  # script, not with a markup language. It has to be here, and it is the whole
+  # reason this line can be trusted: `sha256-of:` names a *past* release, and
+  # the sweep is an unbounded replace of the previous version string. Bump 0.2.0
+  # to 0.3.0 with this line reading `sha256-of: 0.2.0` and the sweep rewrites it
+  # to `0.3.0` while the digest below stays 0.2.0's -- the comment then agrees
+  # with `version`, the test two paragraphs down stops looking, and the README
+  # goes on advertising a `brew install` that fails its checksum. That is this
+  # exact defect, restored to being invisible, one release after it was fixed.
+  # <!-- bump-version:skip:begin -->
   # sha256-of: 0.1.0rc14
+  # <!-- bump-version:skip:end -->
   #
   # Which release this digest was actually taken from, written down because it
   # cannot be derived and has already gone wrong. `version` is swept by
   # scripts/bump-version.sh; the digest cannot be, because it belongs to a file
   # that does not exist until the tag is pushed and the release job has built
-  # it. So the two drift apart on every bump and come back together in a second,
-  # manual commit -- and that second commit was skipped four releases running,
-  # leaving this stanza pointing at a `0.2.0rc*` tarball with the 0.1.0rc14
-  # digest. Nothing said so: the only check on this line asserted that it was
-  # sixty-four hex characters, which a four-release-old digest is.
+  # it. So the two drift apart on every bump and come back together in a second
+  # commit -- which was skipped four releases running, leaving this stanza
+  # pointing at a `0.2.0rc*` tarball with the 0.1.0rc14 digest. Nothing said so:
+  # the only check on this line asserted that it was sixty-four hex characters,
+  # which a four-release-old digest is.
   #
-  # While this line disagrees with `version`, the pinned install is not
-  # documented anywhere -- tests/test_docs_consistency.py holds both ends of
-  # that, so restoring the command means fixing the digest first. To fix it:
+  # That second commit is no longer a thing anyone has to remember: the
+  # `homebrew` job in .github/workflows/release.yml reads the digest out of the
+  # release's own SHA256SUMS and opens a pull request setting both lines. What
+  # it does by hand, if it ever has to be done by hand:
   #
   #   V=0.2.0
-  #   gh release view v$V --json assets \
-  #     --jq '.assets[]|select(.name|endswith(".tar.gz")).digest'
+  #   gh release view "v$V" --json assets \
+  #     --jq '.assets[]|select(.name|endswith(".tar.gz")).digest|sub("^sha256:";"")'
   #
-  # then update this line and the `sha256-of:` above it together.
+  # then update this line and the `sha256-of:` above it together. The `sub` is
+  # not decoration: `.digest` is `sha256:<hex>`, and pasted whole it produces
+  # `sha256 "sha256:210a..."` -- which is not sixty-four hex characters, so the
+  # one check this line already had would have caught it. The release job reads
+  # SHA256SUMS instead, where the digest is bare.
+  #
+  # While the two disagree, the pinned install is not documented anywhere --
+  # tests/test_docs_consistency.py holds both ends of that, so restoring the
+  # command means fixing the digest first.
   sha256 "5550a1a03ec914f38385efba46d65f7a2df64ce08d64b5970a9d54f301da25ad"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"

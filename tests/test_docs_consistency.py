@@ -26,6 +26,7 @@ CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
 FORMULA = REPO_ROOT / "packaging" / "homebrew" / "nextbrief.rb"
 ARCHITECTURE = REPO_ROOT / "docs" / "ARCHITECTURE.md"
+RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 
 TAG = "v%s" % __version__
 
@@ -173,6 +174,70 @@ class HomebrewFormula(unittest.TestCase):
                 "or keep documenting `--HEAD` until you can."
                 % (path.name, self.PINNED_INSTALL, __version__, digest_version,
                    __version__))
+
+    def test_exactly_one_line_records_where_the_digest_came_from(self):
+        """`_digest_version` reads the first match and so does the release job.
+
+        Two matching lines is not a conflict either of them would report -- they
+        would agree, on the wrong one, the moment a second was added above the
+        real one. The formula's surrounding prose discusses `sha256-of:` at
+        length, which is exactly the material a reformat turns into a line that
+        starts in the wrong column.
+        """
+        found = self.DIGEST_PROVENANCE.findall(read(FORMULA))
+        self.assertEqual(
+            len(found), 1,
+            "the formula has %d `  # sha256-of:` lines; the guard and the "
+            "release workflow both take the first and would silently agree on "
+            "it: %s" % (len(found), found))
+
+    # Both quote styles: the release job writes one of these patterns with
+    # single quotes (it contains a double quote) and the other with double.
+    RAW_STRING = re.compile(r"""r(['"])((?:(?!\1).)*)\1""")
+
+    def test_the_release_workflow_rewrites_the_lines_this_class_reads(self):
+        """The automation and the guard have to be talking about the same lines.
+
+        `.github/workflows/release.yml` opens a pull request setting the digest
+        and the `sha256-of:` line from the release's SHA256SUMS -- it is why the
+        manual rejoining commit is no longer something to forget, having been
+        forgotten for 0.2.0rc1 through rc4. It finds those two lines with its own
+        regexes, in another language, in a file nothing here imports.
+
+        So reindent the stanza, or rename the marker, and the plausible outcome
+        is not a loud failure: it is a release whose job cannot find the line,
+        or -- worse -- a guard that has stopped reading the line the job still
+        writes. Compiled and run against the real formula rather than compared
+        as text, because the two patterns are spelled differently on purpose and
+        agreeing on the spelling is not what matters.
+        """
+        patterns = [body for _, body in self.RAW_STRING.findall(read(RELEASE_WORKFLOW))
+                    if "sha256" in body]
+        self.assertEqual(
+            len(patterns), 2,
+            "expected the release workflow to target exactly the sha256 line "
+            "and the sha256-of line; found %d patterns: %s"
+            % (len(patterns), patterns))
+
+        formula = read(FORMULA)
+        for pattern in patterns:
+            hits = re.findall(pattern, formula)
+            self.assertEqual(
+                len(hits), 1,
+                "the release workflow rewrites %r, which matches %d lines in "
+                "the formula. It rewrites the first one it finds."
+                % (pattern, len(hits)))
+
+        # And specifically: the line the job rewrites is the line
+        # `_digest_version` reads. Nothing above pins them to each other.
+        provenance = [p for p in patterns if "sha256-of" in p]
+        self.assertEqual(len(provenance), 1, patterns)
+        theirs = re.search(provenance[0], formula)
+        mine = self.DIGEST_PROVENANCE.search(formula)
+        self.assertIsNotNone(mine)
+        self.assertEqual(
+            theirs.group(0), mine.group(0),
+            "the release workflow updates one line and this test reads another")
 
     def test_block_cannot_touch_the_users_real_workspace(self):
         """`nextbrief init` writes a pointer at $XDG_CONFIG_HOME/nextbrief/

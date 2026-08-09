@@ -136,12 +136,25 @@ The current release is `3.1.0rc1`.
 # find, so a fixture that files this under the invented name is a fixture the
 # sweep never reaches. The first run of this test did exactly that and the
 # live-reference assertion caught it.
+#
+# The fenced `sha256-of:` line is the second thing in this repository that is
+# append-only inside a swept file, and it arrived the same way the release
+# table did: added to a file the sweep already covered, without re-reading what
+# the sweep would do to it. It names the release a digest was taken from, so it
+# is a statement about the past in exactly the sense a history row is -- and
+# unlike a history row, sweeping it produces a comment that agrees with
+# `version` and is wrong, which is the one state the guard in
+# tests/test_docs_consistency.py cannot see.
 FORMULA = """\
 class Driftwood < Formula
   url "https://github.com/example-owner/driftwood/releases/download/v3.1.0rc1/driftwood-3.1.0rc1.tar.gz"
   version "3.1.0rc1"
+  # <!-- bump-version:skip:begin -->
+  # sha256-of: 3.1.0rc1
+  # <!-- bump-version:skip:end -->
+  sha256 "%s"
 end
-"""
+""" % ("d0" * 32)
 
 
 def unfenced(text: str) -> str:
@@ -256,6 +269,34 @@ class BumpTwice(TempCase):
                       "the second bump rewrote the 3.1.0rc1 release-history row")
         self.assertIn(row_rc2, readme,
                       "the second bump rewrote the 3.1.0rc2 release-history row")
+
+    def test_two_bumps_leave_the_formulas_digest_provenance_alone(self):
+        """The same invariant, on the line whose corruption is invisible.
+
+        A rewritten history row at least looks wrong to a reader who checks the
+        date beside it. A rewritten `sha256-of:` looks *right*: it agrees with
+        `version`, which is precisely the condition
+        tests/test_docs_consistency.py reads as "the digest is current" before
+        it allows the READMEs to print `brew install --build-from-source`. So
+        the sweep reaching this line does not merely damage a record -- it
+        disarms the check that exists to catch a stale digest, and re-documents
+        the failing install command that check was written for.
+
+        Two cycles rather than one, for the reason the row test gives: rc1 is
+        `previous` on the first bump and rc2 on the second, and a fence that
+        only holds for one release is not a fence.
+        """
+        self.bump("3.1.0rc2")
+        self.bump("3.1.0rc3")
+
+        formula = self._read("packaging/homebrew/nextbrief.rb")
+        self.assertIn(
+            "# sha256-of: 3.1.0rc1", formula,
+            "a bump rewrote the formula's `sha256-of:` line, so it now names a "
+            "release the digest below it did not come from")
+        # The digest itself is hex and has nothing for a version sweep to match,
+        # so this asserts the fence did not eat something else on its way past.
+        self.assertIn('sha256 "%s"' % ("d0" * 32), formula)
 
     def test_the_sweep_still_moves_every_live_reference(self):
         """The other half, and the reason the first half is not enough.
@@ -387,6 +428,32 @@ class TheBoundaryIsHonouredByThisRepository(unittest.TestCase):
                 stranded, [],
                 "%s cites past releases outside %s / %s, so the next bump will "
                 "rewrite them: %s" % (name, SKIP_BEGIN, SKIP_END, stranded))
+
+    def test_no_swept_file_names_a_digests_release_outside_the_markers(self):
+        """The fence around `sha256-of:` is load-bearing, so its absence is red.
+
+        Deleting the two marker lines from the formula is a one-line tidy-up
+        that looks like removing noise -- an HTML comment in a Ruby file, twice,
+        for no visible reason. Nothing else would notice: the formula still
+        parses, `brew install` still works today, and the guard in
+        tests/test_docs_consistency.py stays green right up until the next bump
+        quietly moves the line and takes that guard down with it.
+        """
+        for name in self._sweep_list():
+            path = REPO_ROOT / name
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            named = re.findall(r"(?m)^\s*# sha256-of: \S+$", text)
+            if not named:
+                continue
+            self.assertEqual(
+                re.findall(r"(?m)^\s*# sha256-of: \S+$", unfenced(text)), [],
+                "%s records which release a digest came from outside %s / %s, "
+                "so the next bump will rewrite that line to the new version "
+                "while the digest beside it stays where it is -- and a digest "
+                "whose provenance line agrees with `version` is one no test "
+                "can tell from a current one" % (name, SKIP_BEGIN, SKIP_END))
 
 
 if __name__ == "__main__":

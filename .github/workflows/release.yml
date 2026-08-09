@@ -326,3 +326,167 @@ jobs:
           else
             gh release create "$TAG" release/* "${flags[@]}"
           fi
+
+  # ---------------------------------------------------------------------------
+  # The Homebrew formula's `sha256` is the one version literal in this
+  # repository that scripts/bump-version.sh cannot sweep: it belongs to an asset
+  # that does not exist until the job above has built and published it. So the
+  # formula's `version` moved on every bump and its digest did not, and the two
+  # were meant to be rejoined by a second, manual commit.
+  #
+  # That commit was forgotten for 0.2.0rc1, rc2, rc3 and rc4 -- four consecutive
+  # releases documenting a `brew install --build-from-source` that failed its
+  # checksum on the first thing it did. It was forgotten because it is the only
+  # step in a release that no script performs and no test could see: the digest
+  # is sixty-four hex characters whether it is this release's or a year old.
+  #
+  # Nobody has to go and fetch it. It is already in SHA256SUMS, computed two
+  # jobs ago and verified again before the release was created. This job reads
+  # it from there and opens the rejoining commit as a pull request.
+  # ---------------------------------------------------------------------------
+  homebrew:
+    name: formula digest PR
+    # No `if`: a skipped or failed github-release skips this too, which is what
+    # should happen. A digest for an asset nobody can download is not useful.
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write         # push the branch
+      pull-requests: write    # open the PR
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      BRANCH: homebrew/v${{ needs.build.outputs.version }}
+    steps:
+      # The default branch, not the tag. The tag is where the artifact came
+      # from; the formula that needs fixing is the one people clone.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ needs.build.outputs.version }}
+          path: release/
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Rewrite the formula's digest and its provenance line
+        id: patch
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, sys
+
+          version = os.environ["VERSION"]
+          sdist = "nextbrief-%s.tar.gz" % version
+          sums = pathlib.Path("release/SHA256SUMS").read_text(encoding="utf-8")
+
+          # Parsed by filename rather than by line number: SHA256SUMS covers the
+          # sdist, the wheel and the zipapp, and the wheel's digest is just as
+          # much sixty-four hex characters as the right one is.
+          digest = None
+          for line in sums.splitlines():
+              fields = line.split()
+              # `sha256sum` writes "<digest>  <name>" and marks binary mode with
+              # a leading '*' on the name.
+              if len(fields) == 2 and fields[1].lstrip("*") == sdist:
+                  digest = fields[0]
+                  break
+          if not digest or not re.fullmatch(r"[0-9a-f]{64}", digest):
+              sys.exit("no usable %s digest in SHA256SUMS:\n%s" % (sdist, sums))
+
+          path = pathlib.Path("packaging/homebrew/nextbrief.rb")
+          before = path.read_text(encoding="utf-8")
+
+          # The formula on the default branch must already name this version,
+          # or the digest being written belongs to a different tarball than the
+          # `url` beside it -- which is the failure this job exists to prevent,
+          # not one to introduce from the other direction. It happens whenever a
+          # tag is cut from something other than the tip: an old tag re-run, or
+          # a release pushed after the next bump already landed.
+          if 'version "%s"' % version not in before:
+              sys.exit(
+                  "REFUSING TO PATCH\n"
+                  "  the default branch's formula does not say version %r.\n"
+                  "  Releasing a tag the default branch has already moved past\n"
+                  "  would pin this digest to somebody else's url. Fix the\n"
+                  "  formula by hand, or re-run this after the branches agree."
+                  % version)
+
+          text, n = re.subn(r'(?m)^  sha256 "[0-9a-f]{64}"$',
+                            '  sha256 "%s"' % digest, before, count=1)
+          if n != 1:
+              sys.exit("could not find the sha256 line -- update this job")
+
+          # Rewritten together with the digest, always. This line is what makes
+          # a stale digest visible to tests/test_docs_consistency.py, and a
+          # digest updated without it is the same invisible drift wearing a
+          # different mask.
+          text, n = re.subn(r"(?m)^  # sha256-of: \S+$",
+                            "  # sha256-of: %s" % version, text, count=1)
+          if n != 1:
+              sys.exit("could not find the `# sha256-of:` line -- update this job")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("changed=%s\n" % ("false" if text == before else "true"))
+              out.write("digest=%s\n" % digest)
+
+          path.write_text(text, encoding="utf-8")
+          print("%s\n  sha256-of: %s" % (digest, version))
+          PY
+
+      # A pull request opened with GITHUB_TOKEN does not trigger workflow runs
+      # -- GitHub's own recursion guard -- so this PR arrives with no checks on
+      # it, and the test that this change exists to satisfy would not run until
+      # after somebody merged it. Run it here instead, against the patched tree,
+      # so the PR is known-green before it is opened rather than after.
+      - name: The docs-consistency guard, on the patched tree
+        if: steps.patch.outputs.changed == 'true'
+        run: PYTHONPATH=src python -m unittest discover -s tests -p "test_docs_consistency.py"
+
+      - name: Open the pull request
+        if: steps.patch.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.patch.outputs.digest }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packaging/homebrew/nextbrief.rb
+          git commit -m "chore(homebrew): rejoin the formula digest to $VERSION" \
+                     -m "The sha256 of the $VERSION sdist, read from the release's own
+          SHA256SUMS. Opened by the homebrew job in .github/workflows/release.yml,
+          which is the step that used to be a manual commit and was skipped for
+          0.2.0rc1 through rc4."
+
+          # Force, and safely so: this branch is written by this job and nothing
+          # else, and a re-run of the workflow on the same tag should replace it
+          # rather than fail on a non-fast-forward.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qx OPEN; then
+            echo "PR already open for $BRANCH; the push above updated it."
+            exit 0
+          fi
+
+          gh pr create \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "$BRANCH" \
+            --title "chore(homebrew): rejoin the formula digest to $VERSION" \
+            --body "\`packaging/homebrew/nextbrief.rb\` pinned \`$TAG\` in its
+          \`url\` from the moment the version was bumped, but its \`sha256\` could not
+          move until the sdist existed. It exists now:
+
+              $DIGEST  nextbrief-$VERSION.tar.gz
+
+          This sets the digest and the \`# sha256-of:\` line above it together, which
+          is what lets \`tests/test_docs_consistency.py\` tell a current digest from a
+          four-release-old one.
+
+          Checks do not run on a pull request opened with \`GITHUB_TOKEN\`, so the
+          guard in that file was run against this exact tree in the job that opened
+          this PR."
