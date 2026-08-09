@@ -319,6 +319,33 @@
       "note": "The obvious-looking fix for dark mode, and the one that breaks it: through an <img> currentColor resolves to black."
     },
     {
+      "label": "the excerpt quotes a line the renderer no longer prints",
+      "file": "README.md",
+      "old": "   The decision has been open since the rewrite landed behind a flag.\n\n…",
+      "new": "   The decision has been open since the rewrite landed behind a flag (still).\n\n…",
+      "select": "test_every_line_of_it_is_a_line_the_tool_printed",
+      "expect": "no longer produces",
+      "note": "The shape a stale README sample actually has: one line reworded downstream, everything around it still true, and nothing about the page looking wrong."
+    },
+    {
+      "label": "the excerpt trimmed to real output that shows nothing",
+      "file": "README.md",
+      "old": "## Reminders\n- ⚠ **Dropped 4 claim(s)** whose evidence would not check out (see `log/rejected.jsonl`).\n\n…",
+      "new": "## Stalled (no next step) — the column GTD cares about most\n- **Beacon Portal** — Give it a concrete next step, or archive it on purpose.\n\n…",
+      "select": "test_every_line_of_it_is_a_line_the_tool_printed",
+      "expect": "no longer shows",
+      "note": "Every line of the replacement is real output, in order, so the chunk match is perfectly happy. Provenance is not substance: this is why the excerpt's three claims are named as well as sourced."
+    },
+    {
+      "label": "one README's excerpt re-cut and the other left behind",
+      "file": "README.zh.md",
+      "old": "## Reminders\n- ⚠ **Dropped 4 claim(s)** whose evidence would not check out (see `log/rejected.jsonl`).\n\n…",
+      "new": "## Reminders\n- ⚠ **Dropped 4 claim(s)** whose evidence would not check out (see `log/rejected.jsonl`).\n- ⚠ No git in: Tidepool Docs — progress there can only come from file timestamps, and **a bad delete is unrecoverable**.\n\n…",
+      "select": "test_both_readmes_show_the_same_excerpt",
+      "expect": "different excerpts",
+      "note": "Still real, still in order, still showing all three things -- so both halves of the other test stay green. The drift is between the two files, which is the direction translations actually go."
+    },
+    {
       "label": "an asset URL that follows /releases/latest/ instead of the tag",
       "file": "README.md",
       "old": "chmod +x nextbrief.pyz",
