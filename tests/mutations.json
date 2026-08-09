@@ -393,7 +393,7 @@
     {
       "label": "the privacy page unlinked from the Chinese README",
       "file": "README.zh.md",
-      "old": "\n\n[PRIVACY.md](https://github.com/hancheng-ai/nextbrief/blob/v0.2.0/PRIVACY.md) 把同一件事写成了一页政策",
+      "old": "\n\n[PRIVACY.md](https://github.com/hancheng-ai/nextbrief/blob/v0.2.1rc1/PRIVACY.md) 把同一件事写成了一页政策",
       "new": "\n\n这一段就是全部说明",
       "select": "test_it_is_linked_from_the_documents_that_would_send_someone_to_it",
       "expect": "README.zh.md never links PRIVACY.md",
