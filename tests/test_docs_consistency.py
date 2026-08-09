@@ -485,6 +485,21 @@ class TheMarkAtTheTop(unittest.TestCase):
     # from whichever path they happen to contain would agree with anything.
     MARK = "packaging/icon/nextbrief.svg"
 
+    # The only host allowed to serve it, and the reason a relative path is not
+    # an option. `pyproject.toml` sets `readme = "README.md"`, so that file is
+    # PyPI's long description, and a relative `src` has no meaning on a PyPI
+    # page: it renders as a broken image, above the fold, on the page most new
+    # users land on. A broken image is louder than no image.
+    #
+    # This test used to forbid any `http` on the mark's line, which sounds like
+    # the safe rule and is not one that can be satisfied -- it forced the broken
+    # render and offered nothing in exchange. The hazard actually worth refusing
+    # is a *third-party* host: somebody else's uptime, and somebody else's view
+    # of who reads this page. This repository's own file served from
+    # raw.githubusercontent is neither, and both GitHub and PyPI proxy images
+    # through camo, so no reader's address reaches the origin regardless.
+    MARK_ORIGIN = "https://raw.githubusercontent.com/hancheng-ai/nextbrief/"
+
     def _heads(self):
         for doc in ("README.md", "README.zh.md"):
             text = (REPO_ROOT / doc).read_text(encoding="utf-8")
@@ -516,16 +531,98 @@ class TheMarkAtTheTop(unittest.TestCase):
             "black, so it vanishes on a dark background -- which is most of the "
             "readers who will ever see it." % self.MARK)
 
-    def test_the_mark_does_not_reach_outside_the_repository(self):
+    def _image_sources(self, head):
+        return re.findall(r'<img[^>]*?\ssrc="([^"]*)"', head)
+
+    def test_every_image_above_the_fold_comes_from_this_repository(self):
         """A logo served from somewhere else is a logo that can change, expire,
-        or report who read the page."""
+        or report who read the page. A logo served from nowhere -- a relative
+        path -- is a broken image on PyPI. See MARK_ORIGIN for why this is a
+        host allowlist rather than a ban on `http`."""
         for doc, _text, head in self._heads():
-            for line in head.splitlines():
-                if self.MARK not in line:
-                    continue
-                self.assertNotIn("http", line,
-                                 "%s loads the mark over the network: %s"
-                                 % (doc, line.strip()))
+            srcs = self._image_sources(head)
+            self.assertTrue(srcs, "%s shows no image in its first 12 lines" % doc)
+            for src in srcs:
+                self.assertTrue(
+                    src.startswith(self.MARK_ORIGIN),
+                    "%s serves an image from %r. It must come from %s -- a "
+                    "relative path renders broken on PyPI, where README.md is "
+                    "the long description, and any other host is somebody "
+                    "else's uptime and somebody else's log."
+                    % (doc, src, self.MARK_ORIGIN))
+
+    def test_the_mark_is_pinned_to_this_release_rather_than_to_a_branch(self):
+        """PyPI keeps every version's long description forever.
+
+        A `main`-pinned URL breaks the rendered page of every release ever
+        published the day that file is moved or renamed; a tag-pinned one keeps
+        working, because the tag keeps pointing at the tree that shipped. The
+        tag is swept by `scripts/bump-version.sh` along with every other version
+        string in the file, so this costs nothing per release -- and goes red if
+        a bump ever stops reaching it, which is the failure that would otherwise
+        leave the URL quietly on an old tag.
+        """
+        for doc, _text, head in self._heads():
+            for src in self._image_sources(head):
+                ref = src[len(self.MARK_ORIGIN):].split("/")[0]
+                # assertTrue rather than assertEqual: on two strings the latter
+                # renders a multi-line diff and pushes the sentence that says
+                # what to do below it, where it reads as a footnote.
+                self.assertTrue(
+                    ref == TAG,
+                    "%s serves the mark from ref %r, and this release is %s. It "
+                    "must be a tag: PyPI renders every version's long "
+                    "description from whatever the URL resolves to at read "
+                    "time, so a branch breaks the page of every release ever "
+                    "published the day that file moves. "
+                    "`scripts/bump-version.sh` sweeps this ref along with the "
+                    "rest of the file." % (doc, ref, TAG))
+
+
+class TheBadgesAtTheTop(unittest.TestCase):
+    """Two badges that look alike and answer different questions.
+
+    `release` states which version *this page* documents -- the same version its
+    download URLs, its Homebrew formula and its mark URL are all pinned to. That
+    is a fact about the file, so it lives in the file, is swept by
+    `scripts/bump-version.sh`, and is checked here so a hand-edited release
+    cannot leave it behind while everything around it moves.
+
+    A dynamic "newest release on GitHub" badge would not need the sweep, and was
+    rejected anyway: it would disagree with every pinned URL on the page from
+    the moment a candidate is tagged, which is the hazard the install section
+    explains two paragraphs down about `/releases/latest/`.
+
+    `pypi` answers a different question -- what `pip install nextbrief` hands
+    you today -- and this file cannot know the answer. The tag may not be
+    pushed; the publish job may have refused a red build. So it is not asserted
+    here, and the badge reads the index instead of this file. The two disagreeing
+    while a candidate is out is the badges working, not drifting.
+    """
+
+    def _head(self, doc):
+        return "\n".join(
+            (REPO_ROOT / doc).read_text(encoding="utf-8").splitlines()[:12])
+
+    def test_the_release_badge_names_the_version_this_page_documents(self):
+        for doc in ("README.md", "README.zh.md"):
+            head = self._head(doc)
+            for want, what in (
+                ("img.shields.io/badge/release-%s-" % TAG, "the release badge"),
+                ("/releases/tag/%s)" % TAG, "the link under it"),
+            ):
+                self.assertIn(want, head,
+                              "%s: %s does not say %s, while the rest of the "
+                              "page is pinned to it" % (doc, what, TAG))
+
+    def test_the_pypi_badge_reads_the_index_rather_than_this_file(self):
+        """A version literal here would be a claim about a system this
+        repository does not control, held in a file nothing checks against it --
+        wrong for a whole release cycle if a publish ever fails."""
+        for doc in ("README.md", "README.zh.md"):
+            self.assertIn(
+                "img.shields.io/pypi/v/nextbrief", self._head(doc),
+                "%s no longer carries a PyPI badge that reads the index" % doc)
 
 
 class ThePrivacyPolicy(unittest.TestCase):

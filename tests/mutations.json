@@ -303,11 +303,11 @@
     {
       "label": "the mark dropped from the Chinese README",
       "file": "README.zh.md",
-      "old": "<p align=\"center\">\n  <img src=\"packaging/icon/nextbrief.svg\" alt=\"\" width=\"96\" height=\"96\">\n</p>\n\n",
-      "new": "<!-- the mark used to be here -->\n\n",
+      "old": "/packaging/icon/nextbrief.svg\" alt=\"\" width=\"96\" height=\"96\">",
+      "new": "/packaging/icon/nextbrief-gone.svg\" alt=\"\" width=\"96\" height=\"96\">",
       "select": "test_both_readmes_open_with_the_same_mark",
       "expect": "README.zh.md does not show the mark",
-      "note": "The two READMEs drifting apart is the likeliest way this regresses: one gets edited, the other does not."
+      "note": "The two READMEs drifting apart is the likeliest way this regresses: one gets edited, the other does not. Anchored on the version-free tail of the URL, because the ref in it is swept every release and a manifest entry that stops resolving proves nothing."
     },
     {
       "label": "the monochrome mark used for the README instead",
@@ -355,12 +355,40 @@
       "note": "Anchored on a version-free line so the manifest survives a bump. `/releases/latest/` stopped being a 404 at 0.2.0 and started being something worse: it resolves to the newest non-prerelease while every other version string on the page is swept to the last tag, so tagging a candidate makes the page name one version and serve another."
     },
     {
-      "label": "the mark hotlinked from raw.githubusercontent",
+      "label": "the mark served from a third-party CDN",
       "file": "README.md",
-      "old": "<img src=\"packaging/icon/nextbrief.svg\"",
-      "new": "<img src=\"https://raw.githubusercontent.com/hancheng-ai/nextbrief/main/packaging/icon/nextbrief.svg\"",
-      "select": "test_the_mark_does_not_reach_outside_the_repository",
-      "expect": "loads the mark over the network"
+      "old": "<img src=\"https://raw.githubusercontent.com/hancheng-ai/nextbrief/",
+      "new": "<img src=\"https://cdn.jsdelivr.net/gh/hancheng-ai/nextbrief@",
+      "select": "test_every_image_above_the_fold_comes_from_this_repository",
+      "expect": "cdn.jsdelivr.net",
+      "note": "The rule this guard used to enforce was 'no http on the mark's line', which forced a broken image on PyPI and could not be satisfied any other way. What is actually worth refusing is a host that is not this repository -- somebody else's uptime, somebody else's log -- and jsdelivr is the plausible way that happens."
+    },
+    {
+      "label": "the mark back on a bare relative path",
+      "file": "README.md",
+      "old": "<img src=\"https://raw.githubusercontent.com/hancheng-ai/nextbrief/",
+      "new": "<img src=\"packaging/icon/nextbrief.svg\" data-ref=\"",
+      "select": "test_every_image_above_the_fold_comes_from_this_repository",
+      "expect": "renders broken on PyPI",
+      "note": "The defect that prompted the change. README.md is PyPI's long description, so a relative src has nowhere to resolve and renders as a broken image above the fold on the page most new users land on -- and it looks perfectly fine on GitHub, which is where it gets reviewed."
+    },
+    {
+      "label": "the mark pinned to main instead of the tag",
+      "file": "README.md",
+      "old": "<img src=\"https://raw.githubusercontent.com/hancheng-ai/nextbrief/",
+      "new": "<img src=\"https://raw.githubusercontent.com/hancheng-ai/nextbrief/main/",
+      "select": "test_the_mark_is_pinned_to_this_release_rather_than_to_a_branch",
+      "expect": "'main'",
+      "note": "PyPI keeps every version's long description forever, so a main-pinned URL breaks every historical release page the day that file moves. Green on GitHub, and invisible until somebody opens an old release."
+    },
+    {
+      "label": "the release badge left behind by a hand-edited version",
+      "file": "README.md",
+      "old": "img.shields.io/badge/release-v",
+      "new": "img.shields.io/badge/release-w",
+      "select": "test_the_release_badge_names_the_version_this_page_documents",
+      "expect": "the release badge does not say",
+      "note": "The badge is a static claim about which release this page documents, kept honest by the sweep. This is what it looks like when the sweep stops reaching it: every URL on the page moves and the badge does not."
     },
     {
       "label": "the engine check is no longer the first thing run",

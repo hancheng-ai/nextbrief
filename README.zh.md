@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="packaging/icon/nextbrief.svg" alt="" width="96" height="96">
+  <img src="https://raw.githubusercontent.com/hancheng-ai/nextbrief/v0.2.0rc4/packaging/icon/nextbrief.svg" alt="" width="96" height="96">
 </p>
 
 # nextbrief
