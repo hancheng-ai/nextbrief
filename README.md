@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hancheng-ai/nextbrief/v0.2.0rc4/packaging/icon/nextbrief.svg" alt="" width="96" height="96">
+  <img src="https://raw.githubusercontent.com/hancheng-ai/nextbrief/v0.2.0/packaging/icon/nextbrief.svg" alt="" width="96" height="96">
 </p>
 
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.2.0rc4-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4)
+[![Release](https://img.shields.io/badge/release-v0.2.0-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0)
 [![PyPI](https://img.shields.io/pypi/v/nextbrief)](https://pypi.org/project/nextbrief/)
 [![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -251,7 +251,7 @@ templates included, no `site-packages`, no virtualenv, any Python 3.9 or newer.
 Every tagged release attaches a prebuilt `nextbrief.pyz` and a `SHA256SUMS`:
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc4/nextbrief.pyz
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0/nextbrief.pyz
 chmod +x nextbrief.pyz
 ./nextbrief.pyz --version
 ```
@@ -260,7 +260,7 @@ To check it against the published checksums — `--ignore-missing` because
 `SHA256SUMS` also covers the sdist and the wheel, which you did not download:
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc4/SHA256SUMS
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS     # sha256sum on Linux
 ```
 
@@ -303,7 +303,7 @@ brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 The formula is version-controlled here, in
 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb), so it is
 reviewed alongside the change that would break it. It is pinned to the
-`v0.2.0rc4` sdist. A `<owner>/homebrew-tap` repository — which would make this
+`v0.2.0` sdist. A `<owner>/homebrew-tap` repository — which would make this
 `brew tap` plus `brew install nextbrief` — has not been created yet; the header
 comment in the formula has the steps.
 
@@ -351,7 +351,7 @@ published contract with a `schema_version` to check before parsing.
 ### Distribution
 
 Which channels are live and which are not, at a glance. Everything here is
-`0.2.0rc4`.
+`0.2.0`.
 
 | Channel | State |
 |---|---|
@@ -359,7 +359,7 @@ Which channels are live and which are not, at a glance. Everything here is
 | Zipapp built from a checkout | **live** |
 | [PyPI](https://pypi.org/project/nextbrief/) — `pip`, `pipx`, `uv tool`, `uvx`, no index URL and no pin | **live**: sdist and wheel |
 | [TestPyPI](https://test.pypi.org/project/nextbrief/) — the same four, with an explicit index URL and an explicit version | **live, prereleases only**: the workflow routes any `rc`, `a`, `b` or `.dev` version here and only a final version to PyPI |
-| GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.2.0rc4`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4), with a build-provenance attestation. Documented by tag rather than `/releases/latest/`, which resolves to the newest non-prerelease |
+| GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.2.0`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0), with a build-provenance attestation. Documented by tag rather than `/releases/latest/`, which resolves to the newest non-prerelease |
 | Homebrew tap | **pending**: the formula exists and installs from a local path, the tap repository does not |
 | Claude Code plugin — `/plugin marketplace add hancheng-ai/nextbrief` | **live from this repository**: it is its own marketplace, so a clone or the GitHub repo is the source. Not listed in any third-party marketplace |
 
@@ -639,6 +639,7 @@ PyPI.
 | Version | Published | What it brought |
 |---|---|---|
 | [Unreleased](CHANGELOG.md#unreleased) | — | — |
+| [0.2.0](CHANGELOG.md#020---2026-08-09) | 2026-08-09 | The first release on PyPI proper, so `pip install nextbrief` resolves — every version before it carried a pre-release segment and lived on TestPyPI, which is why the plugin shipped a week earlier handed people an install command that returned "no matching distribution". Both READMEs lose the index URLs and the pinned versions that cost, keep the pinned interpreter that does not, and now state which index a version routes to rather than which one today's happens to be on. They also open on an excerpt of a brief the tool actually printed, re-rendered on every build so it cannot quietly stop matching, above a mark that resolves on PyPI instead of rendering as a broken image there. |
 | [0.2.0rc4](CHANGELOG.md#020rc4---2026-08-08) | 2026-08-08 | Closing an item stopped asking you about things you cannot answer. Criteria now carry `(agent)` or `(you)`, and `done` only asks about the second kind; `-` marks one the design moved past, so it is neither claimed as done nor drafted into a follow-up nobody meant to create. Plus `nextbrief probe` for projects whose output never lands on disk, `inventory.json` as a versioned contract, and a Claude Code plugin whose skill is read-only by lint and says so when the engine is missing rather than failing at `command not found`. |
 | [0.2.0rc3](CHANGELOG.md#020rc3---2026-08-07) | 2026-08-07 | An interrupted `done` no longer closes the item: Ctrl-C shared a branch with EOF, so stopping the command still wrote `human_confirmed: true` and committed. The engine stopped counting its own `BRIEF.md` and `log/` as the project's uncommitted work, which is what kept `check` from ever settling. Plus headers on every command that cannot be undone, and drafts for the two closing questions. |
 | [0.2.0rc2](CHANGELOG.md#020rc2---2026-08-06) | 2026-08-06 | `defer <id> --until` — the verb between `done` and `drop`, where `--until` is required because a deferral that never returns is a drop nobody recorded. A closing record on `done` (`summary`, `future_work`), promoted into real items by `followup`. And `check` stopped reporting every workspace out of date seconds after a run. |

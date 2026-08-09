@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hancheng-ai/nextbrief/v0.2.0rc4/packaging/icon/nextbrief.svg" alt="" width="96" height="96">
+  <img src="https://raw.githubusercontent.com/hancheng-ai/nextbrief/v0.2.0/packaging/icon/nextbrief.svg" alt="" width="96" height="96">
 </p>
 
 # nextbrief
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.2.0rc4-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4)
+[![Release](https://img.shields.io/badge/release-v0.2.0-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0)
 [![PyPI](https://img.shields.io/pypi/v/nextbrief)](https://pypi.org/project/nextbrief/)
 [![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -201,14 +201,14 @@ bash nextbrief/scripts/build-zipapp.sh    # 产出 dist/nextbrief.pyz
 每个打了 tag 的发布都会附带编译好的 `nextbrief.pyz` 与 `SHA256SUMS`：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc4/nextbrief.pyz
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0/nextbrief.pyz
 chmod +x nextbrief.pyz
 ```
 
 要核对校验和——加 `--ignore-missing` 是因为 `SHA256SUMS` 同时覆盖 sdist 与 wheel，而你并没有下载它们：
 
 ```sh
-curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0rc4/SHA256SUMS
+curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.0/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
 ```
 
@@ -234,7 +234,7 @@ git clone --depth 1 https://github.com/hancheng-ai/nextbrief
 brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 ```
 
-formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.2.0rc4` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
+formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.2.0` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
 
 **5 · Claude Code 插件** —— *装的是 skill，不是引擎*
 

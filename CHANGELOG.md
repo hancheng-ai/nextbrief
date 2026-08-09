@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-09
+
+### Changed
+
+- **The first release on PyPI proper, so `pip install nextbrief` resolves.**
+  Every release before this one carried a pre-release segment, and the release
+  workflow routes those to TestPyPI — correctly, because publishing a candidate
+  to the real index cannot be undone. The cost was that every documented install
+  command needed an explicit index URL and an explicit version, and the Claude
+  Code plugin shipped in `0.2.0rc4` told a new user to run `pipx install
+  nextbrief`, which returned "no matching distribution". This release is what
+  makes that line true.
+
+  Both READMEs are rewritten rather than edited: `uvx nextbrief v0`,
+  `pipx install --python /usr/bin/python3 nextbrief`, no index URL and no pin.
+  The `--python /usr/bin/python3` stays — the nightly job is started by a GUI
+  scheduler with a minimal `PATH`, and pinning the system interpreter is what
+  keeps a Homebrew Python upgrade from retiring the one a pipx venv was built
+  against.
+
+  TestPyPI does not go away, and the docs now state the rule instead of the
+  situation: a version with a pre-release segment routes there, a final version
+  routes to PyPI, and that is the workflow's behaviour rather than a convention
+  anyone has to remember. `/releases/latest/` stops being a 404 and starts being
+  something subtler — it resolves to the newest *non-prerelease* while every
+  other version string on the page is swept to the last tag — so downloads stay
+  on the tagged URL and the reason is written down next to them.
+
+- **`docs/INVENTORY_SCHEMA.md` says who owns each field's vocabulary, instead of
+  how stable the field is.** The old per-field promise column restated what
+  `schema_version` already covers, equally for every field: nothing can be
+  renamed, removed, retyped or added without a bump. What a version number
+  structurally cannot tell a consumer is who decides the *values* — and
+  `status` has already had its vocabulary renamed once, with no bump, correctly,
+  because the document did not change shape. Somebody's registry did. `fixed
+  here` is safe to switch over exhaustively; `not ours` is safe to display and
+  unsafe to branch on.
+
+### Added
+
+- **Both READMEs open on a brief the tool actually printed.** An excerpt of
+  `examples/workspace/BRIEF.md` now sits above the install instructions, cut to
+  the three things that are hard to get anywhere else: the evidence line under a
+  next action, the open decision naming both the evidence that would settle it
+  and where that evidence already sits, and the footer admitting what the
+  evidence gate threw away.
+
+  It is not a stored sample. `tests/test_readme_demo.py` rebuilds the example,
+  re-renders it, and requires every run of lines between two `…` markers to
+  appear verbatim and in order in the file that comes out — and separately
+  requires the excerpt to still show those three things, because an excerpt
+  trimmed to one heading is still made entirely of real output. A worked example
+  is the easiest place in a project for a claim to stop being true: it is
+  written once from a real run, the tool moves, and the sample goes on reading
+  perfectly, because nothing about a stale sample looks stale.
+
+### Fixed
+
+- **The mark rendered as a broken image on PyPI.** `pyproject.toml` sets
+  `readme = "README.md"`, which makes that file the long description, and a
+  relative `src` has nothing to resolve against there — so the first thing above
+  the fold on the page most new users land on was a broken image. It is now
+  served from `raw.githubusercontent.com`, pinned to the release tag rather than
+  to `main`, because PyPI keeps every version's long description forever and
+  renders it from whatever the URL resolves to at read time.
+
+  The guard that made this unfixable is narrowed rather than removed. It
+  forbade any `http` on the mark's line, which cannot be satisfied on PyPI at
+  all; what is worth refusing is a host that is not this repository, and that is
+  what it checks now.
+
 ## [0.2.0rc4] - 2026-08-08
 
 ### Added
@@ -1463,7 +1534,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.0rc4...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0
 [0.2.0rc4]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4
 [0.2.0rc3]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc3
 [0.2.0rc2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc2
