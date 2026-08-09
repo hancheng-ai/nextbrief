@@ -696,6 +696,51 @@
       "new": "HUMAN_ONLY_FIELDS = [\"priority\", \"is_next_action\", \"human_confirmed\", \"project\", \"id\", \"created_by\", \"proposed_status\"]",
       "select": "test_no_proposal_is_logged_as_an_illegal_write",
       "expect": "rolled back a proposal into rejected.jsonl"
+    },
+    {
+      "label": "an added human-only field goes back to being unguarded",
+      "file": "src/nextbrief/render.py",
+      "old": "            elif field in it:",
+      "new": "            elif False:",
+      "select": "test_an_added_confirmation_flag_is_reverted_by_removing_the_line",
+      "expect": "granted itself human confirmation",
+      "note": "The state the gate shipped in for its whole life. `human_confirmed: true` on an item whose baseline had no such line survived a full render with reverted_fields: 0 and an empty rejected.jsonl, while ARCHITECTURE.md listed the field under 'an agent may not write'."
+    },
+    {
+      "label": "an added field nulled instead of removed",
+      "file": "src/nextbrief/render.py",
+      "old": "                it.pop(field, None)\n                drop_keys.append(field)",
+      "new": "                it[field] = None\n                on_disk[field] = None",
+      "select": "test_an_added_confirmation_flag_is_reverted_by_removing_the_line",
+      "expect": "granted itself human confirmation",
+      "note": "The plausible wrong repair. `human_confirmed: null` looks reverted and is a value the next run reads as an answer somebody gave."
+    },
+    {
+      "label": "the removal repair is silent",
+      "file": "src/nextbrief/render.py",
+      "old": "                    \"restored\": \"removed\",",
+      "new": "                    \"restored\": \"file\",",
+      "select": "test_every_removal_is_logged_and_counted",
+      "expect": "'file' != 'removed'",
+      "note": "A repair the log cannot distinguish from a value being written back is a repair nobody can audit."
+    },
+    {
+      "label": "a nested block removed by its header alone",
+      "file": "src/nextbrief/frontmatter.py",
+      "old": "            if m.group(2).strip() not in (\"\", \"|\") and not following.startswith(\"  \"):",
+      "new": "            if True:",
+      "select": "test_a_key_owning_a_nested_block_is_refused",
+      "expect": "removed by its header alone",
+      "note": "Deleting `automation:` orphans its four indented lines into the key above it. Not a smaller version of the illegal edit -- a different, wrong document."
+    },
+    {
+      "label": "the unchecked frontmatter writer let out of fs",
+      "file": "src/nextbrief/render.py",
+      "old": "from .fs import append_jsonl, append_text, remove_fields, rewrite_fields, write_text",
+      "new": "from .frontmatter import remove_fields\nfrom .fs import append_jsonl, append_text, rewrite_fields, write_text",
+      "select": "test_the_raw_frontmatter_writers_stay_private_to_the_gate",
+      "expect": "imports the unchecked frontmatter writer",
+      "note": "The old assertion matched one exact import line and could not see this at all: a second writer, imported on its own line."
     }
   ]
 }

@@ -611,6 +611,134 @@ class WritePermissionGate(GateCase):
 
 
 @requires_git
+class AHumanOnlyFieldTheBaselineNeverHadIsStillHumanOnly(GateCase):
+    """★ The absence of a key was an unguarded write channel. ★
+
+    The gate compared ``if field in old_fm and it.get(field) != old_fm.get(field)``,
+    so a human-only field the committed copy did not carry was never looked at.
+    Measured against this engine before the fix: an item whose baseline had no
+    ``human_confirmed`` line kept ``human_confirmed: true`` after a full render,
+    with ``reverted_fields: 0``, an empty ``rejected.jsonl`` and ``write_gate:
+    ran``. That flag freezes the automation block against the agent and exempts
+    the entry from decay, and the agent could grant it to itself. ``priority: 0``
+    and ``is_next_action: true`` landed the same way, which is an agent putting
+    its own entry at the top of tomorrow's page.
+
+    ``docs/ARCHITECTURE.md`` has listed `human_confirmed` under *an agent may not
+    write* since the gate was introduced. It was true for every item that already
+    had the key and false for every item that did not, and nothing could tell the
+    two apart -- the recurring failure here, a guard that exists, is documented,
+    and is not wired to the case it names.
+
+    Frontmatter is not uniform: ``items.new_item_text`` writes a different key set
+    from ``schema/BACKLOG_TEMPLATE.md``, and hand-written entries are their own
+    shape. The hole was one missing line away on any item.
+    """
+
+    ITEM = "NA-0201"
+    BASE = "\n".join([
+        "---",
+        "id: %s" % ITEM,
+        "title: No priority, no confirmation, no next-action flag",
+        "project: orchard",
+        "status: open",
+        "blocked_by: none",
+        "created_by: human",
+        "updated_date: 2026-03-16",
+        "---",
+        "",
+        "## Acceptance",
+        "",
+        "- [ ] It is done",
+        "",
+    ])
+
+    def setUp(self):
+        super().setUp()
+        write_snapshot(self.ws, make_snapshot())
+        self._path().write_text(self.BASE, encoding="utf-8")
+        git_init(self.ws)
+        git_commit_all(self.ws, "an entry that never carried these keys")
+        for absent in ("priority", "is_next_action", "human_confirmed"):
+            self.assertNotIn("%s:" % absent, self._text(),
+                             "the fixture cannot reach the case it is about")
+
+    def _path(self):
+        return self.ws / "backlog" / ("%s.md" % self.ITEM)
+
+    def _text(self):
+        return self._path().read_text(encoding="utf-8")
+
+    def _fields(self):
+        return parse_frontmatter(self._text())[0]
+
+    def _add(self, lines):
+        self._path().write_text(
+            self._text().replace("blocked_by: none", "blocked_by: none\n" + lines, 1),
+            encoding="utf-8")
+
+    def test_an_added_confirmation_flag_is_reverted_by_removing_the_line(self):
+        self._add("human_confirmed: true")
+        code, _out, err = self.render()
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("human_confirmed", self._text(),
+                         "an agent granted itself human confirmation and kept it")
+        # Removed, not nulled. `human_confirmed: null` would be a value the next
+        # run reads as an answer somebody gave.
+        self.assertNotIn("null", self._text())
+
+    def test_added_priority_and_next_action_go_the_same_way(self):
+        self._add("priority: 0\nis_next_action: true")
+        self.assertEqual(self.render()[0], 0)
+        fields = self._fields()
+        self.assertIsNone(fields.get("priority"),
+                          "an agent set its own priority on an item that had none")
+        self.assertIsNone(fields.get("is_next_action"))
+
+    def test_every_removal_is_logged_and_counted(self):
+        # Silent repair is the failure one level up: the reader is told how many
+        # fields were reverted, and `rejected.jsonl` is where the attempt stays
+        # recoverable.
+        self._add("priority: 0\nis_next_action: true\nhuman_confirmed: true")
+        self.assertEqual(self.render()[0], 0)
+        entries = [r for r in self.rejected() if r["kind"] == "illegal_field_write"]
+        self.assertEqual(sorted(e["field"] for e in entries),
+                         ["human_confirmed", "is_next_action", "priority"])
+        for entry in entries:
+            self.assertEqual(entry["restored"], "removed")
+            self.assertIn("no such key", entry["why"])
+        self.assertEqual(self.runs()[-1]["reverted_fields"], 3)
+        self.assertIn("Reverted 3", self.brief())
+
+    def test_the_rest_of_the_frontmatter_and_the_body_survive(self):
+        # `remove_fields` deletes lines out of a file a person owns. Taking the
+        # wrong one is a worse outcome than the write it is reverting.
+        self._add("human_confirmed: true")
+        self.assertEqual(self.render()[0], 0)
+        fields = self._fields()
+        self.assertEqual(fields["id"], self.ITEM)
+        self.assertEqual(fields["project"], "orchard")
+        self.assertEqual(fields["blocked_by"], "none")
+        self.assertIn("- [ ] It is done", self._text())
+
+    def test_a_field_the_baseline_does_carry_is_untouched_by_this_path(self):
+        # The control. `created_by: human` is in HEAD and unchanged, so it must
+        # not be swept up by a rule about keys that are not there.
+        self._add("human_confirmed: true")
+        self.assertEqual(self.render()[0], 0)
+        self.assertEqual(self._fields()["created_by"], "human")
+
+    def test_check_mode_reports_it_without_removing_anything(self):
+        # `--check` answers "would a run change anything". A check that performs
+        # the repair has falsified its own answer, and the next one reports clean.
+        self._add("human_confirmed: true")
+        before = self._text()
+        capture(render.main, ["--workspace", str(self.ws), "--check", "--no-notify"])
+        self.assertEqual(self._text(), before,
+                         "--check repaired the file it was asked about")
+
+
+@requires_git
 class AProposalSurvivesTheGateEvenWhenTheKeyIsNew(GateCase):
     """★ The one write the nightly pass exists to make must reach the disk. ★
 
@@ -673,10 +801,13 @@ class AProposalSurvivesTheGateEvenWhenTheKeyIsNew(GateCase):
         self._propose()
         code, _out, err = self.render()
         self.assertEqual(code, 0, err)
-        self.assertEqual(self._fields(self.ABSENT)["proposed_status"], "done",
+        # `.get`, not `[...]`. The way this gate reverts an added key is by
+        # removing the line, so the failure mode being guarded against deletes
+        # the key -- and a KeyError here would be the assertion never running.
+        self.assertEqual(self._fields(self.ABSENT).get("proposed_status"), "done",
                          "the write gate rolled back a proposal on an item whose "
                          "baseline never carried the field")
-        self.assertEqual(self._fields(self.PRESENT)["proposed_status"], "done",
+        self.assertEqual(self._fields(self.PRESENT).get("proposed_status"), "done",
                          "the write gate rolled back a proposal on an item whose "
                          "baseline carried the field as null")
 

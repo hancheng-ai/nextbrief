@@ -49,7 +49,7 @@ from typing import Any, Dict, List, NamedTuple, Optional
 from . import priority
 from .annotate import QUESTIONS, pending_count, question_targets
 from .frontmatter import parse_frontmatter
-from .fs import append_jsonl, append_text, rewrite_fields, write_text
+from .fs import append_jsonl, append_text, remove_fields, rewrite_fields, write_text
 from .i18n import Catalog, load_catalog
 from .items import HUMAN_ONLY_STATUSES, days_until_due, is_live, is_parked
 from .jsonc import JSONCError, load_jsonc
@@ -77,6 +77,11 @@ HUMAN_ONLY_FIELDS = ["priority", "is_next_action", "human_confirmed", "project",
 # together with the deferral logic that made the question stop being a plain
 # membership test: an item can be `deferred` in the file and open on the page,
 # and only a date decides which.
+
+# "The committed copy has no such key", as distinct from "the committed copy says
+# null". A sentinel rather than None because the two need different repairs: one
+# is restored by writing the old value back, the other only by removing the line.
+_ABSENT = object()
 
 WEEKDAY_KEYS = [
     "brief.weekday.mon", "brief.weekday.tue", "brief.weekday.wed", "brief.weekday.thu",
@@ -342,8 +347,26 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
 
         bad = []
         for field in HUMAN_ONLY_FIELDS:
-            if field in old_fm and it.get(field) != old_fm.get(field):
-                bad.append((field, old_fm.get(field), it.get(field)))
+            if field in old_fm:
+                if it.get(field) != old_fm.get(field):
+                    bad.append((field, old_fm.get(field), it.get(field)))
+            elif field in it:
+                # ★ A key the baseline does not carry is still not the agent's. ★
+                #
+                # The comparison used to require the field to be in HEAD, which
+                # made the ABSENCE of a key an unguarded write channel: an item
+                # whose committed frontmatter had no `human_confirmed` line could
+                # be handed one saying `true` -- the flag that freezes the
+                # automation block and exempts the entry from decay -- and the
+                # run recorded zero reverted fields and a clean gate. `priority`
+                # and `is_next_action` were open the same way, so an agent could
+                # promote its own entry to the top of tomorrow's page.
+                #
+                # Frontmatter is not uniform and never was: `items.new_item_text`
+                # writes a different key set from `schema/BACKLOG_TEMPLATE.md`,
+                # and every hand-written entry is its own shape. So the hole was
+                # not exotic -- it was one missing line away on any item.
+                bad.append((field, _ABSENT, it.get(field)))
         # Statuses that take an item off the page are written by humans only:
         # the terminal two, and `deferred`. Parking something is the same act as
         # closing it as far as the reader is concerned -- it stops being asked
@@ -362,7 +385,23 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
         # a line at a time, and flattening a mapping into one line would destroy
         # more than the illegal edit did.
         on_disk = {}
+        drop_keys = []
         for field, oldv, newv in bad:
+            if oldv is _ABSENT:
+                # There is no old value to put back, so the restoration is the
+                # line's removal. Writing `priority: null` instead would replace
+                # an illegal value with a worse one, and the next run would read
+                # it as a real answer rather than as the absence it is.
+                it.pop(field, None)
+                drop_keys.append(field)
+                rejected.append({
+                    "kind": "illegal_field_write", "file": it["_file"], "field": field,
+                    "reverted_to": None, "attempted": newv,
+                    "restored": "removed",
+                    "why": "field is human-writable only and the baseline has no such key",
+                })
+                reverted += 1
+                continue
             it[field] = oldv
             scalar = not isinstance(oldv, (dict, list))
             if scalar:
@@ -374,9 +413,12 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
                 "why": "field is human-writable only",
             })
             reverted += 1
-        if not dry_run and on_disk and ws.contains(it["_path"]):
+        if not dry_run and (on_disk or drop_keys) and ws.contains(it["_path"]):
             try:
-                rewrite_fields(ws, it["_path"], on_disk)
+                if on_disk:
+                    rewrite_fields(ws, it["_path"], on_disk)
+                if drop_keys:
+                    remove_fields(ws, it["_path"], drop_keys)
             except OSError:
                 pass
     return WriteGate("ran", reverted, "", unchecked)

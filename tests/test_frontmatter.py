@@ -12,7 +12,12 @@ import unittest
 
 from helpers import TempCase, fixture
 
-from nextbrief.frontmatter import format_value, parse_frontmatter, rewrite_fields
+from nextbrief.frontmatter import (
+    format_value,
+    parse_frontmatter,
+    remove_fields,
+    rewrite_fields,
+)
 
 # The document a user actually writes, kept in tests/fixtures/ so the parser test
 # and the launch test cannot drift onto two different ideas of the schema.
@@ -180,6 +185,72 @@ class Rewriting(TempCase):
         plain = self.tmp / "plain.md"
         plain.write_text("# No frontmatter\n", encoding="utf-8")
         self.assertFalse(rewrite_fields(plain, {"status": "done"}))
+        self.assertEqual(plain.read_text(encoding="utf-8"), "# No frontmatter\n")
+
+
+class Removing(TempCase):
+    """The other writer, and the more dangerous one: it deletes lines out of a
+    file a person owns. Taking the wrong line is worse than the illegal write it
+    is reverting, so what it refuses to touch matters as much as what it removes.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.path = self.tmp / "NA-0001.md"
+        self.path.write_text(DOC, encoding="utf-8")
+        self.original = self.path.read_bytes()
+
+    def _fields(self):
+        return parse_frontmatter(self.path.read_text(encoding="utf-8"))[0]
+
+    def test_a_scalar_key_goes_and_nothing_else_moves(self):
+        self.assertTrue(remove_fields(self.path, ["priority"]))
+        after = self.path.read_text(encoding="utf-8")
+        self.assertNotIn("priority", after)
+        fields, body = parse_frontmatter(after)
+        self.assertEqual(fields["id"], "NA-0001")
+        self.assertEqual(fields["is_next_action"], True)
+        self.assertEqual(body, parse_frontmatter(DOC)[1])
+
+    def test_several_keys_at_once(self):
+        self.assertTrue(remove_fields(self.path, ["priority", "human_confirmed"]))
+        fields = self._fields()
+        self.assertNotIn("priority", fields)
+        self.assertNotIn("human_confirmed", fields)
+        self.assertEqual(fields["estimate_min"], 45)
+
+    def test_a_key_owning_a_nested_block_is_refused(self):
+        """★ Removing the header would orphan its body into the previous key. ★
+
+        `automation:` owns four indented lines. Delete the header and the parser
+        reads them as belonging to `estimate_min`, which is not a smaller version
+        of the original edit -- it is a different, wrong document.
+        """
+        self.assertFalse(remove_fields(self.path, ["automation"]),
+                         "a key owning indented lines was removed by its header alone")
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertEqual(self._fields()["automation"]["tier"], "hook")
+
+    def test_a_block_scalar_is_refused_too(self):
+        # `notes: |` owns the two indented lines under it, for the same reason.
+        self.assertFalse(remove_fields(self.path, ["notes"]),
+                         "a block scalar was removed by its header alone")
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_a_nested_key_is_not_reachable_from_the_top_level(self):
+        # `tier` exists only inside `automation`. A top-level removal must not
+        # reach into the block -- the mirror of the same rule in `rewrite_fields`.
+        self.assertFalse(remove_fields(self.path, ["tier"]))
+        self.assertEqual(self._fields()["automation"]["tier"], "hook")
+
+    def test_removing_a_key_that_is_not_there_changes_nothing(self):
+        self.assertFalse(remove_fields(self.path, ["deferred_until"]))
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_file_without_frontmatter_is_left_alone(self):
+        plain = self.tmp / "plain.md"
+        plain.write_text("# No frontmatter\n", encoding="utf-8")
+        self.assertFalse(remove_fields(plain, ["status"]))
         self.assertEqual(plain.read_text(encoding="utf-8"), "# No frontmatter\n")
 
 

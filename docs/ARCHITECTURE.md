@@ -190,6 +190,17 @@ Because the baseline is `git HEAD`, human edits must be committed as they are
 made. Otherwise the gate cannot tell "the owner marked this done" from "an agent
 wrote `done`", and it would revert the owner's own work.
 
+A field the committed copy does not carry **at all** is covered by the right-hand
+column too, and it was not until 0.2.1. The comparison required the key to be
+present in the baseline, so an item whose frontmatter had no `human_confirmed`
+line could be handed one saying `true` — the flag that freezes the automation
+block and exempts the entry from decay — and the run recorded zero reverted
+fields and a clean gate. Frontmatter is not uniform (`nextbrief followup` mints a
+different key set from `schema/BACKLOG_TEMPLATE.md`), so this was one missing
+line away on any entry. An added human-only field is now reverted by *removing*
+the line: there is no old value to restore, and writing `priority: null` would
+replace an illegal value with one the next run reads as an answer.
+
 ### Gate 4 — caps
 
 Section-by-section limits on how much reaches the page. Overflow is written to

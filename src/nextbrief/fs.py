@@ -44,6 +44,7 @@ import json
 import os
 from pathlib import Path
 
+from .frontmatter import remove_fields as _remove_fields_unchecked
 from .frontmatter import rewrite_fields as _rewrite_fields_unchecked
 from .paths import CONFIG_NAME, REGISTRY_NAME, Workspace, WorkspaceError
 
@@ -55,6 +56,7 @@ __all__ = [
     "ensure_dir",
     "human_only",
     "remove",
+    "remove_fields",
     "replace",
     "rewrite_fields",
     "write_outside_workspace",
@@ -185,6 +187,18 @@ def rewrite_fields(ws: Workspace, path, fields) -> bool:
     p = Path(path)
     _require_inside(ws, p, "rewrite")
     return _rewrite_fields_unchecked(p, fields)
+
+
+def remove_fields(ws: Workspace, path, keys) -> bool:
+    """Delete frontmatter keys in place, inside the workspace only.
+
+    Same confinement and same posture as ``rewrite_fields``: it is the other half
+    of how the write-permission gate reverts an illegal edit, aimed at a path
+    that came out of a file an agent just wrote.
+    """
+    p = Path(path)
+    _require_inside(ws, p, "rewrite")
+    return _remove_fields_unchecked(p, keys)
 
 
 def ensure_dir(ws: Workspace, path) -> None:

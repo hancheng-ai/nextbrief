@@ -58,6 +58,15 @@ class Containment(GateCase):
             fs.rewrite_fields(self.ws, victim, {"priority": 9})
         self.assertIn("priority: 1", victim.read_text(encoding="utf-8"))
 
+    def test_remove_fields_refuses_a_neighbour(self):
+        # The gate's other repair, and the one that deletes rather than
+        # overwrites: containment matters more here, not less.
+        victim = self.outside / "item.md"
+        victim.write_text("---\nid: x\npriority: 1\n---\n\nbody\n", encoding="utf-8")
+        with self.assertRaises(WorkspaceError):
+            fs.remove_fields(self.ws, victim, ["priority"])
+        self.assertIn("priority: 1", victim.read_text(encoding="utf-8"))
+
     def test_delete_refuses_a_neighbour(self):
         with self.assertRaises(WorkspaceError):
             fs.remove(self.ws, self.outside / "notes.md")
@@ -244,16 +253,30 @@ class TheDoorIsWhereItSaysItIs(unittest.TestCase):
         for stage in ("sense", "render", "html"):
             self.assertNotIn("write_outside_workspace", sources[stage])
 
-    def test_the_raw_frontmatter_writer_stays_private_to_the_gate(self):
-        # frontmatter.rewrite_fields is unchecked by design. If anything but fs
-        # imports it, the write-permission gate can be handed a path nobody
-        # checked -- and that path came out of a file an agent just wrote.
+    def test_the_raw_frontmatter_writers_stay_private_to_the_gate(self):
+        """``rewrite_fields`` and ``remove_fields`` in :mod:`nextbrief.frontmatter`
+        are unchecked by design. If anything but ``fs`` imports one, the
+        write-permission gate can be handed a path nobody checked -- and that path
+        came out of a file an agent just wrote.
+
+        Parsed rather than matched against a line of source. This assertion used
+        to be ``assertNotIn("from .frontmatter import parse_frontmatter,
+        rewrite_fields", text)``, which is satisfied by reordering the two names,
+        importing on its own line, or importing the second writer that did not
+        exist when the string was written. It was checking for one spelling of the
+        mistake rather than for the mistake.
+        """
+        unchecked = {"rewrite_fields", "remove_fields"}
         for name, text in self._sources().items():
             if name in ("fs", "frontmatter"):
                 continue
-            self.assertNotIn(
-                "from .frontmatter import parse_frontmatter, rewrite_fields", text,
-                "%s imports the unchecked frontmatter writer" % name)
+            for node in ast.walk(ast.parse(text)):
+                if not isinstance(node, ast.ImportFrom) or node.module != "frontmatter":
+                    continue
+                taken = sorted({alias.name for alias in node.names} & unchecked)
+                self.assertEqual(
+                    taken, [],
+                    "%s imports the unchecked frontmatter writer(s) %s" % (name, taken))
 
 
 if __name__ == "__main__":

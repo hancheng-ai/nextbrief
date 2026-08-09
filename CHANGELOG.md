@@ -146,6 +146,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   properties in `paths.py`, which also means a property added later is covered
   without anyone remembering to come back.
 
+- **The write-permission gate now covers a human-only field the committed copy
+  does not carry at all.** It compared `if field in old_fm and it.get(field) !=
+  old_fm.get(field)`, so the *absence* of a key was an unguarded write channel.
+  Measured against this engine: an item whose baseline had no `human_confirmed`
+  line kept `human_confirmed: true` through a full render, with `reverted_fields:
+  0`, an empty `rejected.jsonl` and `write_gate: ran`. That flag freezes the
+  automation block against the agent and exempts the entry from automatic decay,
+  and the agent could grant it to itself. `priority: 0` and `is_next_action: true`
+  landed the same way, which is an agent putting its own entry at the top of
+  tomorrow's page.
+
+  `docs/ARCHITECTURE.md` has listed `human_confirmed` under *an agent may not
+  write* since the gate was introduced. The promise was true for every item that
+  already had the key and false for every item that did not, and nothing in the
+  suite could tell the two apart. Frontmatter is not uniform — `nextbrief
+  followup` mints a different key set from `schema/BACKLOG_TEMPLATE.md`, and a
+  hand-written entry is its own shape — so this was one missing line away on any
+  item.
+
+  An added human-only field is reverted by *removing the line*, through a new
+  `frontmatter.remove_fields` confined to the workspace by `fs` like its
+  counterpart. There is no old value to restore, and writing `priority: null`
+  would replace an illegal value with one the next run reads as a real answer. A
+  key owning indented lines beneath it — a nested block, a `|` scalar — is
+  refused rather than removed, because deleting the header orphans its body into
+  the key above.
+
+  `proposed_status` is untouched by this: it is not a human-only field, so a
+  proposal may still be added to an item that never carried the key, which is the
+  shape nine of the newest entries in the author's backlog have.
+
 - **Every link in both READMEs works on PyPI, not only on GitHub.**
   `pyproject.toml` sets `readme = "README.md"`, so that file is the PyPI long
   description, and PyPI renders it with no base URL: a relative target is

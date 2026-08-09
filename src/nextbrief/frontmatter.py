@@ -5,9 +5,9 @@ exactly the subset documented in ``schema/BACKLOG_TEMPLATE.md``: scalars, one
 level of nesting, inline lists, and ``|`` block scalars. Not a YAML
 implementation, and not trying to be -- see ``jsonc`` for why stdlib-only matters.
 
-``rewrite_fields`` is the only writer. It rewrites individual frontmatter lines
-in place and leaves the body untouched, so a malformed value can never destroy
-the prose a human wrote underneath.
+``rewrite_fields`` and ``remove_fields`` are the only writers. Both work a line
+at a time inside the frontmatter block and leave the body untouched, so a
+malformed value can never destroy the prose a human wrote underneath.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-__all__ = ["parse_frontmatter", "rewrite_fields", "format_value"]
+__all__ = ["parse_frontmatter", "rewrite_fields", "remove_fields", "format_value"]
 
 _KEY = re.compile(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$")
 _NESTED_KEY = re.compile(r"^\s+([A-Za-z_][\w-]*)\s*:\s*(.*)$")
@@ -135,6 +135,52 @@ def rewrite_fields(path, fields: Dict[str, Any]) -> bool:
         lines.append("%s: %s" % (key, format_value(value)))
 
     new_block = "\n".join(lines)
+    if new_block == block:
+        return False
+    p.write_text(text[:head_start] + new_block + text[end:], encoding="utf-8")
+    return True
+
+
+def remove_fields(path, keys) -> bool:
+    """Delete top-level frontmatter keys. Returns True if the file changed.
+
+    The counterpart to ``rewrite_fields``, and it has one caller: the
+    write-permission gate, reverting a human-only field that the committed copy
+    does not carry at all. There the only correct restoration is *no line*.
+    Setting it back to what the baseline "had" would write ``priority: null``
+    onto the item -- an illegal edit replaced by a worse one, and one the next
+    run would then read as a real value.
+
+    A key owning indented lines beneath it -- a nested block, or a ``|`` scalar
+    -- is left in place. Removing its header would orphan its body into the
+    previous key, which destroys more than the illegal edit did. The gate takes
+    the same posture on nested values it can identify, restoring them in memory
+    only, and this is the same rule for the case where there is nothing to
+    restore.
+    """
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)
+    if end == -1:
+        return False
+
+    head_start = text.find("\n") + 1
+    block = text[head_start:end]
+    lines = block.split("\n")
+    wanted = set(keys)
+
+    kept = []
+    for idx, line in enumerate(lines):
+        m = _KEY.match(line)
+        if m and not line.startswith("  ") and m.group(1) in wanted:
+            following = lines[idx + 1] if idx + 1 < len(lines) else ""
+            if m.group(2).strip() not in ("", "|") and not following.startswith("  "):
+                continue
+        kept.append(line)
+
+    new_block = "\n".join(kept)
     if new_block == block:
         return False
     p.write_text(text[:head_start] + new_block + text[end:], encoding="utf-8")
