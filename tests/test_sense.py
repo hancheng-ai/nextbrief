@@ -11,12 +11,14 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import unittest
 
 from helpers import (
     AS_OF,
     AS_OF_DATE,
     RECENT_MTIME,
+    REPO_ROOT,
     TempCase,
     base_registry,
     capture,
@@ -180,6 +182,193 @@ class CheckCoversTheDigest(TempCase):
         code, out, _ = self._sense("--check")
         self.assertEqual(code, sense.EXIT_OK)
         self.assertIn("current", out)
+
+
+class TheDigestCarriesTheCriteriaCounts(TempCase):
+    """★ The evidence behind the one judgement stage 2 is asked to make. ★
+
+    ``proposed_status: done`` is the only thing in the system that can say a
+    backlog item looks finished, and both prompt locales ask for it -- while the
+    digest, the model's only input, shipped sixteen fields per item and not one
+    of them concerned acceptance criteria. The body was parsed one line above the
+    dict the model reads and thrown away.
+
+    Measured on the real workspace before this existed: an item reached the
+    digest with ``proposed_status: null`` while its own file carried five of five
+    criteria ticked, and the nightly pass ran on schedule and had nothing to say.
+    It was not being cautious. It could not see.
+    """
+
+    BODY = "\n".join([
+        "<!-- AC:BEGIN -->",
+        "- [x] #1 (agent) the exporter writes one file per crate",
+        "- [~] #2 (agent) the legacy sidecar keeps working",
+        "- [ ] #3 (you) the migration guide reads right on a phone",
+        "- [ ] #4 (agent) ruff is clean",
+        "- [ ] #5 nobody has classified this one",
+        "<!-- AC:END -->",
+    ])
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+
+    def _entries(self):
+        """Through ``sense`` itself, because the digest is the file the model
+        reads. A unit test on ``load_backlog_summary`` would pass whether or not
+        the counts ever reached ``state/digest.json``."""
+        code, _out, err = capture(sense.main,
+                                  ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        digest = json.loads((self.ws / "state" / "digest.json").read_text(encoding="utf-8"))
+        return {b["id"]: b for b in digest["backlog"]}
+
+    def test_the_four_counts_reach_the_digest(self):
+        write_backlog_item(self.ws, "NA-0001", body=self.BODY)
+        entry = self._entries()["NA-0001"]
+        self.assertEqual(
+            (entry["criteria_done"], entry["criteria_dropped"], entry["criteria_total"],
+             entry["criteria_open_needing_human"]),
+            (1, 1, 5, 1),
+            "the criteria counts did not reach the digest as written")
+
+    def test_a_dropped_criterion_is_resolved_and_stays_in_the_total(self):
+        """The silent regression, stated as a test.
+
+        Miss the ``~`` mark and this item reports four criteria instead of five,
+        which does not read as a bug -- it reads as an item that only ever had
+        four, and the promise somebody set aside is gone with nothing left to say
+        it was made. Dropped is counted separately from done for the other half
+        of the same reason: "we did this" and "we stopped meaning to" are
+        different answers and only one of them is an achievement.
+        """
+        write_backlog_item(self.ws, "NA-0001", body=self.BODY)
+        entry = self._entries()["NA-0001"]
+        self.assertEqual(entry["criteria_total"], 5,
+                         "a dropped criterion vanished from the denominator")
+        self.assertEqual(entry["criteria_dropped"], 1)
+        self.assertNotIn(entry["criteria_done"], (2,),
+                         "a dropped criterion was counted as done")
+
+    def test_only_criteria_that_are_open_and_marked_you_are_counted_as_human(self):
+        # Ticked and dropped `(you)` criteria are settled, and an item nobody can
+        # act on tonight is a different report from an item nobody has finished.
+        write_backlog_item(self.ws, "NA-0002", body="\n".join([
+            "- [x] #1 (you) you already looked at it",
+            "- [~] #2 (you) and this one stopped mattering",
+            "- [ ] #3 (agent) one command settles this",
+        ]))
+        self.assertEqual(self._entries()["NA-0002"]["criteria_open_needing_human"], 0,
+                         "a settled criterion was counted as waiting on a person")
+
+    def test_the_shape_that_warrants_a_proposal_is_reportable(self):
+        # done + dropped == total, total > 0, nothing open. This is the exact
+        # condition both prompts now name, so the digest has to be able to say it.
+        write_backlog_item(self.ws, "NA-0003", body="\n".join([
+            "- [x] #1 (agent) it ships",
+            "- [~] #2 (you) the old flow keeps working",
+        ]))
+        entry = self._entries()["NA-0003"]
+        self.assertEqual(entry["criteria_done"] + entry["criteria_dropped"],
+                         entry["criteria_total"])
+        self.assertGreater(entry["criteria_total"], 0)
+        self.assertEqual(entry["criteria_open_needing_human"], 0)
+
+    def test_an_item_with_no_criteria_says_zero_rather_than_nothing(self):
+        # `total: 0` is a statement the prompt can act on -- "this is evidence of
+        # nothing" -- and a missing key is not. An absent field would arrive as
+        # None and read as "unknown", which is the shape a model fills in.
+        write_backlog_item(self.ws, "NA-0004", body="No checkboxes here at all.")
+        entry = self._entries()["NA-0004"]
+        for field in ("criteria_done", "criteria_dropped", "criteria_total",
+                      "criteria_open_needing_human"):
+            self.assertEqual(entry[field], 0, field)
+
+    def test_the_criteria_text_itself_does_not_reach_the_digest(self):
+        """Counts, not prose, and this is the guard on that decision.
+
+        ``load_backlog_summary`` exists for cost: the measurement in its own
+        docstring is what folding the backlog into one file bought. A count
+        answers the only question being asked; the sentences would be paid for on
+        every round of every night to answer it a second time.
+        """
+        write_backlog_item(self.ws, "NA-0005", body=self.BODY)
+        self._entries()
+        digest = (self.ws / "state" / "digest.json").read_text(encoding="utf-8")
+        for phrase in ("one file per crate", "the legacy sidecar keeps working",
+                       "reads right on a phone", "nobody has classified this one"):
+            self.assertNotIn(phrase, digest,
+                             "criterion text reached the model's input: %r" % phrase)
+
+
+class ThePromptsNameTheDigestFieldsInBothLocales(TempCase):
+    """Two failures, one check, and this repository has produced both.
+
+    A field named in ``daily.en.md`` and not in ``daily.zh.md`` is a capability
+    that exists in one locale -- the Chinese nightly pass is told to judge from
+    data it was never told is there. A field named in a prompt that the digest
+    does not ship is the mirror image: an instruction to read something that is
+    not in the file.
+
+    Matched inside code spans and fenced blocks only. ``file``, ``title`` and
+    ``status`` are ordinary English words, and matching them in prose made the
+    comparison agree for reasons that had nothing to do with the prompt naming a
+    field.
+    """
+
+    PROMPT_DIR = REPO_ROOT / "src" / "nextbrief" / "prompts"
+    COUNTS = {"criteria_done", "criteria_dropped", "criteria_total",
+              "criteria_open_needing_human"}
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+        write_backlog_item(self.ws, "NA-0001")
+
+    @staticmethod
+    def _code(text):
+        fenced = re.findall(r"```.*?```", text, flags=re.S)
+        rest = re.sub(r"```.*?```", "", text, flags=re.S)
+        return "\n".join(fenced + re.findall(r"`[^`\n]+`", rest))
+
+    def _named(self, prompt, fields):
+        text = self._code((self.PROMPT_DIR / prompt).read_text(encoding="utf-8"))
+        return {f for f in fields if re.search(r"\b%s\b" % re.escape(f), text)}
+
+    def _shipped(self):
+        """The real field list, from the real function, over a real entry."""
+        entries = sense.load_backlog_summary(resolve_workspace(str(self.ws)))
+        self.assertEqual(len(entries), 1, "the fixture wrote no backlog entry")
+        return set(entries[0])
+
+    def test_every_field_one_prompt_names_the_other_names_too(self):
+        fields = self._shipped()
+        en = self._named("daily.en.md", fields)
+        zh = self._named("daily.zh.md", fields)
+        self.assertEqual(
+            sorted(en - zh), [],
+            "daily.en.md names digest fields daily.zh.md never mentions")
+        self.assertEqual(
+            sorted(zh - en), [],
+            "daily.zh.md names digest fields daily.en.md never mentions")
+
+    def test_both_prompts_name_the_criteria_counts(self):
+        # The check above is satisfied by two prompts that both say nothing, so
+        # it cannot stand alone: this one says which fields have to be in there.
+        for prompt in ("daily.en.md", "daily.zh.md"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(self._named(prompt, self.COUNTS), self.COUNTS,
+                                 "%s never names %s" % (
+                                     prompt,
+                                     sorted(self.COUNTS - self._named(prompt, self.COUNTS))))
+
+    def test_the_counts_the_prompts_name_are_counts_the_digest_ships(self):
+        # The other direction. A prompt telling the model to read
+        # `criteria_total` when nothing writes it is a rule that can never fire,
+        # and nothing downstream would ever go red.
+        self.assertEqual(sorted(self.COUNTS - self._shipped()), [],
+                         "the prompts name criteria counts load_backlog_summary "
+                         "does not put in the digest")
 
 
 class GitPathResolution(TempCase):

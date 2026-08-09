@@ -36,7 +36,8 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 __all__ = [
     "OPEN_STATUSES", "TERMINAL_STATUSES", "DEFERRED", "HUMAN_ONLY_STATUSES",
-    "AC_OPEN", "AC_DONE", "AC_DROPPED",
+    "AC_OPEN", "AC_DONE", "AC_DROPPED", "AC_YOU", "AC_AGENT",
+    "ac_owner", "ac_lines", "ac_progress",
     "status_of", "defer_due", "is_live", "is_parked", "days_until_due",
     "Closing", "FutureWork", "CLOSING_BEGIN", "CLOSING_END",
     "SUMMARY_HUMAN", "SUMMARY_DRAFT", "SUMMARY_NONE",
@@ -74,6 +75,78 @@ HUMAN_ONLY_STATUSES = TERMINAL_STATUSES + (DEFERRED,)
 AC_OPEN = " "
 AC_DONE = "x"
 AC_DROPPED = "~"
+
+# Who can SAY whether a criterion is met, written into the criterion's own text
+# right after its number:  `- [ ] #4 (you) the brief reads right on a phone`.
+#
+# ★ The question is "who can tell that it is true", not "who does the work". ★
+# Those come apart constantly: only a person can choose the illustrations, but
+# "three files appeared in assets/" is something one command can see, so that
+# criterion belongs to the agent.
+#
+# Counted on a real week: across three items that could not be closed, 20
+# criteria, of which exactly 2 needed the author -- one UAT, one set of
+# credentials. The other 18 were things a command could settle, and they sat in
+# the same list, in the same shape, in front of the same person. The cost was
+# never the ticking. It was that "which of these actually need me" had to be
+# worked out again from scratch every single time, and that recomputation is the
+# switch this tool exists to spend rather than charge.
+AC_YOU = "you"
+AC_AGENT = "agent"
+
+_AC_OWNER = re.compile(r"^(?:#\d+\s*)?\((you|agent)\)", re.IGNORECASE)
+
+
+def ac_owner(text: str) -> Optional[str]:
+    """``"you"``, ``"agent"``, or ``None`` for a criterion carrying no marker."""
+    m = _AC_OWNER.match(text.strip())
+    return m.group(1).lower() if m else None
+
+
+def ac_lines(body: str) -> List[Tuple[int, str, str]]:
+    """``(line index, mark, text)`` for every acceptance criterion.
+
+    ★ The one parser. Every other reader of criteria is a comprehension over
+    this, and that is load-bearing rather than tidy. ★
+
+    A mark only some of the readers know about does not fail loudly -- it fails
+    by *subtraction*. Miss the counter and `AC 2/5` prints as `AC 2/4`, which
+    does not read as a bug: it reads as an item that always had four criteria,
+    and the promise that was set aside is gone with nothing to say it was ever
+    made. Sharing the parser is what makes "all of them recognise it" a property
+    of the code rather than a thing four functions have to remember.
+
+    It lives here rather than in ``cli`` because ``sense`` reads it too, and
+    ``sense`` may not import ``cli`` -- the dependency runs the other way. A
+    second parser in the sensing stage would be the subtraction failure above
+    with an extra copy to keep in step.
+    """
+    out = []
+    for i, line in enumerate(body.splitlines()):
+        s = line.strip()
+        if s[:3] in ("- [", "* [") and len(s) > 5 and s[4] == "]":
+            mark = s[3].lower()
+            if mark in (AC_OPEN, AC_DONE, AC_DROPPED) and s[5:].strip():
+                out.append((i, mark, s[5:].strip()))
+    return out
+
+
+def ac_progress(body: str) -> Tuple[int, int, int]:
+    """``(ticked, dropped, total)`` over the item's acceptance criteria.
+
+    Checkbox lines in the body, the same definition ``launch`` copies into the
+    session prompt. Nothing here writes a tick on its own: ticking is a human
+    act, which is exactly why the count is worth showing -- the engine can see
+    the number and cannot move it.
+
+    Dropped criteria stay in ``total``. They were promised, and a denominator
+    that quietly shrinks when one is set aside hides the promise along with it.
+    They are reported separately rather than folded into ``ticked``, because
+    "we did this" and "we stopped meaning to" are different answers and only one
+    of them is an achievement.
+    """
+    marks = [m for _i, m, _t in ac_lines(body)]
+    return marks.count(AC_DONE), marks.count(AC_DROPPED), len(marks)
 
 
 def status_of(fm: Dict[str, Any]) -> str:

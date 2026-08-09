@@ -610,6 +610,113 @@ class WritePermissionGate(GateCase):
         self.assertEqual(self.runs()[-1]["write_gate_unchecked"], 0)
 
 
+@requires_git
+class AProposalSurvivesTheGateEvenWhenTheKeyIsNew(GateCase):
+    """★ The one write the nightly pass exists to make must reach the disk. ★
+
+    ``proposed_status`` is the whole proposal channel: an agent may never close an
+    item, only suggest, and the brief lists the suggestion under *waiting for your
+    confirmation*. Everything upstream of that -- the prompt, the digest's
+    criteria counts, the renderer's section -- is inert if this gate reverts the
+    field on the way through.
+
+    The case that would have made it inert quietly is an item whose frontmatter
+    has no ``proposed_status`` key **at all**. Nine of the entries in the author's
+    own backlog are that shape, because ``items.new_item_text`` does not write the
+    key and ``cli._mark`` deliberately refuses to add a null one -- reading
+    tolerates the absence, so nothing looks wrong. A gate that treated a *new* key
+    differently from a changed one would have switched this feature off for the
+    nine newest items and for nothing else, which is the kind of gap nobody finds
+    by reading.
+
+    Both shapes are here on purpose. An assertion about the added key alone would
+    still pass if the gate stopped allowing proposals altogether.
+    """
+
+    ABSENT, PRESENT = "NA-0101", "NA-0102"
+
+    def setUp(self):
+        super().setUp()
+        write_snapshot(self.ws, make_snapshot())
+        # No `proposed_status` key: `write_backlog_item` writes none by default,
+        # which is the same shape the CLI mints.
+        write_backlog_item(self.ws, self.ABSENT, title="Key absent from HEAD")
+        write_backlog_item(self.ws, self.PRESENT, title="Key present and null",
+                           proposed_status="null")
+        git_init(self.ws)
+        git_commit_all(self.ws, "workspace baseline")
+        self.assertNotIn("proposed_status", self._text(self.ABSENT),
+                         "the fixture cannot reach the case it is about")
+        self.assertIn("proposed_status: null", self._text(self.PRESENT))
+
+    def _path(self, item_id):
+        return self.ws / "backlog" / ("%s.md" % item_id)
+
+    def _text(self, item_id):
+        return self._path(item_id).read_text(encoding="utf-8")
+
+    def _fields(self, item_id):
+        return parse_frontmatter(self._text(item_id))[0]
+
+    def _propose(self):
+        """Write the field the way the nightly pass does: an edit to the file."""
+        absent = self._text(self.ABSENT)
+        self._path(self.ABSENT).write_text(
+            absent.replace("status: open", "status: open\nproposed_status: done", 1),
+            encoding="utf-8")
+        self._path(self.PRESENT).write_text(
+            self._text(self.PRESENT).replace("proposed_status: null",
+                                             "proposed_status: done"),
+            encoding="utf-8")
+
+    def test_an_added_proposal_is_still_on_disk_after_the_gate(self):
+        self._propose()
+        code, _out, err = self.render()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._fields(self.ABSENT)["proposed_status"], "done",
+                         "the write gate rolled back a proposal on an item whose "
+                         "baseline never carried the field")
+        self.assertEqual(self._fields(self.PRESENT)["proposed_status"], "done",
+                         "the write gate rolled back a proposal on an item whose "
+                         "baseline carried the field as null")
+
+    def test_no_proposal_is_logged_as_an_illegal_write(self):
+        self._propose()
+        self.assertEqual(self.render()[0], 0)
+        offending = [r for r in self.rejected()
+                     if r["kind"] == "illegal_field_write"
+                     and r["field"] == "proposed_status"]
+        self.assertEqual(offending, [],
+                         "the write gate rolled back a proposal into rejected.jsonl")
+        self.assertEqual(self.runs()[-1]["reverted_fields"], 0)
+        # And the gate really ran, so "nothing reverted" is a finding rather than
+        # a gate that was never in a position to object.
+        self.assertEqual(self.runs()[-1]["write_gate"], "ran")
+        self.assertEqual(self.runs()[-1]["write_gate_unchecked"], 0)
+
+    def test_both_proposals_reach_the_reader(self):
+        # The end of the chain. A field that survives the gate and never reaches
+        # the page is `proposed_status` back where it started: written, unread.
+        self._propose()
+        self.assertEqual(self.render()[0], 0)
+        brief = self.brief()
+        self.assertIn("Waiting for your confirmation", brief)
+        for item_id in (self.ABSENT, self.PRESENT):
+            self.assertIn(item_id, brief.split("Waiting for your confirmation", 1)[1],
+                          "%s never reached the confirmation section" % item_id)
+
+    def test_the_status_beside_it_is_still_reverted(self):
+        # The control. `proposed_status` passing has to be a property of that
+        # field, not of a gate that has stopped looking at this file.
+        self._propose()
+        path = self._path(self.ABSENT)
+        path.write_text(self._text(self.ABSENT).replace("status: open", "status: done", 1),
+                        encoding="utf-8")
+        self.assertEqual(self.render()[0], 0)
+        self.assertEqual(self._fields(self.ABSENT)["status"], "open")
+        self.assertEqual(self._fields(self.ABSENT)["proposed_status"], "done")
+
+
 class WriteGateDegradation(GateCase):
     """With no git at all the gate must say so, loudly.
 

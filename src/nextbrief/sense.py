@@ -68,6 +68,7 @@ from .discovery import discover
 from .frontmatter import parse_frontmatter
 from .fs import write_text
 from .inventory import INVENTORY_NAME, inventory_document
+from .items import AC_OPEN, AC_YOU, ac_lines, ac_owner, ac_progress
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
@@ -2441,6 +2442,14 @@ def load_backlog_summary(ws: Workspace) -> List[Dict[str, Any]]:
     100 KB snapshot, taking 36 turns. Cached-input cost is roughly turns x context
     size, so that came to millions of tokens for a single nightly brief. Folded
     into one file the model reads once and the turn count drops to single digits.
+
+    The acceptance criteria arrive as **four counts and no text**, and that is the
+    whole of the trade. The only judgement stage 2 is asked to make about an item
+    is whether to propose ``done``, and a count settles it outright: nothing open
+    means proposing is legitimate, anything open means it is not. Shipping the
+    criteria themselves would put a few hundred lines of prose into the context
+    the paragraph above exists to keep small -- paid on every round, to answer a
+    question that was already answered by an integer.
     """
     out: List[Dict[str, Any]] = []
     bl = ws.backlog
@@ -2450,13 +2459,24 @@ def load_backlog_summary(ws: Workspace) -> List[Dict[str, Any]]:
         if f.name.startswith("_"):
             continue
         try:
-            fm, _body = parse_frontmatter(f.read_text(encoding="utf-8"))
+            fm, body = parse_frontmatter(f.read_text(encoding="utf-8"))
         except OSError:
             continue
         if not fm:
             continue
         a = fm.get("automation") or {}
         src = fm.get("source") or {}
+        criteria_done, criteria_dropped, criteria_total = ac_progress(body)
+        # Still OPEN and explicitly marked `(you)`: the difference between "an
+        # agent could finish this tonight" and "this is waiting on a person".
+        # Only the explicit marker counts. An unmarked criterion is one nobody
+        # has classified, which `cli._needs_you` deliberately reads as yours
+        # because it is choosing what to put in front of a human -- but reading
+        # it that way here would report every pre-marker item as human-blocked,
+        # and stage 2 would stop offering to do work it can do.
+        criteria_open_needing_human = sum(
+            1 for _i, mark, text in ac_lines(body)
+            if mark == AC_OPEN and ac_owner(text) == AC_YOU)
         out.append({
             "id": fm.get("id"), "file": f.name, "title": fm.get("title"),
             "project": fm.get("project"), "status": fm.get("status"),
@@ -2468,6 +2488,24 @@ def load_backlog_summary(ws: Workspace) -> List[Dict[str, Any]]:
             "human_confirmed": fm.get("human_confirmed"),
             "source_doc": src.get("doc") if isinstance(src, dict) else None,
             "estimate_min": fm.get("estimate_min"),
+            # ★ The evidence for the field below it. ★
+            #
+            # `proposed_status: done` is the one judgement about the backlog that
+            # only the nightly pass can write, and until these four numbers
+            # existed the model could not see whether a single box was ticked:
+            # the body was parsed one line above this dict and thrown away. It
+            # was not being cautious about closing things, it was blind, and the
+            # tool's own thesis -- no assertion without evidence -- had been
+            # applied to everything except the assertion it asks for.
+            #
+            # A dropped criterion counts as resolved, not outstanding, and stays
+            # in the total: `done + dropped == total` with `total > 0` is the
+            # shape that warrants a proposal. `total == 0` warrants nothing --
+            # an item nobody wrote criteria for is silent, not finished.
+            "criteria_done": criteria_done,
+            "criteria_dropped": criteria_dropped,
+            "criteria_total": criteria_total,
+            "criteria_open_needing_human": criteria_open_needing_human,
             # Carried so the model can see a suggestion that is already standing
             # and not make it a second time. Before the brief listed these, a
             # proposal was write-only in both directions: nobody read it, and the

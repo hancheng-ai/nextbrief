@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The nightly pass can finally see whether an item's acceptance criteria are
+  ticked.** `proposed_status: done` is the only judgement about the backlog that
+  the model is allowed to make, both prompt locales ask for it, and the renderer
+  prints it under *waiting for your confirmation* — while `state/digest.json`,
+  the model's only input, shipped sixteen fields per backlog item and not one of
+  them concerned criteria. The body was parsed one line above the dict the model
+  reads and discarded, underscore and all.
+
+  Measured on the author's workspace before the change: an item reached the
+  digest with `proposed_status: null` while its own file carried five of five
+  criteria ticked, and the nightly pass ran on schedule and had nothing to say
+  about it for a day. It was not being cautious. It could not see. This inverts
+  the tool's own thesis — the evidence gate exists so a model cannot assert
+  without evidence, and the one assertion asked of it had its evidence withheld.
+
+  Each entry in `digest.backlog[]` now carries `criteria_done`,
+  `criteria_dropped`, `criteria_total` and `criteria_open_needing_human` — the
+  last being criteria still open and explicitly marked `(you)`, which is what
+  separates "an agent could finish this tonight" from "this is waiting on a
+  person", and which the model was previously guessing from
+  `what_needs_human` prose. Both prompts now name the shape that warrants a
+  proposal: `done + dropped == total` with `total` above zero. A dropped
+  criterion counts as resolved rather than outstanding, and `total: 0` is
+  evidence of nothing.
+
+  **Counts, not the criteria themselves.** `load_backlog_summary` exists for
+  cost — its docstring records the measurement, 36 rounds and $4.37 down to 9
+  and $1.09 — and a count settles the only question being asked, while the
+  sentences would be paid for on every round of every night to answer it a
+  second time. `tests/test_sense.py` fails if criterion text reaches the digest.
+
+  The one parser for `- [ ]` / `- [x]` / `- [~]` moved from `cli` to `items`,
+  because `sense` reads it now and `sense` may not import `cli`. `cli` binds it
+  back to the private names it has always used: seven readers depend on the `~`
+  mark being counted, and a regression there is silent — an item with a
+  set-aside criterion starts printing `AC 2/4` instead of `AC 2/5`, which reads
+  as an item that only ever had four.
+
+- **The two prompt locales are checked against each other, and against the
+  digest.** Nothing compared them before: `daily.en.md` and `daily.zh.md` could
+  drift, and a field named in only one of them is a capability that exists in
+  one language. The new check reads the field list out of
+  `load_backlog_summary` itself and requires every field either prompt names to
+  be named by both — and to be a field the digest actually ships, which is the
+  same failure pointing the other way.
+
 ### Fixed
 
 - **A release candidate's notes name the index a candidate actually goes to.**
