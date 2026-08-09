@@ -73,7 +73,7 @@ class Nextbrief < Formula
   # goes on advertising a `brew install` that fails its checksum. That is this
   # exact defect, restored to being invisible, one release after it was fixed.
   # <!-- bump-version:skip:begin -->
-  # sha256-of: 0.2.0
+  # sha256-of: 0.2.1
   # <!-- bump-version:skip:end -->
   #
   # Which release this digest was actually taken from, written down because it
@@ -104,7 +104,7 @@ class Nextbrief < Formula
   # While the two disagree, the pinned install is not documented anywhere --
   # tests/test_docs_consistency.py holds both ends of that, so restoring the
   # command means fixing the digest first.
-  sha256 "e99595e7edd6e09cc8bd2d97f6a9f3dbe48356887d63d8adf9a0f4b7ff6aa1b2"
+  sha256 "724a8b036f7c0a91ef245ef829c2d09319835b31664d4549dde9d72f828f8cec"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"
 
