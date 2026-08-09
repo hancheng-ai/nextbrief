@@ -227,14 +227,16 @@ pipx install --python /usr/bin/python3 \
 
 `--python /usr/bin/python3` 是刻意的。定时任务是被一个 GUI 启动器拉起来的，`PATH` 极简；把解释器钉在系统那一个上，意味着 Homebrew 升级 Python（顺手把 pipx 虚拟环境所依赖的那个旧解释器退役掉）也不会弄坏每晚那次运行。CI 里也单独测这个解释器，理由完全一样。
 
-**4 · Homebrew（macOS）** —— *还没有 tap，formula 可以单独装*
+**4 · Homebrew（macOS）** —— *还没有 tap，钉版本的那条路今天也不给*
 
 ```sh
 git clone --depth 1 https://github.com/hancheng-ai/nextbrief
-brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
+brew install --HEAD --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 ```
 
-formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review；它钉在 `v0.2.0` 那个 sdist 上。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
+`--HEAD` 是从 `main` 构建。formula 里另一条路会去下载钉住的 `v0.2.0` sdist，并拿 stanza 里的 `sha256` 校验——而那个摘要属于更早的一个版本，因为它只能从「tag 推上去、发布任务把产物构建出来之后才存在」的那个文件上取。所以那条命令会校验失败，在摘要跟上来之前这里就不印它。formula 里写清楚了它的摘要取自哪个版本，并且有一个测试不许本节在两者不一致时还提供钉版本的那条命令。
+
+formula 本身纳入本仓版本控制，在 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb)——这样它会和「可能把它弄坏的那个改动」在同一个 PR 里被 review。`<owner>/homebrew-tap` 仓库（有了它才能 `brew tap` + `brew install nextbrief`）还没建，建法写在 formula 的头部注释里。
 
 **5 · Claude Code 插件** —— *装的是 skill，不是引擎*
 

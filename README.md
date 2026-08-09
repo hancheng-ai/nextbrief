@@ -293,19 +293,26 @@ Homebrew Python upgrade — which retires the interpreter a pipx venv was built
 against — cannot break the nightly run. That interpreter is also tested on its
 own in CI, for the same reason.
 
-**4 · Homebrew, macOS** — *no tap yet; the formula installs on its own*
+**4 · Homebrew, macOS** — *no tap yet, and the pinned build is not offered today*
 
 ```sh
 git clone --depth 1 https://github.com/hancheng-ai/nextbrief
-brew install --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
+brew install --HEAD --build-from-source ./nextbrief/packaging/homebrew/nextbrief.rb
 ```
+
+`--HEAD` builds from `main`. The formula's other path downloads the pinned
+`v0.2.0` sdist and checks it against a `sha256` in the stanza — and that digest
+belongs to an older release, because it can only be taken from an asset that
+does not exist until the tag is pushed. So that command would fail its checksum,
+and it is not printed here until the digest catches up. The formula says which
+release its digest came from, and a test refuses to let this section offer the
+pinned build while the two disagree.
 
 The formula is version-controlled here, in
 [`packaging/homebrew/nextbrief.rb`](packaging/homebrew/nextbrief.rb), so it is
-reviewed alongside the change that would break it. It is pinned to the
-`v0.2.0` sdist. A `<owner>/homebrew-tap` repository — which would make this
-`brew tap` plus `brew install nextbrief` — has not been created yet; the header
-comment in the formula has the steps.
+reviewed alongside the change that would break it. A `<owner>/homebrew-tap`
+repository — which would make this `brew tap` plus `brew install nextbrief` —
+has not been created yet; the header comment in the formula has the steps.
 
 **5 · Claude Code plugin** — *the skill, not the engine*
 
@@ -360,7 +367,7 @@ Which channels are live and which are not, at a glance. Everything here is
 | [PyPI](https://pypi.org/project/nextbrief/) — `pip`, `pipx`, `uv tool`, `uvx`, no index URL and no pin | **live**: sdist and wheel |
 | [TestPyPI](https://test.pypi.org/project/nextbrief/) — the same four, with an explicit index URL and an explicit version | **live, prereleases only**: the workflow routes any `rc`, `a`, `b` or `.dev` version here and only a final version to PyPI |
 | GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.2.0`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0), with a build-provenance attestation. Documented by tag rather than `/releases/latest/`, which resolves to the newest non-prerelease |
-| Homebrew tap | **pending**: the formula exists and installs from a local path, the tap repository does not |
+| Homebrew tap | **pending**: no tap repository. From a checkout, `brew install --HEAD` works; the pinned build is held back until its `sha256` is re-derived from the published sdist, which does not exist until the tag is |
 | Claude Code plugin — `/plugin marketplace add hancheng-ai/nextbrief` | **live from this repository**: it is its own marketplace, so a clone or the GitHub repo is the source. Not listed in any third-party marketplace |
 
 ## A brief

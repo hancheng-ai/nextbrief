@@ -78,6 +78,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all; what is worth refusing is a host that is not this repository, and that is
   what it checks now.
 
+- **The documented `brew install` had been failing its checksum since
+  `0.2.0rc1`.** `scripts/bump-version.sh` sweeps the formula's `url` and
+  `version`; it cannot sweep the `sha256`, because that digest belongs to an
+  asset which does not exist until the tag is pushed and the release job has
+  built it. The two are meant to be rejoined by a second, manual commit, and
+  that commit was skipped four releases running — so the formula asked for a
+  `0.2.0rc*` tarball and checked it against the `0.1.0rc14` digest. Confirmed
+  rather than deduced: the published `v0.2.0rc4` sdist hashes to `210a6cc0…`
+  and the formula says `5550a1a0…`.
+
+  The check on that line asserted it was sixty-four hex characters, which a
+  four-release-old digest is. Nothing else in the repository knew which release
+  the digest came from, so nothing could tell one from the other. The formula
+  now records that next to it, and while it disagrees with `version` neither
+  README may print the pinned `brew install` — `--HEAD`, which builds from
+  `main` and checks no digest, is what is documented until the digest catches
+  up.
+
 ## [0.2.0rc4] - 2026-08-08
 
 ### Added

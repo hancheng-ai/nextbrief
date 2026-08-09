@@ -61,6 +61,27 @@ class Nextbrief < Formula
   # kind of string Homebrew's parser is entitled to read as `0.1.0-rc1`, and the
   # test block compares `version` against what the binary prints.
   version "0.2.0"
+  # sha256-of: 0.1.0rc14
+  #
+  # Which release this digest was actually taken from, written down because it
+  # cannot be derived and has already gone wrong. `version` is swept by
+  # scripts/bump-version.sh; the digest cannot be, because it belongs to a file
+  # that does not exist until the tag is pushed and the release job has built
+  # it. So the two drift apart on every bump and come back together in a second,
+  # manual commit -- and that second commit was skipped four releases running,
+  # leaving this stanza pointing at a `0.2.0rc*` tarball with the 0.1.0rc14
+  # digest. Nothing said so: the only check on this line asserted that it was
+  # sixty-four hex characters, which a four-release-old digest is.
+  #
+  # While this line disagrees with `version`, the pinned install is not
+  # documented anywhere -- tests/test_docs_consistency.py holds both ends of
+  # that, so restoring the command means fixing the digest first. To fix it:
+  #
+  #   V=0.2.0
+  #   gh release view v$V --json assets \
+  #     --jq '.assets[]|select(.name|endswith(".tar.gz")).digest'
+  #
+  # then update this line and the `sha256-of:` above it together.
   sha256 "5550a1a03ec914f38385efba46d65f7a2df64ce08d64b5970a9d54f301da25ad"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"

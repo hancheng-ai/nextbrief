@@ -134,6 +134,46 @@ class HomebrewFormula(unittest.TestCase):
         sha = re.search(r'^  sha256 "([0-9a-f]{64})"', read(FORMULA), re.MULTILINE)
         self.assertIsNotNone(sha, "sha256 is still a placeholder")
 
+    # Sixty-four hex characters is all the check above can see, and a digest
+    # four releases old is sixty-four hex characters. `version` is swept by
+    # scripts/bump-version.sh on every bump; the digest cannot be, because it
+    # belongs to an asset that does not exist until the tag is pushed. So they
+    # separate on every release and are meant to be rejoined by a second, manual
+    # commit -- which was skipped for 0.2.0rc1 through rc4, leaving the formula
+    # pointing at a `0.2.0rc*` tarball with the 0.1.0rc14 digest and the README
+    # printing a `brew install` that fails its checksum. Nothing in the repo
+    # could say so, because nothing recorded which release the digest came from.
+    DIGEST_PROVENANCE = re.compile(r"^  # sha256-of: (\S+)$", re.MULTILINE)
+
+    # The pinned build, as documented. `--HEAD` builds from main and checks no
+    # digest, so it is always safe to offer; this is the other one.
+    PINNED_INSTALL = "brew install --build-from-source"
+
+    def _digest_version(self):
+        named = self.DIGEST_PROVENANCE.search(read(FORMULA))
+        self.assertIsNotNone(
+            named,
+            "the formula does not record which release its sha256 was taken "
+            "from. Add a `  # sha256-of: <version>` line above it: the digest "
+            "is the one version literal in this repository that no script can "
+            "sweep, so the only way to see it go stale is to write down what it "
+            "belongs to.")
+        return named.group(1)
+
+    def test_the_readmes_do_not_offer_a_pinned_build_with_a_stale_digest(self):
+        digest_version = self._digest_version()
+        if digest_version == __version__:
+            return          # rejoined; the pinned command is honest again
+        for path in (README, README_ZH):
+            self.assertNotIn(
+                self.PINNED_INSTALL, read(path),
+                "%s offers `%s ...`, which downloads the %s sdist and checks it "
+                "against a digest taken from %s. That command fails. Either "
+                "update the formula's sha256 and its `sha256-of:` line to %s, "
+                "or keep documenting `--HEAD` until you can."
+                % (path.name, self.PINNED_INSTALL, __version__, digest_version,
+                   __version__))
+
     def test_block_cannot_touch_the_users_real_workspace(self):
         """`nextbrief init` writes a pointer at $XDG_CONFIG_HOME/nextbrief/
         workspace. Unredirected, `brew test` repoints the user's daily brief at

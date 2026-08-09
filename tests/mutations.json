@@ -391,6 +391,24 @@
       "note": "The badge is a static claim about which release this page documents, kept honest by the sweep. This is what it looks like when the sweep stops reaching it: every URL on the page moves and the badge does not."
     },
     {
+      "label": "the pinned brew install documented against a stale digest",
+      "file": "README.md",
+      "old": "brew install --HEAD --build-from-source",
+      "new": "brew install --build-from-source",
+      "select": "test_the_readmes_do_not_offer_a_pinned_build_with_a_stale_digest",
+      "expect": "That command fails",
+      "note": "What shipped for four releases: the formula's version was swept, its sha256 was not, and the README went on printing the command that downloads one and checks it against the other."
+    },
+    {
+      "label": "the formula stops recording which release its digest is from",
+      "file": "packaging/homebrew/nextbrief.rb",
+      "old": "  # sha256-of: ",
+      "new": "  # sha256-taken-from: ",
+      "select": "test_the_readmes_do_not_offer_a_pinned_build_with_a_stale_digest",
+      "expect": "does not record which release",
+      "note": "The digest is the one version literal here that no script can sweep, so the provenance line is the only thing that can tell a stale one from a current one. Losing it puts the repository back where it was: sixty-four hex characters and no way to date them."
+    },
+    {
       "label": "the engine check is no longer the first thing run",
       "file": "skills/portfolio-context/SKILL.md",
       "old": "```bash\nnextbrief --version\n```",
