@@ -13,8 +13,15 @@ these tests until the docs are moved with it -- which is the whole point.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import shutil
+import stat
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 from helpers import REPO_ROOT
 
@@ -27,6 +34,7 @@ CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
 FORMULA = REPO_ROOT / "packaging" / "homebrew" / "nextbrief.rb"
 ARCHITECTURE = REPO_ROOT / "docs" / "ARCHITECTURE.md"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+MUTATIONS = REPO_ROOT / "tests" / "mutations.json"
 
 TAG = "v%s" % __version__
 
@@ -1050,3 +1058,253 @@ class AJobDownstreamOfAlwaysMustCarryAlways(unittest.TestCase):
         self.assertIn("always()", jobs["github-release"]["if"])
         self.assertIn("always()", jobs["homebrew"]["if"])
         self.assertEqual(["build", "github-release"], jobs["homebrew"]["needs"])
+
+
+class TheMutationManifestStillPointsAtRealLines(unittest.TestCase):
+    """Rule 7's own tooling, checked by something that runs without being asked.
+
+    `scripts/watch-red.py` requires each mutation's `old` to appear exactly once
+    in its file, and treats an anchor it cannot resolve as fatal -- correctly,
+    since a mutation that cannot be applied proves nothing. It stops there. So
+    one stale anchor takes every mutation after it out of service, and the run
+    that would have told you is the manual one nobody has done yet: **nothing in
+    CI runs watch-red.**
+
+    That is the shape `tests/test_gate_selfcheck.py` was written for, one level
+    up -- a gate that was never installed and a gate that passed produce the same
+    log, nothing -- and it had already happened here. Absolutising the README
+    links for PyPI rewrote `](PRIVACY.md)` to a tag-pinned URL three files away
+    from this manifest, and mutation 43 of 69 stopped resolving. The 26 after it
+    had not been watched since, and the whole suite was green throughout.
+
+    The anchors are exact strings by design, so they are supposed to be brittle.
+    What was missing is anything that notices when one of them breaks.
+    """
+
+    REQUIRED = ("label", "file", "old", "new", "select", "expect")
+
+    def setUp(self):
+        self.mutations = json.loads(read(MUTATIONS))["mutations"]
+        # A loop over an empty list is the failure this whole file keeps
+        # meeting, and this one would be silent in both tests below.
+        self.assertGreater(len(self.mutations), 50,
+                           "%d mutations parsed; the checks below would be "
+                           "asserting over almost nothing" % len(self.mutations))
+
+    def test_every_anchor_still_appears_exactly_once_in_its_file(self):
+        broken = []
+        for m in self.mutations:
+            path = REPO_ROOT / m["file"]
+            if not path.is_file():
+                broken.append("%s: no such file %s" % (m["label"], m["file"]))
+                continue
+            found = read(path).count(m["old"])
+            if found != 1:
+                broken.append("%s: anchor appears %d times in %s"
+                              % (m["label"], found, m["file"]))
+        self.assertEqual(
+            [], broken,
+            "watch-red stops dead on each of these, taking every mutation after "
+            "it with them:\n%s" % "\n".join("  " + b for b in broken))
+
+    def test_every_mutation_actually_changes_something(self):
+        """The other way an entry can be inert. `old == new` applies cleanly,
+        reverts cleanly, and asks the test nothing."""
+        inert = [m["label"] for m in self.mutations if m["old"] == m["new"]]
+        self.assertEqual([], inert)
+
+    def test_the_manifest_carries_the_fields_the_runner_requires(self):
+        """`expect` in particular: without it a mutation that goes red for an
+        unrelated reason counts as watched, which is how a guard gets trusted
+        for something it does not do."""
+        missing = ["%s: %s" % (m.get("label", "<unlabelled>"), key)
+                   for m in self.mutations for key in self.REQUIRED if not m.get(key)]
+        self.assertEqual([], missing)
+
+
+def _release_step_script(step_name):
+    """The dedented shell body of one `run: |` step in release.yml.
+
+    Text rather than `yaml`, for the reason in `_release_jobs`. A step opens with
+    `- name: <step_name>` and its `run: |` block scalar is every following line
+    indented past the `run:` key, blank lines included, until one is not -- which
+    is precisely how the runner will read it.
+    """
+    lines = RELEASE_WORKFLOW.read_text(encoding="utf-8").splitlines()
+    want = "- name: %s" % step_name
+    starts = [i for i, ln in enumerate(lines) if ln.strip() == want]
+    if len(starts) != 1:
+        raise AssertionError(
+            "expected exactly one `%s` step in release.yml, found %d" % (want, len(starts)))
+
+    i = starts[0]
+    step_indent = len(lines[i]) - len(lines[i].lstrip())
+
+    # The step's own keys first. A non-blank line at or left of the `- name:`
+    # column ends the step, and reaching that without a `run:` is a parse
+    # failure -- distinct from, and much louder than, an empty script.
+    run_at = None
+    for j in range(i + 1, len(lines)):
+        line = lines[j]
+        if line.strip() and (len(line) - len(line.lstrip())) <= step_indent:
+            break
+        if re.match(r"^\s+run:\s*\|\s*$", line):
+            run_at = j
+            break
+    if run_at is None:
+        raise AssertionError("no `run: |` block found under `%s`" % want)
+
+    body, indent = [], None
+    for line in lines[run_at + 1:]:
+        if not line.strip():
+            body.append("")
+            continue
+        here = len(line) - len(line.lstrip())
+        if indent is None:
+            indent = here
+        elif here < indent:
+            break
+        body.append(line[indent:])
+    return "\n".join(body).rstrip() + "\n"
+
+
+class TheInstallBlockNamesTheIndexTheVersionRoutesTo(unittest.TestCase):
+    """The release notes' two index-served lines, run rather than read.
+
+    The workflow routes a version carrying a pre-release segment to TestPyPI and
+    only a final version to PyPI, and for four candidates the notes said `from
+    PyPI` on both paths regardless. On a candidate that is not a stale link, it
+    is an install command that cannot succeed: TestPyPI is not on anyone's
+    default path, so `uv tool install nextbrief==0.2.0rc4` reports no matching
+    distribution however healthy the release is. The same mistake shipped in the
+    0.2.0rc4 plugin and cost a week.
+
+    The step's script is extracted and executed here rather than pattern-matched,
+    because what a reader gets is the output of a heredoc, a six-expression
+    `sed`, and two shell branches -- and a regex over the YAML would agree with
+    all three of them being wrong. `gh` and `sha256sum` are stubbed onto PATH;
+    they are the parts this is not about, and stubbing them is what lets the rest
+    be the real thing.
+    """
+
+    VERSION_RC = "0.2.1rc1"
+    VERSION_FINAL = "0.2.1"
+
+    def _run_step(self, version, prerelease, pypi_enabled="true"):
+        """`(notes.md, the argv gh was called with)` for one routing path."""
+        box = Path(tempfile.mkdtemp(prefix="nextbrief-notes-"))
+        self.addCleanup(shutil.rmtree, str(box), True)
+
+        (box / "release").mkdir()
+        (box / "release" / "SHA256SUMS").write_text("stub\n", encoding="utf-8")
+
+        binbox = box / "bin"
+        binbox.mkdir()
+        # `release view` must fail so the script takes the `create` branch, which
+        # is the one that passes --notes-file and --prerelease.
+        (binbox / "gh").write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_LOG"\n'
+            'if [ "$1" = "release" ] && [ "$2" = "view" ]; then exit 1; fi\nexit 0\n',
+            encoding="utf-8")
+        (binbox / "sha256sum").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        for name in ("gh", "sha256sum"):
+            path = binbox / name
+            path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        env = dict(os.environ)
+        env.update({
+            "PATH": "%s%s%s" % (binbox, os.pathsep, env.get("PATH", "")),
+            "GH_LOG": str(box / "gh.log"),
+            "GH_TOKEN": "stub",
+            "TAG": "v%s" % version,
+            "VERSION": version,
+            "PRERELEASE": prerelease,
+            "REPO_URL": REPO_URL,
+            "PYPI_ENABLED": pypi_enabled,
+        })
+        proc = subprocess.run(
+            ["bash", "-c", _release_step_script("Create release")],
+            cwd=str(box), env=env, capture_output=True)
+        self.assertEqual(
+            0, proc.returncode,
+            "the release-notes step failed:\n%s" % proc.stderr.decode("utf-8", "replace"))
+
+        notes = (box / "notes.md").read_text(encoding="utf-8")
+        log = box / "gh.log"
+        return notes, (log.read_text(encoding="utf-8") if log.exists() else "")
+
+    def test_the_step_this_class_runs_is_the_one_in_the_workflow(self):
+        """Extraction is the single point where this whole class could go quiet.
+
+        A parser that returned "" would hand bash an empty script, which exits 0
+        and writes no notes -- so the failure would surface, but as a missing
+        file rather than as the thing it is. Named here instead.
+        """
+        script = _release_step_script("Create release")
+        self.assertGreater(len(script.splitlines()), 40, script)
+        self.assertTrue(script.startswith("set -euo pipefail"), script[:80])
+        for fragment in ("cat > notes.md <<'MD'", 'if [ "$PRERELEASE" = "true" ]',
+                         "gh release create"):
+            self.assertIn(fragment, script)
+
+    def test_a_candidate_is_offered_the_index_a_candidate_goes_to(self):
+        notes, gh = self._run_step(self.VERSION_RC, "true")
+
+        self.assertIn("uv tool install --default-index https://test.pypi.org/simple/ "
+                      '"nextbrief==%s"' % self.VERSION_RC, notes)
+        self.assertIn("pipx install --index-url https://test.pypi.org/simple/ "
+                      '"nextbrief==%s"' % self.VERSION_RC, notes)
+        # The line as it was: no index, so no distribution.
+        self.assertNotIn("uv tool install nextbrief==", notes)
+        self.assertNotIn("pipx install nextbrief==", notes)
+        self.assertNotIn("# from PyPI", notes)
+        self.assertIn("--prerelease", gh)
+
+    def test_a_final_release_is_not_sent_to_testpypi(self):
+        notes, gh = self._run_step(self.VERSION_FINAL, "false")
+
+        self.assertIn("uv tool install nextbrief==%s" % self.VERSION_FINAL, notes)
+        self.assertIn("pipx install nextbrief==%s" % self.VERSION_FINAL, notes)
+        self.assertNotIn("test.pypi.org/simple/", notes)
+        self.assertNotIn("--prerelease", gh)
+
+    def test_neither_path_leaves_a_placeholder_behind(self):
+        """`sed` substitutes the install lines and the version in one pass, and
+        the lines it substitutes contain an `@VERSION@` of their own -- so the
+        expressions have to be ordered. Reordering them leaves a literal
+        `@VERSION@` in an otherwise perfect-looking command."""
+        for version, prerelease in ((self.VERSION_RC, "true"),
+                                    (self.VERSION_FINAL, "false")):
+            notes, _gh = self._run_step(version, prerelease)
+            left = sorted(set(re.findall(r"@[A-Z_]+@", notes)))
+            self.assertEqual([], left,
+                             "%s notes still carry %s" % (version, left))
+            self.assertIn(version, notes)
+
+    def test_with_publishing_off_it_names_the_index_that_is_missing_it(self):
+        """The caveat has to move with the block it caveats: with publishing
+        disabled a candidate is absent from TestPyPI, and saying `PyPI` sends
+        the reader to look in the wrong place for something that was never
+        going there."""
+        notes, _gh = self._run_step(self.VERSION_RC, "true", pypi_enabled="")
+        self.assertIn("Not on TestPyPI yet", notes)
+
+        notes, _gh = self._run_step(self.VERSION_FINAL, "false", pypi_enabled="")
+        self.assertIn("Not on PyPI yet", notes)
+
+    def test_the_notes_and_the_publish_jobs_read_the_same_signal(self):
+        """What keeps the two from drifting apart.
+
+        The notes could be right today and wrong after someone changes how
+        publishing is routed. They cannot, as long as both are derived from
+        `build.outputs.prerelease` -- so that is the thing pinned, rather than
+        the strings above.
+        """
+        jobs = _release_jobs()
+        for name in ("testpypi", "pypi"):
+            self.assertIn("needs.build.outputs.prerelease", jobs[name]["if"],
+                          "%s no longer routes on build.outputs.prerelease" % name)
+        self.assertIn("PRERELEASE: ${{ needs.build.outputs.prerelease }}",
+                      read(RELEASE_WORKFLOW),
+                      "the release-notes step reads its routing from somewhere "
+                      "other than the output the publish jobs are keyed off")

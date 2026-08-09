@@ -9,6 +9,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A release candidate's notes name the index a candidate actually goes to.**
+  The GitHub Release body opened with `uv tool install nextbrief==<version>` and
+  `pipx install nextbrief==<version>`, both annotated `# from PyPI`, on every
+  tag. The workflow does not publish every tag to PyPI: a version carrying a
+  pre-release segment routes to TestPyPI and only a final version routes to
+  PyPI, decided from the version string itself so that nobody can tick the wrong
+  box. So on a candidate the first thing the notes said was a command that
+  returns "no matching distribution" — measured, not inferred:
+  `nextbrief==0.2.0rc4` does not resolve against PyPI, and does resolve against
+  TestPyPI with the index named.
+
+  This is the second time the same sentence has cost something. The 0.2.0 entry
+  below records the Claude Code plugin shipping a week early with `pipx install
+  nextbrief` in it, for exactly this reason, and the fix then was to make both
+  READMEs *state which index a version routes to* rather than which one today's
+  happens to be on. The release notes were not part of that sweep and kept
+  saying which one today's happened to be on. They now state the rule too, in
+  the same words, and a candidate's two install lines carry the index URL and
+  the pinned version that a prerelease needs — TestPyPI is on nobody's default
+  path and no resolver picks a prerelease unasked. The caveat printed when
+  publishing is switched off moved with them, because with publishing off a
+  candidate is missing from TestPyPI rather than from PyPI.
+
+  The guard runs the release step rather than reading it. What a reader gets is
+  the output of a heredoc, a six-expression `sed` and two shell branches, and a
+  regex over the YAML would agree with all three being wrong; the step's script
+  is extracted from `release.yml` and executed with `gh` and `sha256sum` stubbed,
+  on both routing paths. What is pinned is not the wording but the wiring: the
+  notes and the two publish jobs must read the same `build.outputs.prerelease`,
+  which is what stops them drifting apart the next time routing changes. Making
+  the step runnable off the runner also cost it its one GNU-ism — `sed -i -e`,
+  which BSD sed reads as a backup suffix.
+
+- **The check that workspace artifacts are ignored can no longer be answered by
+  the machine it runs on.** `nextbrief init` scaffolds `prompts/`, `schema/`,
+  `state/`, `log/`, `backlog/`, `config.jsonc`, `registry.jsonc` and
+  `.claude/settings.json`; `state/snapshot.json` carries a filename from every
+  project the registry tracks, including the ones marked `never_read` precisely
+  because their filenames are the sensitive part. The tracked `.gitignore`
+  covers all of it, and that has been verified — this is about the verification.
+
+  `.claude/` was once held back only by a global excludes file and
+  `.git/info/exclude`, neither of which travels with a clone, which is why it is
+  now a tracked rule with a comment saying so. The guard written alongside that
+  fix copied the tracked `.gitignore` into a fresh repository to measure coverage
+  "as a clone receives it" — and the fresh repository was not isolated.
+  `GIT_CONFIG_NOSYSTEM` suppresses `/etc/gitconfig`, `GIT_CONFIG_GLOBAL`
+  suppresses `~/.gitconfig`, and **neither reaches the default excludes file**:
+  with `core.excludesFile` unset, git falls back to `~/.config/git/ignore` by
+  path rather than by configuration, so no environment variable turns it off.
+  That file exists on the machine this was written on and carries a `.claude`
+  rule. The substitution the fix was about could have recurred inside the test
+  for it without anything changing colour.
+
+  `core.excludesFile` is now pinned to `/dev/null` for every check, the box's
+  `.git/info/exclude` is emptied rather than trusted — it is the one ignore
+  source with no off switch — and two new tests hold the line from both sides: a
+  rule planted where only this machine would have it must count for nothing, and
+  the shipped file must still be read, because a checker that had stopped seeing
+  anything at all would pass the first one perfectly.
+
+- **A stale mutation anchor stops being invisible.** `scripts/watch-red.py`
+  refuses to run a mutation whose `old` no longer appears exactly once in its
+  file — correctly, since a mutation that cannot be applied proves nothing — and
+  it stops the whole run there. Absolutising the README links for PyPI, one
+  release ago, rewrote `](PRIVACY.md)` in `README.zh.md` to a tag-pinned URL, and
+  the manifest entry aimed at that line stopped resolving. It was entry 43 of 69.
+  The 26 after it had not been watched since, `watch-red` exited 2 every time it
+  was run, and the suite was green throughout because **nothing in CI runs
+  watch-red**.
+
+  Which is the shape `tests/test_gate_selfcheck.py` already names one level up: a
+  gate that was never installed and a gate that passed produce the same log,
+  nothing. The manifest is now checked by three ordinary tests — every anchor
+  resolves exactly once, no entry's `new` equals its `old`, every entry carries
+  the fields the runner needs — so the next rewrite three files away fails in CI
+  at the commit that causes it. The anchor itself is repaired, and carries a note
+  saying it holds a release tag that `bump-version.sh` does not sweep, so the
+  guard will call for it again at the next bump. That is the intended behaviour
+  rather than a defect: it fails loudly, in the right place, naming the line.
+
+- **The rules covering a rendered brief are exercised rather than assumed.** The
+  coverage check walked the tree `nextbrief init --no-scan` leaves, and `BRIEF.md`,
+  `BRIEF.html`, `state/snapshot.json`, `state/digest.json` and the rest are
+  written at the end of a *run*, not by `init` — so several `.gitignore` rules
+  had nothing exercising them. The paths are now enumerated from the `Workspace`
+  properties in `paths.py`, which also means a property added later is covered
+  without anyone remembering to come back.
+
 - **Every link in both READMEs works on PyPI, not only on GitHub.**
   `pyproject.toml` sets `readme = "README.md"`, so that file is the PyPI long
   description, and PyPI renders it with no base URL: a relative target is

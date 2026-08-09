@@ -2,6 +2,104 @@
   "_readme": "Mutations for scripts/watch-red.py -- see rule 7 of CONTRIBUTING.md. Each entry breaks exactly one thing a guard claims to catch. `old` must appear exactly once in `file`; the test picked by `select` must go red, and its output must name `expect`, or the guard is red for the wrong reason and does not count as watched.",
   "mutations": [
     {
+      "label": "release notes send a candidate to the index it is not on",
+      "file": ".github/workflows/release.yml",
+      "old": "            UV_LINE='uv tool install --default-index https://test.pypi.org/simple/ \"nextbrief==@VERSION@\"'\n            PIPX_LINE='pipx install --index-url https://test.pypi.org/simple/ \"nextbrief==@VERSION@\"'",
+      "new": "            UV_LINE='uv tool install nextbrief==@VERSION@'\n            PIPX_LINE='pipx install nextbrief==@VERSION@'",
+      "select": "test_a_candidate_is_offered_the_index_a_candidate_goes_to",
+      "expect": "--default-index https://test.pypi.org/simple/",
+      "note": "The exact bug, restored: both routing paths say PyPI while the workflow publishes candidates to TestPyPI. It shipped in the 0.2.0rc4 plugin as `no matching distribution`."
+    },
+    {
+      "label": "the version substituted before the lines that contain it",
+      "file": ".github/workflows/release.yml",
+      "old": "          sed -e \"s|@UV_LINE@|$UV_LINE|g\" \\\n              -e \"s|@PIPX_LINE@|$PIPX_LINE|g\" \\\n              -e \"s|@INDEX_NOTE@|$INDEX_NOTE|g\" \\\n              -e \"s|@VERSION@|$VERSION|g\" \\",
+      "new": "          sed -e \"s|@VERSION@|$VERSION|g\" \\\n              -e \"s|@UV_LINE@|$UV_LINE|g\" \\\n              -e \"s|@PIPX_LINE@|$PIPX_LINE|g\" \\\n              -e \"s|@INDEX_NOTE@|$INDEX_NOTE|g\" \\",
+      "select": "test_neither_path_leaves_a_placeholder_behind",
+      "expect": "@VERSION@",
+      "note": "sed applies each -e to the pattern space in turn, so an install line arriving after the version substitution keeps its literal @VERSION@ -- in a command that otherwise looks finished."
+    },
+    {
+      "label": "the publishing-off caveat names an index at random",
+      "file": ".github/workflows/release.yml",
+      "old": "              echo \"> Not on $INDEX_NAME yet, so the first two lines will not resolve.\"",
+      "new": "              echo \"> Not on PyPI yet, so the first two lines will not resolve.\"",
+      "select": "test_with_publishing_off_it_names_the_index_that_is_missing_it",
+      "expect": "Not on TestPyPI yet"
+    },
+    {
+      "label": "the notes routed off a different signal from the publish jobs",
+      "file": ".github/workflows/release.yml",
+      "old": "          PRERELEASE: ${{ needs.build.outputs.prerelease }}",
+      "new": "          PRERELEASE: ${{ github.event.release.prerelease }}",
+      "select": "test_the_notes_and_the_publish_jobs_read_the_same_signal",
+      "expect": "other than the output the publish jobs are keyed off",
+      "note": "Both would be right on the day it was written. Only reading the same output keeps them right after someone changes the routing."
+    },
+    {
+      "label": "the step the notes guard runs is no longer findable",
+      "file": ".github/workflows/release.yml",
+      "old": "      - name: Create release\n",
+      "new": "      - name: Create the release\n",
+      "select": "test_the_step_this_class_runs_is_the_one_in_the_workflow",
+      "expect": "expected exactly one",
+      "note": "Extraction is where the whole class could go quiet. An extractor returning \"\" hands bash an empty script, which exits 0 and writes no notes -- so this says so in those words instead."
+    },
+    {
+      "label": "the coverage check reads this machine's global excludes again",
+      "file": "tests/test_gitignore.py",
+      "old": "    cmd += [\"-c\", \"core.excludesFile=%s\" % os.devnull]",
+      "new": "    pass",
+      "select": "test_a_rule_only_this_machine_has_does_not_count_as_coverage",
+      "expect": "reading rules a clone never gets",
+      "note": "GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL both look like they cover this and neither does: ~/.config/git/ignore is a path git falls back to, not a value it reads from config. Without this line the ignore coverage was partly answered by a file no clone receives."
+    },
+    {
+      "label": "the coverage box keeps the local excludes git init gave it",
+      "file": "tests/test_gitignore.py",
+      "old": "        self.local_exclude.write_text(\"\", encoding=\"utf-8\")",
+      "new": "        self.local_exclude.write_text(\"scratch/\\n\", encoding=\"utf-8\")",
+      "select": "test_the_box_carries_no_local_exclude_rules_of_its_own",
+      "expect": "scratch/",
+      "note": ".git/info/exclude is the one ignore source with no off switch, so emptying it is the only defence -- and a defence that lives in setUp can be deleted without anything else changing colour."
+    },
+    {
+      "label": "the rendered brief left with no ignore rule",
+      "file": ".gitignore",
+      "old": "/BRIEF.md\n/BRIEF.html",
+      "new": "/BRIEF.md",
+      "select": "test_every_artifact_the_engine_can_write_here_is_ignored",
+      "expect": "BRIEF.html",
+      "note": "Neither BRIEF file exists after `init --no-scan`, so the coverage walk over what init created never reached these two rules. They are only written at the end of a render -- which is also when they have the most in them."
+    },
+    {
+      "label": "a mutation anchored at a file that is not there",
+      "file": "tests/mutations.json",
+      "old": "\"label\": \"the publishing-off caveat names an index at random\",\n      \"file\": \".github/workflows/release.yml\",",
+      "new": "\"label\": \"the publishing-off caveat names an index at random\",\n      \"file\": \".github/workflows/release.yaml\",",
+      "select": "test_every_anchor_still_appears_exactly_once_in_its_file",
+      "expect": "no such file .github/workflows/release.yaml",
+      "note": "How the manifest actually rots: a file is renamed and the entry pointing at it is three directories away. watch-red treats this as fatal and stops, so the cost is every mutation after it, not just this one."
+    },
+    {
+      "label": "a mutation whose new text is its old text",
+      "file": "tests/mutations.json",
+      "old": "\"new\": \"              echo \\\"> Not on PyPI yet",
+      "new": "\"new\": \"              echo \\\"> Not on $INDEX_NAME yet",
+      "select": "test_every_mutation_actually_changes_something",
+      "expect": "the publishing-off caveat names an index at random",
+      "note": "Applies cleanly, reverts cleanly, and asks the test nothing."
+    },
+    {
+      "label": "a mutation with no expect, so any red counts as watched",
+      "file": "tests/mutations.json",
+      "old": "\"expect\": \"Not on TestPyPI yet\"",
+      "new": "\"expectation\": \"Not on TestPyPI yet\"",
+      "select": "test_the_manifest_carries_the_fields_the_runner_requires",
+      "expect": "the publishing-off caveat names an index at random: expect",
+      "note": "Without `expect`, a mutation that goes red for an unrelated reason reads as a guard that was watched -- which is how a guard gets trusted for something it does not do."
+    },
+    {
       "label": "banned command in a code fence",
       "file": "skills/portfolio-context/SKILL.md",
       "old": "```bash\nnextbrief projects\n```",
@@ -295,10 +393,11 @@
     {
       "label": "the privacy page unlinked from the Chinese README",
       "file": "README.zh.md",
-      "old": "\n\n[PRIVACY.md](PRIVACY.md) 把同一件事写成了一页政策",
+      "old": "\n\n[PRIVACY.md](https://github.com/hancheng-ai/nextbrief/blob/v0.2.0/PRIVACY.md) 把同一件事写成了一页政策",
       "new": "\n\n这一段就是全部说明",
       "select": "test_it_is_linked_from_the_documents_that_would_send_someone_to_it",
-      "expect": "README.zh.md never links PRIVACY.md"
+      "expect": "README.zh.md never links PRIVACY.md",
+      "note": "The anchor carries the release tag because both occurrences of PRIVACY.md on that line have to go and the URL sits between them. bump-version.sh does not sweep this file, so the anchor goes stale at the next bump -- and TheMutationManifestStillPointsAtRealLines is what says so, in CI, at the bump rather than 42 mutations into somebody's manual run."
     },
     {
       "label": "the mark dropped from the Chinese README",

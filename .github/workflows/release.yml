@@ -278,17 +278,45 @@ jobs:
           # has been through an upload and a download since it was hashed.
           (cd release && sha256sum -c SHA256SUMS)
 
+          # Which index this version routes to, decided from the same output
+          # the two publish jobs are keyed off -- so the notes cannot name an
+          # index the artifacts did not go to. The rule, stated rather than
+          # observed: a version carrying a pre-release segment routes to
+          # TestPyPI, a final version routes to PyPI. Until this branch existed
+          # both lines said "from PyPI" unconditionally, and on every candidate
+          # they handed the reader `no matching distribution` -- the same
+          # failure the 0.2.0rc4 plugin shipped with, from the same cause.
+          #
+          # TestPyPI is not on anyone's default path and no resolver will pick
+          # a prerelease on its own, so its lines have to say both where the
+          # version is and which one it is. Neither route needs an
+          # --extra-index-url fallback: the package declares zero dependencies,
+          # so there is nothing for the resolver to go looking for elsewhere.
+          if [ "$PRERELEASE" = "true" ]; then
+            INDEX_NAME="TestPyPI"
+            UV_LINE='uv tool install --default-index https://test.pypi.org/simple/ "nextbrief==@VERSION@"'
+            PIPX_LINE='pipx install --index-url https://test.pypi.org/simple/ "nextbrief==@VERSION@"'
+            INDEX_NOTE='> This is a pre-release, so it is on [TestPyPI](https://test.pypi.org/project/nextbrief/) rather than PyPI. That is why the first two lines name an index and pin a version: a final release needs neither.'
+          else
+            INDEX_NAME="PyPI"
+            UV_LINE='uv tool install nextbrief==@VERSION@'
+            PIPX_LINE='pipx install nextbrief==@VERSION@'
+            INDEX_NOTE='> This is a final release, so it is on [PyPI](https://pypi.org/project/nextbrief/) and needs no index URL. Candidates route to [TestPyPI](https://test.pypi.org/project/nextbrief/) instead.'
+          fi
+
           # Quoted heredoc so nothing in the body is expanded -- it is full of
           # backticks and shell one-liners that must reach the reader intact.
-          # The three placeholders are substituted afterwards.
+          # The placeholders are substituted afterwards.
           cat > notes.md <<'MD'
           ## Install
 
           ```sh
-          uv tool install nextbrief==@VERSION@                  # from PyPI
-          pipx install nextbrief==@VERSION@                     # from PyPI
+          @UV_LINE@
+          @PIPX_LINE@
           curl -fsSLO @REPO@/releases/download/@TAG@/nextbrief.pyz && chmod +x nextbrief.pyz
           ```
+
+          @INDEX_NOTE@
 
           `nextbrief.pyz` is the whole program in one file: Python 3.9 or newer and
           nothing else, no install step and no virtualenv. Run it where it landed with
@@ -300,14 +328,30 @@ jobs:
           curl -fsSLO @REPO@/releases/download/@TAG@/SHA256SUMS && sha256sum -c SHA256SUMS
           ```
           MD
-          sed -i -e "s|@VERSION@|$VERSION|g" -e "s|@TAG@|$TAG|g" -e "s|@REPO@|$REPO_URL|g" notes.md
+          # Expression order matters: the two install lines carry an @VERSION@
+          # of their own, and sed applies each -e to the pattern space in turn,
+          # so they have to arrive before the version is substituted.
+          #
+          # No `sed -i`: the in-place flag takes a mandatory argument on BSD sed
+          # and refuses one on GNU, so the form that works on this runner cannot
+          # be executed anywhere else -- including by the test that reads this
+          # step back and runs it. A temp file and a mv behave the same on both.
+          sed -e "s|@UV_LINE@|$UV_LINE|g" \
+              -e "s|@PIPX_LINE@|$PIPX_LINE|g" \
+              -e "s|@INDEX_NOTE@|$INDEX_NOTE|g" \
+              -e "s|@VERSION@|$VERSION|g" \
+              -e "s|@TAG@|$TAG|g" \
+              -e "s|@REPO@|$REPO_URL|g" \
+              notes.md > notes.md.tmp && mv notes.md.tmp notes.md
 
           # Which of the three lines actually work today, said here rather than
-          # discovered from a 404.
+          # discovered from a 404. Names the index this version routes to, for
+          # the same reason the block above does: with publishing off a
+          # candidate is missing from TestPyPI, not from PyPI.
           if [ "${PYPI_ENABLED:-}" != "true" ]; then
             {
               echo
-              echo "> Not on PyPI yet, so the first two lines will not resolve."
+              echo "> Not on $INDEX_NAME yet, so the first two lines will not resolve."
               echo "> Use the \`.pyz\`, or install from source."
             } >> notes.md
           fi
