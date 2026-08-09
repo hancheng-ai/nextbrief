@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`watch-red` no longer ends every run one guard short of a clean number on a
+  healthy tree.** `tests/mutations.json` broke the pinned `brew install` guard by
+  taking `--HEAD` off the command in `README.md` and nothing else — which only
+  means anything while the formula's checksum is stale. From the release job's
+  rejoining commit until the next version bump the checksum is current, the
+  guard returns early by design, and the mutation applies cleanly to a test with
+  nothing to say. `scripts/watch-red.py` then reported *the pinned brew install
+  documented against a stale digest* under **Not watched** — correctly, and for
+  as long as that state lasted, on a tree with nothing wrong with it.
+
+  The cost is not the line. A run that is permanently one short is a run whose
+  summary stops being read to the end, and the next guard that genuinely stops
+  watching arrives as a second entry under a heading the reader has already
+  learned to skip. That is the failure mode rule 7 of `CONTRIBUTING.md` and this
+  script's own docstring exist to prevent, reintroduced underneath them.
+
+  A manifest entry may now list `edits`, each with its own `file`/`old`/`new`,
+  applied together before the run and reverted together after it. Anchors are
+  all resolved before anything is written, so an entry that cannot be applied in
+  full is not applied at all. The brew entry uses two edits: the formula's
+  `# sha256-of:` line is made to name a release older than any real one, and the
+  README's `--HEAD` comes off. That is the defect as it actually shipped, for
+  four releases, rather than half of it — and it goes red in both of the states
+  the repository alternates between, which the single-file spelling could not.
+
+  The provenance line is *prefixed* rather than overwritten, so the anchor holds
+  no version string of its own. It sits inside a `bump-version:skip` fence, so a
+  version written into the manifest against it would be one
+  `scripts/bump-version.sh` is forbidden to sweep — and a stale anchor is fatal
+  to `watch-red`, taking every mutation after it out of service. Fixing a guard
+  that is unwatchable half the time by making it unwatchable after every release
+  is not a fix.
+
+  `tests/test_docs_consistency.py` reads the manifest in the same shape, and
+  gained a check that no entry spells its edits both ways: `edits` beside a
+  top-level `file` leaves the runner honouring one and dropping the other in
+  silence, which is a line nobody broke inside a mutation everybody counted.
+  That class is the copy of `watch-red`'s manifest checks that runs without
+  being asked, because nothing in CI runs `watch-red` — and the new check
+  carries a mutation of its own, as its three siblings there already did. A
+  guard added while fixing unwatched guards does not get to be one. 87
+  mutations, all watched, on a tree in either state.
+
 ## [0.2.1] - 2026-08-09
 
 No code changes since `0.2.1rc1`. What the candidate bought was the first

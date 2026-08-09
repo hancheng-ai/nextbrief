@@ -45,6 +45,15 @@ Two further rules about what counts as watched, both learned the hard way:
     skip. A mutation that cannot be applied proves nothing, and a harness that
     shrugs at it reports a pass it did not earn.
 
+One mutation is not always one line. A guard can be about the *relationship*
+between two files -- a formula's checksum and the install command a README
+prints against it -- where breaking either end alone leaves the tree
+self-consistent and the guard correctly quiet. Such an entry lists `edits`
+rather than a single `file`/`old`/`new`; all of them are applied before the run
+and every file is put back after it. Spelled as one edit, a guard like that is
+watchable only in some of the states the repository passes through, and every
+run made from the others ends one short of a number anyone still reads.
+
 Exit codes: 0 every guard was watched failing and recovered; 1 at least one was
 not; 2 the run could not be made trustworthy -- a bad manifest, an unresolvable
 anchor, a revert that did not restore the file. The last is a failure on
@@ -67,7 +76,10 @@ EXIT_OK, EXIT_NOT_WATCHED, EXIT_ERROR = 0, 1, 2
 REPO = Path(__file__).resolve().parent.parent
 MANIFEST = REPO / "tests" / "mutations.json"
 
-REQUIRED = ("label", "file", "old", "new", "select", "expect")
+# What every entry carries, and what each of its edits carries. An entry that
+# breaks one line names its edit inline; one that breaks several lists them.
+REQUIRED = ("label", "select", "expect")
+EDIT = ("file", "old", "new")
 
 # Where the suite imports from, and the only places this script will delete a
 # cache. Deliberately not a walk from the repository root: a checkout here can
@@ -116,6 +128,18 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def edits_of(m: dict) -> list[dict]:
+    """The edits one entry applies, however it spells them.
+
+    Tolerant of a malformed entry on purpose: `load` calls this to *find* the
+    problems, so it must not raise on the way to reporting them.
+    """
+    listed = m.get("edits")
+    if isinstance(listed, list):
+        return listed
+    return [{k: m.get(k) for k in EDIT}]
+
+
 def load(path: Path) -> list[dict]:
     """Read the manifest and refuse anything that would weaken the run."""
     try:
@@ -137,15 +161,37 @@ def load(path: Path) -> list[dict]:
         if not isinstance(m, dict):
             problems.append("#%d is not an object" % i)
             continue
+        label = m.get("label", "unlabelled")
         missing = [k for k in REQUIRED if not m.get(k)]
         if missing:
-            problems.append("#%d (%s) is missing %s"
-                            % (i, m.get("label", "unlabelled"), ", ".join(missing)))
-        elif m["old"] == m["new"]:
-            problems.append("#%d (%s) mutates nothing" % (i, m["label"]))
-        elif not (REPO / m["file"]).is_file():
-            problems.append("#%d (%s) targets %s, which does not exist"
-                            % (i, m["label"], m["file"]))
+            problems.append("#%d (%s) is missing %s" % (i, label, ", ".join(missing)))
+
+        if "edits" in m and any(k in m for k in EDIT):
+            # Both spellings at once: this script would honour `edits` and drop
+            # the rest silently, counting a mutation it never applied.
+            problems.append("#%d (%s) spells its edits both ways -- `edits` and a"
+                            " top-level %s" % (i, label,
+                                               "/".join(k for k in EDIT if k in m)))
+            continue
+
+        edits = edits_of(m)
+        if not edits or not all(isinstance(e, dict) for e in edits):
+            problems.append("#%d (%s) has an empty or malformed `edits` list"
+                            % (i, label))
+            continue
+
+        for e in edits:
+            gaps = [k for k in EDIT if not e.get(k)]
+            if gaps:
+                problems.append("#%d (%s) is missing %s%s"
+                                % (i, label, ", ".join(gaps),
+                                   " in %s" % e["file"] if e.get("file") else ""))
+            elif e["old"] == e["new"]:
+                problems.append("#%d (%s) mutates nothing in %s"
+                                % (i, label, e["file"]))
+            elif not (REPO / e["file"]).is_file():
+                problems.append("#%d (%s) targets %s, which does not exist"
+                                % (i, label, e["file"]))
     if problems:
         sys.stderr.write("watch-red: the manifest cannot be trusted:\n")
         for p in problems:
@@ -184,7 +230,8 @@ def main() -> int:
 
     if args.list:
         for m in mutations:
-            print("  %-58s %s :: %s" % (m["label"], m["file"], m["select"]))
+            files = ", ".join(dict.fromkeys(e["file"] for e in edits_of(m)))
+            print("  %-58s %s :: %s" % (m["label"], files, m["select"]))
         print("\n%d mutations" % len(mutations))
         return EXIT_OK
 
@@ -197,33 +244,59 @@ def main() -> int:
     borrowed: dict[Path, float] = {}
 
     for m in mutations:
-        path = REPO / m["file"]
-        original = path.read_bytes()
-        before = digest(path)
-        text = original.decode("utf-8")
-        borrowed.setdefault(path, path.stat().st_mtime)
+        targets: dict[Path, list[dict]] = {}
+        for e in edits_of(m):
+            targets.setdefault(REPO / e["file"], []).append(e)
 
-        seen = text.count(m["old"])
-        if seen != 1:
+        # Every anchor is resolved before anything is written, so an entry that
+        # cannot be applied in full is not applied at all. Half of a two-file
+        # mutation is a tree state no guard was written against, and reverting
+        # it is one more thing to get right while already failing.
+        before: dict[Path, str] = {}
+        originals: dict[Path, bytes] = {}
+        mutants: dict[Path, bytes] = {}
+        ambiguous = None
+        for path, edits in targets.items():
+            originals[path] = path.read_bytes()
+            before[path] = digest(path)
+            borrowed.setdefault(path, path.stat().st_mtime)
+            text = originals[path].decode("utf-8")
+            for e in edits:
+                seen = text.count(e["old"])
+                if seen != 1:
+                    ambiguous = (e["file"], seen)
+                    break
+                text = text.replace(e["old"], e["new"])
+            if ambiguous:
+                break
+            mutants[path] = text.encode("utf-8")
+
+        if ambiguous:
+            where, seen = ambiguous
             sys.stderr.write(
                 "\nwatch-red: %s -- the anchor appears %d times in %s, so the"
                 " mutation is ambiguous.\n         A mutation that cannot be"
                 " applied proves nothing. Fix the manifest.\n"
-                % (m["label"], seen, m["file"]))
+                % (m["label"], seen, where))
             purge_cache()
             return EXIT_ERROR
 
-        clock += STEP
-        _write(path, text.replace(m["old"], m["new"]).encode("utf-8"), clock)
+        for path, data in mutants.items():
+            clock += STEP
+            _write(path, data, clock)
         try:
             red = run_tests(m["select"])
         finally:
-            clock += STEP
-            _write(path, original, clock)
+            for path, data in originals.items():
+                clock += STEP
+                _write(path, data, clock)
 
-        if digest(path) != before:
+        unrestored = [str(p.relative_to(REPO)) for p in originals
+                      if digest(p) != before[p]]
+        if unrestored:
             sys.stderr.write("\nwatch-red: the revert did not restore %s. Stopping"
-                             " with the tree dirty -- check `git diff`.\n" % m["file"])
+                             " with the tree dirty -- check `git diff`.\n"
+                             % ", ".join(unrestored))
             return EXIT_ERROR
 
         out = red.stdout + red.stderr

@@ -279,6 +279,16 @@ strains one, say so in the PR rather than working around it quietly.
    `scripts/watch-red.py` implements all four and drives the mutation list in
    `tests/mutations.json`. Prefer it to doing this by hand.
 
+   Most entries break one line in one file. A guard whose subject is a
+   *relationship* — the formula's `sha256` and the `brew install` the README
+   prints against it — has to have both ends broken at once, or it stays green
+   for the honest reason that the tree is still consistent. Those entries list
+   `edits` rather than one `file`/`old`/`new`. Reach for it when a mutation
+   only goes red in some of the states the repository passes through: a guard
+   that can be watched today and not after the next release is one the summary
+   will keep reporting as broken, and a summary with a standing exception in it
+   is one nobody reads to the end.
+
 ---
 
 ## The four extension points

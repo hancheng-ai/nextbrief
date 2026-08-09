@@ -1081,7 +1081,21 @@ class TheMutationManifestStillPointsAtRealLines(unittest.TestCase):
     What was missing is anything that notices when one of them breaks.
     """
 
-    REQUIRED = ("label", "file", "old", "new", "select", "expect")
+    REQUIRED = ("label", "select", "expect")
+    EDIT = ("file", "old", "new")
+
+    def _edits(self, m):
+        """Every edit an entry applies, whether it names one file or several.
+
+        Kept in step with `edits_of` in scripts/watch-red.py by hand, the same
+        way `REQUIRED` already is: this file imports nothing from `scripts/`,
+        and a test that imported the runner it exists to double-check would
+        agree with it about a manifest they were both misreading.
+        """
+        listed = m.get("edits")
+        if isinstance(listed, list):
+            return listed
+        return [{k: m.get(k) for k in self.EDIT}]
 
     def setUp(self):
         self.mutations = json.loads(read(MUTATIONS))["mutations"]
@@ -1094,14 +1108,15 @@ class TheMutationManifestStillPointsAtRealLines(unittest.TestCase):
     def test_every_anchor_still_appears_exactly_once_in_its_file(self):
         broken = []
         for m in self.mutations:
-            path = REPO_ROOT / m["file"]
-            if not path.is_file():
-                broken.append("%s: no such file %s" % (m["label"], m["file"]))
-                continue
-            found = read(path).count(m["old"])
-            if found != 1:
-                broken.append("%s: anchor appears %d times in %s"
-                              % (m["label"], found, m["file"]))
+            for e in self._edits(m):
+                path = REPO_ROOT / e["file"]
+                if not path.is_file():
+                    broken.append("%s: no such file %s" % (m["label"], e["file"]))
+                    continue
+                found = read(path).count(e["old"])
+                if found != 1:
+                    broken.append("%s: anchor appears %d times in %s"
+                                  % (m["label"], found, e["file"]))
         self.assertEqual(
             [], broken,
             "watch-red stops dead on each of these, taking every mutation after "
@@ -1110,7 +1125,8 @@ class TheMutationManifestStillPointsAtRealLines(unittest.TestCase):
     def test_every_mutation_actually_changes_something(self):
         """The other way an entry can be inert. `old == new` applies cleanly,
         reverts cleanly, and asks the test nothing."""
-        inert = [m["label"] for m in self.mutations if m["old"] == m["new"]]
+        inert = [m["label"] for m in self.mutations
+                 for e in self._edits(m) if e["old"] == e["new"]]
         self.assertEqual([], inert)
 
     def test_the_manifest_carries_the_fields_the_runner_requires(self):
@@ -1119,7 +1135,25 @@ class TheMutationManifestStillPointsAtRealLines(unittest.TestCase):
         for something it does not do."""
         missing = ["%s: %s" % (m.get("label", "<unlabelled>"), key)
                    for m in self.mutations for key in self.REQUIRED if not m.get(key)]
+        missing += ["%s: %s" % (m.get("label", "<unlabelled>"), key)
+                    for m in self.mutations for e in self._edits(m)
+                    for key in self.EDIT if not e.get(key)]
         self.assertEqual([], missing)
+
+    def test_no_entry_spells_its_edits_both_ways(self):
+        """`edits` beside a top-level `file`: watch-red honours the list and
+        drops the rest.
+
+        Which spelling wins is not something the manifest says, so the dropped
+        edit is a line nobody broke inside a mutation everybody counted -- the
+        guard reads as watched on the strength of a run that never touched it.
+        watch-red rejects the entry outright; this is the copy of that check
+        which runs without being asked.
+        """
+        both = [m["label"] for m in self.mutations
+                if isinstance(m.get("edits"), list)
+                and any(k in m for k in self.EDIT)]
+        self.assertEqual([], both)
 
 
 def _release_step_script(step_name):

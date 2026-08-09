@@ -1,5 +1,5 @@
 {
-  "_readme": "Mutations for scripts/watch-red.py -- see rule 7 of CONTRIBUTING.md. Each entry breaks exactly one thing a guard claims to catch. `old` must appear exactly once in `file`; the test picked by `select` must go red, and its output must name `expect`, or the guard is red for the wrong reason and does not count as watched.",
+  "_readme": "Mutations for scripts/watch-red.py -- see rule 7 of CONTRIBUTING.md. Each entry breaks exactly one thing a guard claims to catch. `old` must appear exactly once in `file`; the test picked by `select` must go red, and its output must name `expect`, or the guard is red for the wrong reason and does not count as watched. One thing is not always one line: a guard about the relationship between two files needs both ends broken together, or it stays green because the tree is still consistent. Such an entry lists `edits`, each with its own `file`/`old`/`new`, instead of naming one inline -- never both spellings at once.",
   "mutations": [
     {
       "label": "release notes send a candidate to the index it is not on",
@@ -98,6 +98,15 @@
       "select": "test_the_manifest_carries_the_fields_the_runner_requires",
       "expect": "the publishing-off caveat names an index at random: expect",
       "note": "Without `expect`, a mutation that goes red for an unrelated reason reads as a guard that was watched -- which is how a guard gets trusted for something it does not do."
+    },
+    {
+      "label": "a mutation spelling its edits both ways",
+      "file": "tests/mutations.json",
+      "old": "\"label\": \"the pinned brew install documented against a stale digest\",\n      \"edits\": [",
+      "new": "\"label\": \"the pinned brew install documented against a stale digest\",\n      \"file\": \"README.md\",\n      \"edits\": [",
+      "select": "test_no_entry_spells_its_edits_both_ways",
+      "expect": "the pinned brew install documented against a stale digest",
+      "note": "Valid JSON, both spellings present, and watch-red honours `edits` and drops the top-level one without saying so. The entry still runs and still counts, one edit lighter than it reads -- so the guard it watches is credited with a line nobody broke. Anchored on the label rather than on `\"edits\": [` alone, which would go ambiguous the day a second entry needs two files."
     },
     {
       "label": "banned command in a code fence",
@@ -491,12 +500,21 @@
     },
     {
       "label": "the pinned brew install documented against a stale digest",
-      "file": "README.md",
-      "old": "brew install --HEAD --build-from-source",
-      "new": "brew install --build-from-source",
+      "edits": [
+        {
+          "file": "packaging/homebrew/nextbrief.rb",
+          "old": "  # sha256-of: ",
+          "new": "  # sha256-of: 0.0.0-stale-"
+        },
+        {
+          "file": "README.md",
+          "old": "brew install --HEAD --build-from-source",
+          "new": "brew install --build-from-source"
+        }
+      ],
       "select": "test_the_readmes_do_not_offer_a_pinned_build_with_a_stale_digest",
       "expect": "That command fails",
-      "note": "What shipped for four releases: the formula's version was swept, its sha256 was not, and the README went on printing the command that downloads one and checks it against the other."
+      "note": "What shipped for four releases: the formula's version was swept, its sha256 was not, and the README went on printing the command that downloads one and checks it against the other. Two edits because the defect is the pair. The guard stands down while the digest is current -- the tree's state from the release job's rejoining commit until the next bump -- so breaking only the README left it green for the honest reason through half of every release cycle, and watch-red reported a working guard as unwatched on a healthy tree. The provenance line is prefixed rather than overwritten so the anchor names no version of its own: this line is fenced off from the sweep, so any version written here would have to be re-anchored by hand every release."
     },
     {
       "label": "a relative link back on the page PyPI renders",
