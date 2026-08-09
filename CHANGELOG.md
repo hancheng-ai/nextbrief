@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every link in both READMEs works on PyPI, not only on GitHub.**
+  `pyproject.toml` sets `readme = "README.md"`, so that file is the PyPI long
+  description, and PyPI renders it with no base URL: a relative target is
+  resolved against the *project page*. The "example workspace" link arrived as
+  `https://pypi.org/project/nextbrief/examples/workspace` and 404'd, and 33
+  links in `README.md` and 17 in `README.zh.md` were doing the same thing on the
+  page most new users land on.
+
+  All 50 are now absolute GitHub URLs pinned to the release tag —
+  `blob/v0.2.0/…` for a file, `tree/v0.2.0/…` for a directory — which is the
+  convention the mark above them already used, and for the same reason: PyPI
+  keeps every version's long description forever, so a `main`-pinned link sends
+  the reader of an old release page to documentation that no longer describes
+  it. `scripts/bump-version.sh` sweeps the tag forward with the rest of the
+  file. Anchors such as `](#privacy)` need no base URL and are untouched.
+
+  The half-fix is why this is now three guards rather than a commit. The mark
+  was moved to an absolute URL for exactly this reason one release ago and the
+  links beside it were left relative, because nothing in the suite could see the
+  difference — on GitHub, where the page is reviewed, all fifty of them worked.
+  `tests/test_docs_consistency.py` now refuses a relative path link, refuses a
+  branch-pinned one, and resolves every tag-pinned link against this checkout so
+  a renamed file cannot become a 404 at the next release.
+
 ## [0.2.0] - 2026-08-09
 
 ### Changed

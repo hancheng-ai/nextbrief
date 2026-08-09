@@ -30,6 +30,8 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 
 TAG = "v%s" % __version__
 
+REPO_URL = "https://github.com/hancheng-ai/nextbrief"
+
 
 def read(path) -> str:
     return path.read_text(encoding="utf-8")
@@ -472,16 +474,29 @@ class ReleaseHistory(unittest.TestCase):
         self.assertEqual(dates, sorted(dates, reverse=True),
                          "release rows are not newest-first: %s" % dates)
 
+    # The link target used to be the bare `CHANGELOG.md`, and this pattern was
+    # anchored on `](CHANGELOG`. Absolutising the links for PyPI put a
+    # `https://github.com/.../blob/vX.Y.Z/` in front of every one of them, and
+    # the pattern stopped matching -- leaving a loop with no body and a test
+    # that could not fail. `checked` below is why that cannot happen quietly a
+    # second time.
+    CITES = re.compile(r"\[([0-9][^\]]*)\]\((?:\S*/)?CHANGELOG\.md#")
+
     def test_it_does_not_invent_a_version(self):
         # The other direction. A row for a version nobody tagged is the same
         # promise-the-repo-cannot-keep this file already checks for in the
         # CHANGELOG itself.
         known = {v for v, _ in self._versions_in_changelog()}
+        checked = 0
         for row in self._table().splitlines():
-            for cited in re.findall(r"\[([0-9][^\]]*)\]\(CHANGELOG", row):
+            for cited in self.CITES.findall(row):
                 self.assertIn(cited, known,
                               "README release table cites %s, which the CHANGELOG "
                               "does not have" % cited)
+                checked += 1
+        self.assertGreater(checked, 5,
+                           "only %d rows in the release table cite a CHANGELOG "
+                           "anchor at all; this test is reading nothing" % checked)
 
 
 class EveryCommandIsDocumented(unittest.TestCase):
@@ -682,6 +697,151 @@ class TheMarkAtTheTop(unittest.TestCase):
                     "published the day that file moves. "
                     "`scripts/bump-version.sh` sweeps this ref along with the "
                     "rest of the file." % (doc, ref, TAG))
+
+
+class EveryLinkSurvivesLeavingGitHub(unittest.TestCase):
+    """The mark's problem one layer out: the fifty links printed around it.
+
+    `pyproject.toml` sets `readme = "README.md"`, so that file is PyPI's long
+    description, and PyPI renders it with no base URL. A relative link therefore
+    resolves against the *project page* rather than against this repository:
+    `[example workspace](examples/workspace)` arrives as
+    `https://pypi.org/project/nextbrief/examples/workspace` and 404s. Reported
+    from the live page, with 33 links in README.md and 17 in README.zh.md doing
+    it.
+
+    The half-fix is why this is a guard rather than just a commit. The mark was
+    moved to an absolute, tag-pinned URL for precisely this reason; the links
+    two lines below it were noticed in the same breath and left relative, and
+    nothing here could tell the difference -- because on GitHub, which is where
+    the file gets reviewed, every one of them works.
+
+    Anchors are untouched and stay allowed. `](#privacy)` resolves inside the
+    rendered page wherever that page is served.
+
+    README.zh.md is not a long description today and is held to the same rule
+    anyway: the two files are kept in step by the rest of this module, and a
+    rule that covers one of a translated pair is a rule that gets translated
+    away.
+    """
+
+    DOCS = ("README.md", "README.zh.md")
+
+    # `](target)`, plus whatever an inline HTML fragment carries -- the mark is
+    # an <img>, and a relative <a href> further down the page would sail past a
+    # Markdown-only pattern.
+    LINK = re.compile(r"\]\(([^)\s]+)\)")
+    ATTR = re.compile(r"<[a-zA-Z]+[^>]*?\s(?:href|src)=\"([^\"]*)\"")
+
+    # Removed before scanning: a link inside a fence is sample text that renders
+    # as characters, not as a link, so it cannot 404 anywhere.
+    FENCE = re.compile(r"(?ms)^```.*?^```")
+
+    # A scheme, a protocol-relative host, or an anchor -- the three shapes that
+    # do not need a base URL to mean something.
+    RESOLVES_ANYWHERE = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//|#)")
+
+    IN_REPO = re.compile(
+        re.escape(REPO_URL) + r"/(?P<kind>blob|tree)/(?P<ref>[^/]+)/(?P<path>[^#\s]+)")
+
+    def _targets(self, doc):
+        text = self.FENCE.sub("", (REPO_ROOT / doc).read_text(encoding="utf-8"))
+        found = self.LINK.findall(text) + self.ATTR.findall(text)
+        # Asserted, not assumed. A pattern that quietly stops matching turns
+        # every loop below into one with no body, which is the first of the four
+        # ways rule 7 of CONTRIBUTING.md lists for a test to be green while
+        # checking nothing. Both files carry dozens of links and always will.
+        self.assertGreater(
+            len(found), 25,
+            "%s: the link scan found %d targets, so the assertions below are "
+            "not reading this file any more" % (doc, len(found)))
+        return found
+
+    def test_neither_readme_uses_a_relative_path_link(self):
+        for doc in self.DOCS:
+            for target in self._targets(doc):
+                if self.RESOLVES_ANYWHERE.match(target):
+                    continue
+                path, _, anchor = target.partition("#")
+                kind = "tree" if (REPO_ROOT / path).is_dir() else "blob"
+                self.fail(
+                    "%s links %r as a relative path. README.md is PyPI's long "
+                    "description (`readme = \"README.md\"` in pyproject.toml) "
+                    "and PyPI renders it with no base URL, so that link is "
+                    "resolved against the project page -- "
+                    "https://pypi.org/project/nextbrief/%s -- and 404s. Write "
+                    "%s/%s/%s/%s instead, keeping any #anchor as it is. An "
+                    "anchor-only link such as `](#privacy)` needs no base URL "
+                    "and is what this guard allows."
+                    % (doc, target, target, REPO_URL, kind, TAG,
+                       path + ("#" + anchor if anchor else "")))
+
+    def test_every_link_into_this_release_names_a_path_that_exists(self):
+        """A rewritten link with a typo in it is a 404 that reads as a fix.
+
+        Only the links pinned to this release are resolved: this checkout *is*
+        that tree, so it can answer for them. A link on an older tag points at a
+        tree this working copy is not, and nothing here can check it -- which is
+        the point of pinning, not a gap in it.
+        """
+        checked = 0
+        for doc in self.DOCS:
+            for target in self._targets(doc):
+                found = self.IN_REPO.match(target)
+                if not found or found.group("ref") != TAG:
+                    continue
+                path = REPO_ROOT / found.group("path")
+                if found.group("kind") == "tree":
+                    self.assertTrue(
+                        path.is_dir(),
+                        "%s links %s as a directory, and %s is not one in this "
+                        "checkout" % (doc, target, found.group("path")))
+                else:
+                    self.assertTrue(
+                        path.is_file(),
+                        "%s links %s, and %s is not a file in this checkout. "
+                        "The tag is swept forward on every release, so a path "
+                        "renamed here without the README following it becomes a "
+                        "404 on the next one."
+                        % (doc, target, found.group("path")))
+                checked += 1
+        self.assertGreater(checked, 25,
+                           "only %d links into this release were resolved; the "
+                           "URL pattern has stopped matching" % checked)
+
+    def test_no_link_is_pinned_to_a_branch(self):
+        """Deliberately "a tag" rather than "this tag", and the difference is
+        the release-history table.
+
+        Everything outside `<!-- bump-version:skip:begin -->` is swept forward
+        by `scripts/bump-version.sh` on every release and is therefore on the
+        current tag. The table inside those markers is fenced off from the sweep
+        on purpose -- each row is a statement about a release that already
+        happened -- so its links keep whatever tag was current when the row was
+        written, and go on resolving, because that tag still points at a tree
+        that has that anchor in its CHANGELOG. Asserting TAG everywhere would go
+        red on the first bump after this one and blame the table for the fence
+        working as designed.
+
+        What is never right is a branch. PyPI keeps every version's long
+        description forever, so a `main`-pinned URL breaks the page of every
+        release ever published the day that file moves.
+        """
+        for doc in self.DOCS:
+            for target in self._targets(doc):
+                found = self.IN_REPO.match(target)
+                if not found:
+                    continue
+                ref = found.group("ref")
+                self.assertTrue(
+                    re.match(r"^v\d", ref),
+                    "%s links %s, whose ref %r is a branch rather than a "
+                    "release tag. Copying a URL out of the address bar hands "
+                    "you /blob/main/, which is how this happens. PyPI keeps "
+                    "every version's long description forever, so that page "
+                    "breaks the day the file moves; write /%s/%s/ instead, "
+                    "which `scripts/bump-version.sh` sweeps forward every "
+                    "release." % (doc, target, ref, found.group("kind"), TAG))
 
 
 class TheBadgesAtTheTop(unittest.TestCase):

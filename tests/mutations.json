@@ -400,6 +400,51 @@
       "note": "What shipped for four releases: the formula's version was swept, its sha256 was not, and the README went on printing the command that downloads one and checks it against the other."
     },
     {
+      "label": "a relative link back on the page PyPI renders",
+      "file": "README.md",
+      "old": "Apache 2.0. See [LICENSE](",
+      "new": "Apache 2.0. See [the license](LICENSE), or [LICENSE](",
+      "select": "test_neither_readme_uses_a_relative_path_link",
+      "expect": "README.md links 'LICENSE' as a relative path",
+      "note": "The reported defect, in its smallest form. README.md is PyPI's long description and PyPI renders it with no base URL, so a relative target resolves against the project page: the 'example workspace' link arrived as https://pypi.org/project/nextbrief/examples/workspace and 404'd. Anchored version-free, and deliberately left looking correct on GitHub -- which is where the page gets reviewed, and why 33 of these survived a release."
+    },
+    {
+      "label": "a relative link back on the Chinese page only",
+      "file": "README.zh.md",
+      "old": "Apache 2.0，见 [LICENSE](",
+      "new": "Apache 2.0，见 [许可证](LICENSE)，即 [LICENSE](",
+      "select": "test_neither_readme_uses_a_relative_path_link",
+      "expect": "README.zh.md links 'LICENSE' as a relative path",
+      "note": "One of a translated pair edited and the other not is how these two files actually drift, so the rule has to be enforced on both rather than on the one PyPI happens to render today."
+    },
+    {
+      "label": "a link copied out of the address bar, pinned to main",
+      "file": "README.md",
+      "old": "Read [CONTRIBUTING.md](",
+      "new": "Read [the contributing guide](https://github.com/hancheng-ai/nextbrief/blob/main/CONTRIBUTING.md), or [CONTRIBUTING.md](",
+      "select": "test_no_link_is_pinned_to_a_branch",
+      "expect": "is a branch rather than a release tag",
+      "note": "The plausible way the fix decays: absolute is the rule people remember, and the URL in the browser's address bar is /blob/main/. It resolves today, which is exactly the problem -- PyPI keeps every version's description forever, so it breaks the page of every past release the day that file moves."
+    },
+    {
+      "label": "a tag-pinned link to a path that is no longer there",
+      "file": "README.md",
+      "old": "/docs/INVENTORY_SCHEMA.md):",
+      "new": "/docs/INVENTORY_SCHEMA_v2.md):",
+      "select": "test_every_link_into_this_release_names_a_path_that_exists",
+      "expect": "INVENTORY_SCHEMA_v2.md is not a file in this checkout",
+      "note": "Absolute, tag-pinned, and 404. The sweep moves these links onto each new tag, so a file renamed without the README following it is not a stale link -- it is a broken one, on the next release."
+    },
+    {
+      "label": "the release-table citation pattern back on its pre-absolute anchor",
+      "file": "tests/test_docs_consistency.py",
+      "old": "\\]\\((?:\\S*/)?CHANGELOG\\.md#",
+      "new": "\\]\\(CHANGELOG\\.md#",
+      "select": "test_it_does_not_invent_a_version",
+      "expect": "this test is reading nothing",
+      "note": "This one already happened. Absolutising the links put a https://github.com/.../blob/vX.Y.Z/ in front of every CHANGELOG target, `](CHANGELOG` stopped matching, and the test kept passing on an empty loop -- rule 7's first shape, caused by a change three files away that had no reason to look at it. The sentinel, not the pattern, is what this mutation is watching."
+    },
+    {
       "label": "the formula stops recording which release its digest is from",
       "file": "packaging/homebrew/nextbrief.rb",
       "old": "  # sha256-of: ",
