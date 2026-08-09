@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.9", "3.11", "3.13"]
         exclude:
           # No arm64 CPython 3.9 exists in the setup-python manifest and
@@ -45,10 +45,38 @@ jobs:
       - name: Show interpreter
         run: python -VV
 
+      # Prints what this runner actually checked out, because a green Windows
+      # job is otherwise ambiguous. `core.autocrlf` is on by default on the
+      # Windows runners, so the tree arrives with CRLF -- but if it ever did
+      # not, the frontmatter parser's line-ending contract would go untested
+      # and the pass would only mean the question was never asked. This is the
+      # difference between "the suite ran" and "the suite ran on the input it
+      # exists to cover", and it costs one second.
+      - name: What line endings did this runner check out
+        shell: bash
+        run: |
+          echo "core.autocrlf = $(git config --get core.autocrlf || echo '<unset>')"
+          python - <<'PY'
+          from pathlib import Path
+          for name in ("README.md", "pyproject.toml",
+                       "examples/workspace/registry.jsonc"):
+              raw = Path(name).read_bytes()
+              print("%-42s CRLF=%-6d LF-only=%d"
+                    % (name, raw.count(b"\r\n"),
+                       raw.count(b"\n") - raw.count(b"\r\n")))
+          PY
+
       # Generated, not committed -- see examples/workspace/scripts/build-example.sh.
       # The suite builds it on demand too; doing it here as well keeps the failure
       # legible if the script itself breaks.
+      #
+      # `shell: bash` because windows-latest defaults to pwsh, which cannot run
+      # a .sh at all -- without it the job dies on the runner's shell choice and
+      # reports nothing about the package. The fixture generator is one of the
+      # POSIX-only developer scripts (CONTRIBUTING.md#windows); it runs here
+      # under Git Bash, which the Windows runners ship.
       - name: Build example workspace
+        shell: bash
         run: examples/workspace/scripts/build-example.sh
 
       # Installed, not run from the source tree: this is also the check that the
