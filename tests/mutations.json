@@ -46,6 +46,24 @@
       "note": "Extraction is where the whole class could go quiet. An extractor returning \"\" hands bash an empty script, which exits 0 and writes no notes -- so this says so in those words instead."
     },
     {
+      "label": "the release gate stops running the mutation harness",
+      "file": ".github/workflows/release.yml",
+      "old": "        run: PYTHONPATH=src python scripts/watch-red.py --quick",
+      "new": "        run: echo 'guards not checked'",
+      "select": "test_the_gate_runs_it",
+      "expect": "the release gate no longer runs",
+      "note": "Deleting a workflow step leaves no trace: the release goes green and one fewer question was asked. This is the harness for rule 7, and it spent a whole release cycle exiting 2 with nothing anywhere reporting it, because running it was a thing a person had to remember."
+    },
+    {
+      "label": "the gate sweeps a subset and calls it a sweep",
+      "file": ".github/workflows/release.yml",
+      "old": "scripts/watch-red.py --quick",
+      "new": "scripts/watch-red.py --only banned",
+      "select": "test_it_is_not_allowed_to_fail",
+      "expect": "reports it as a full sweep",
+      "note": "`--only` implies `--quick` and prints a ratio for the subset it ran. `1/1 guards watched` on a tag reads exactly like a clean sweep unless you also read the skip notice under it -- and the whole reason this step exists is that nobody was reading watch-red's output at all."
+    },
+    {
       "label": "the coverage check reads this machine's global excludes again",
       "file": "tests/test_gitignore.py",
       "old": "    cmd += [\"-c\", \"core.excludesFile=%s\" % os.devnull]",

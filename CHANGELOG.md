@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The release gate runs the mutation harness.** Rule 7 of `CONTRIBUTING.md`
+  says watch every guard fail, `scripts/watch-red.py` implements it, and for its
+  whole life nothing ran it except a person remembering to. It spent an entire
+  release cycle exiting 2 — one anchor moved by an unrelated README edit, and it
+  stops on an unresolvable anchor rather than skipping — with twenty-six guards
+  unwatched and every push green, because no workflow invoked it. The harness
+  for the rule this project leans on hardest was the one thing nothing checked.
+
+  It goes on the release gate rather than on every push, because the two halves
+  of *are these guards real?* cost very differently. Whether every anchor still
+  resolves is a unit test — milliseconds, already on every push, and that is the
+  half that broke. Whether each guard actually goes red is eighty-odd mutations
+  applied and reverted around a test run, and it changes only when a guard does.
+  Paying that per push buys an answer nobody asked for; paying it per tag buys
+  it at the one moment the answer is load-bearing, since a publish is permanent.
+
+  `--quick`, because the step above it just ran the full suite on the same tree,
+  and watch-red reports that skip in its own output rather than taking it
+  quietly. Exit 1 fails the job as surely as exit 2: a guard that has stopped
+  catching anything is not a smaller problem than a harness that cannot run, it
+  is the same problem further along. `TheReleaseGateRunsTheMutationHarness`
+  asserts the step is there and is not narrowed to a subset — deleting a
+  workflow step leaves no trace either, and a release that asks one fewer
+  question still comes back green.
+
 ### Fixed
 
 - **`watch-red` no longer ends every run one guard short of a clean number on a

@@ -34,6 +34,32 @@ jobs:
       - name: Run the full suite
         run: PYTHONPATH=src python -m unittest discover -s tests
 
+      # Rule 7's harness, run by something other than a person remembering to.
+      #
+      # Here rather than in ci.yml because the two halves of "are these guards
+      # real?" cost wildly different amounts. Whether every anchor still
+      # resolves is a unit test -- TheMutationManifestStillPointsAtRealLines,
+      # milliseconds, already on every push -- and that is the half that broke:
+      # absolutising the README's links for PyPI moved a line one mutation was
+      # anchored to, watch-red treats an unresolvable anchor as fatal and stops
+      # rather than skipping, and the guards after it went unwatched for a
+      # whole release while the suite stayed green.
+      #
+      # Whether each guard actually goes red is the other half: eighty-odd
+      # mutations, each applied and reverted around a test run, and it changes
+      # only when a guard does. Paying that on every push would buy an answer
+      # to a question nobody asked; paying it on a tag buys it at the one
+      # moment the answer is load-bearing, since a publish is permanent.
+      #
+      # --quick because the step above just ran the full suite on this exact
+      # tree; watch-red says so in its own output rather than skipping quietly.
+      # Exit 1 (a guard did not fail) fails this job as surely as exit 2 (the
+      # harness could not be trusted). A guard that no longer catches anything
+      # is not a lesser problem than one that cannot be applied -- it is the
+      # same problem, further along.
+      - name: Watch every guard fail
+        run: PYTHONPATH=src python scripts/watch-red.py --quick
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"

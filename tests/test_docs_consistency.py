@@ -1156,6 +1156,63 @@ class TheMutationManifestStillPointsAtRealLines(unittest.TestCase):
         self.assertEqual([], both)
 
 
+class TheReleaseGateRunsTheMutationHarness(unittest.TestCase):
+    """Rule 7 says watch every guard fail. Nothing made anyone.
+
+    `scripts/watch-red.py` was a manual command for its whole life, and it spent
+    an entire release cycle exiting 2 -- one anchor moved by an unrelated README
+    edit, and it stops rather than skips -- while every push stayed green,
+    because nothing ran it. That is the harness for the rule this project leans
+    on hardest, dead, with no signal anywhere.
+
+    So the gate runs it, and this says so. Deleting a workflow step leaves no
+    trace either: the release goes green and one fewer question was asked.
+    """
+
+    HARNESS = "scripts/watch-red.py"
+
+    def _gate_steps(self):
+        """Every `run:` line in the `gate` job, as one string.
+
+        Text rather than `yaml`, for the reason in `_release_jobs`. The gate is
+        the first job and ends where the next two-space key begins.
+        """
+        text = read(REPO_ROOT / ".github" / "workflows" / "release.yml")
+        body = re.search(r"(?ms)^  gate:\n(.*?)(?=^  \w[\w-]*:\n)", text)
+        return body.group(1) if body else ""
+
+    def test_the_gate_runs_it(self):
+        steps = self._gate_steps()
+        self.assertIn(
+            self.HARNESS, steps,
+            "the release gate no longer runs %s. A publish is permanent, and "
+            "this is the only place anything asks whether the guards still "
+            "catch what they claim to -- the suite cannot, because a guard that "
+            "has stopped catching things passes it." % self.HARNESS)
+
+    def test_it_is_not_allowed_to_fail(self):
+        """`--only` implies `--quick` and reports a number for a subset.
+
+        `continue-on-error` would be worse: the step goes green-with-a-warning,
+        which is the shape of every finding in this file.
+        """
+        steps = self._gate_steps()
+        line = next((s for s in steps.splitlines() if self.HARNESS in s), "")
+        self.assertNotIn("--only", line,
+                         "the gate runs a subset of the mutations and reports "
+                         "it as a full sweep: %s" % line.strip())
+        self.assertNotIn("continue-on-error", steps,
+                         "a step allowed to fail is a question whose answer is "
+                         "discarded")
+
+    def test_the_reader_can_actually_see_the_gate(self):
+        """A parser that matches nothing agrees with every assertion above."""
+        steps = self._gate_steps()
+        self.assertIn("Run the full suite", steps,
+                      "the gate job did not parse as expected; the assertions "
+                      "in this class are passing on an empty string")
+
+
 def _release_step_script(step_name):
     """The dedented shell body of one `run: |` step in release.yml.
 
