@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-09
+
+No code changes since `0.2.1rc1`. What the candidate bought was the first
+end-to-end observation of the release pipeline itself, and it found two things
+a final release would have found instead.
+
+`publish to TestPyPI` ran and `publish to PyPI` skipped, which is the routing
+this release fixes, confirmed on a real tag rather than in a test. The formula
+digest job then ran for the first time in this project's history — reachable
+only since the previous release — computed a digest byte-identical to the sdist
+TestPyPI had just served, committed it, pushed its branch, and failed on
+`GitHub Actions is not permitted to create or approve pull requests`. The job
+had asked for `pull-requests: write` all along; the repository setting was off.
+With it on, the re-run opened the pull request and the whole workflow came back
+green.
+
+So the digest automation shipped in the last release was never actually
+observed doing its work, and this is the release that watched it.
+
 ## [0.2.1rc1] - 2026-08-09
 
 ### Added
@@ -1748,7 +1767,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.1rc1...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.1
 [0.2.1rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.1rc1
 [0.2.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0
 [0.2.0rc4]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4
