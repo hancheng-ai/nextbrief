@@ -54,8 +54,15 @@ class Changelog(unittest.TestCase):
 
 class Readme(unittest.TestCase):
     """`/releases/latest/` resolves through GitHub's "latest release" endpoint,
-    which skips prereleases. While the newest release is an rc, every such URL in
-    the docs is a 404 -- so the docs must use the tag."""
+    which skips prereleases.
+
+    Before 0.2.0 that endpoint 404'd outright, because every release was an rc.
+    It resolves now, and the rule survives the reason it was written for: it
+    resolves to the newest *non-prerelease*, while every other version string on
+    the page is swept to whatever was last tagged. Tag a candidate and the two
+    disagree -- the page names one version and its download links serve another,
+    with nothing in the response to say so. A URL that points at the version the
+    surrounding prose names is the only kind that cannot drift."""
 
     def test_no_latest_download_urls(self):
         # Matched as a URL, not as a substring: both files discuss
@@ -64,7 +71,8 @@ class Readme(unittest.TestCase):
         for path in (README, README_ZH):
             self.assertIsNone(
                 bad.search(read(path)),
-                "%s links a /releases/latest/ asset, which 404s for a prerelease"
+                "%s links a /releases/latest/ asset, which serves the newest "
+                "non-prerelease rather than the version this page documents"
                 % path.name,
             )
 

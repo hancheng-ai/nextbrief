@@ -319,6 +319,15 @@
       "note": "The obvious-looking fix for dark mode, and the one that breaks it: through an <img> currentColor resolves to black."
     },
     {
+      "label": "an asset URL that follows /releases/latest/ instead of the tag",
+      "file": "README.md",
+      "old": "chmod +x nextbrief.pyz",
+      "new": "chmod +x nextbrief.pyz\n# or, for whatever is newest:\n# curl -fsSLO https://github.com/hancheng-ai/nextbrief/releases/latest/download/nextbrief.pyz",
+      "select": "test_no_latest_download_urls",
+      "expect": "README.md",
+      "note": "Anchored on a version-free line so the manifest survives a bump. `/releases/latest/` stopped being a 404 at 0.2.0 and started being something worse: it resolves to the newest non-prerelease while every other version string on the page is swept to the last tag, so tagging a candidate makes the page name one version and serve another."
+    },
+    {
       "label": "the mark hotlinked from raw.githubusercontent",
       "file": "README.md",
       "old": "<img src=\"packaging/icon/nextbrief.svg\"",

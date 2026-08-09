@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-v0.2.0rc4-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4)
-[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.2.0rc4-blue)](https://test.pypi.org/project/nextbrief/)
+[![PyPI](https://img.shields.io/pypi/v/nextbrief)](https://pypi.org/project/nextbrief/)
 [![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -119,18 +119,33 @@ nextbrief open                  # 在浏览器里读
 如果你同时在用 [xwmx/nb](https://github.com/xwmx/nb)（那个记笔记的 CLI），两者会撞名：
 改用 `pipx install --suffix @nx nextbrief`，命令就是 `nextbrief@nx`。
 
-> **当前版本是 `0.2.0rc4`，是一个预发布版。** 它发在 **TestPyPI** 而不是 PyPI：
-> release workflow 会把任何带预发布段的版本路由到 TestPyPI，而往正式索引推一个 rc
-> 是撤不回来的。所以下面每条走索引的命令都显式带上了索引地址和版本号——少任何一个，
-> 你会得到「no matching distribution」。
+> **nextbrief 在 [PyPI](https://pypi.org/project/nextbrief/) 上。** 所以下面每条命令
+> 都不带索引地址、也不带版本号：`pip install nextbrief` 直接解析得到，`pipx`、
+> `uv tool`、`uvx` 同理。页首那个徽章读的是索引本身而不是这个文件，所以它显示的
+> 是真正在那儿的版本。
 >
-> 同理，下载请用**带 tag 的**地址，不要用 `/releases/latest/`：GitHub 的 latest
-> 端点会跳过预发布版，所以 `/releases/latest/download/…` 现在是 404。
+> **预发布版不在 PyPI 上，这是刻意的。** release workflow 会把任何带预发布段的版本
+> ——`rcN`、`aN`、`bN`、`.devN`——路由到
+> [TestPyPI](https://test.pypi.org/project/nextbrief/)，因为往正式索引推一个候选版
+> 是撤不回来的。要装其中一个，就得同时说清楚「在哪儿」和「哪一个」：那个索引不在任何人的
+> 默认路径上，而且没有哪个解析器会自己去挑一个预发布版：
+>
+> ```sh
+> # 0.3.0rc1 只是占位，换成你要的那个候选版；那个索引上没有值得问的「最新版」
+> pipx install --index-url https://test.pypi.org/simple/ "nextbrief==0.3.0rc1"
+> ```
+>
+> 两条路都不需要再挂一个 `--extra-index-url` 兜底：本包运行时依赖为零，解析器没有
+> 任何东西需要回别处去找。
+>
+> 下载仍然用**带 tag 的**地址，而不是 `/releases/latest/`。有了正式版之后那个端点是通的，
+> 但它解析到的是最新的**非预发布**版——所以从下一个候选版打 tag 的那一刻起，它给你的
+> 就是另一个版本，而且不会告诉你。
 
 **1 · 什么都不装，直接跑**
 
 ```sh
-uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc4" v0
+uvx nextbrief v0
 ```
 
 **2 · 单个文件，不需要包管理器**
@@ -164,17 +179,13 @@ shasum -a 256 --ignore-missing -c SHA256SUMS     # Linux 上是 sha256sum
 **3 · 长期安装**
 
 ```sh
-pipx install --python /usr/bin/python3 \
-  --index-url https://test.pypi.org/simple/ "nextbrief==0.2.0rc4"
+pipx install --python /usr/bin/python3 nextbrief
 
-uv tool install --python /usr/bin/python3 \
-  --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc4"
+uv tool install --python /usr/bin/python3 nextbrief
 
 pipx install --python /usr/bin/python3 \
   "git+https://github.com/hancheng-ai/nextbrief"            # 直接装 main
 ```
-
-不需要再挂一个 `--extra-index-url` 兜底：本包运行时依赖为零，解析器没有任何东西需要回 PyPI 去找。
 
 `--python /usr/bin/python3` 是刻意的。定时任务是被一个 GUI 启动器拉起来的，`PATH` 极简；把解释器钉在系统那一个上，意味着 Homebrew 升级 Python（顺手把 pipx 虚拟环境所依赖的那个旧解释器退役掉）也不会弄坏每晚那次运行。CI 里也单独测这个解释器，理由完全一样。
 

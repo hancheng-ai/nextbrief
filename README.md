@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml/badge.svg)](https://github.com/hancheng-ai/nextbrief/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-v0.2.0rc4-blue)](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4)
-[![TestPyPI](https://img.shields.io/badge/TestPyPI-0.2.0rc4-blue)](https://test.pypi.org/project/nextbrief/)
+[![PyPI](https://img.shields.io/pypi/v/nextbrief)](https://pypi.org/project/nextbrief/)
 [![Python versions](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://github.com/hancheng-ai/nextbrief#install)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -160,20 +160,37 @@ Every command also answers to **`nb`**, installed alongside `nextbrief` — `nb 
 the note-taking CLI, the two collide: install with
 `pipx install --suffix @nx nextbrief` and use `nextbrief@nx` instead.
 
-> **The current release is `0.2.0rc4`, and it is a prerelease.** It lives on
-> **TestPyPI**, not PyPI, because the release workflow routes any version with a
-> pre-release segment there and publishing an rc to the real index cannot be
-> undone. So every index command below carries an explicit index URL and an
-> explicit version — drop either and you get "no matching distribution".
+> **nextbrief is on [PyPI](https://pypi.org/project/nextbrief/).** So nothing
+> below carries an index URL or a pinned version: `pip install nextbrief`
+> resolves, and so do `pipx`, `uv tool` and `uvx`. The badge at the top of this
+> page reads the index rather than this file, so it is the version that is
+> actually there.
 >
-> For the same reason, use the **tagged** download URL, not
-> `/releases/latest/`: GitHub's "latest" endpoint skips prereleases, so
-> `/releases/latest/download/…` currently 404s.
+> **Prereleases are not there, and that is deliberate.** The release workflow
+> routes any version carrying a pre-release segment — `rcN`, `aN`, `bN`,
+> `.devN` — to [TestPyPI](https://test.pypi.org/project/nextbrief/) instead,
+> because publishing a candidate to the real index cannot be undone. Installing
+> one means saying both where it is and which it is, since that index is not on
+> anyone's default path and no resolver will pick a prerelease on its own:
+>
+> ```sh
+> # 0.3.0rc1 stands in for whichever candidate you mean; there is no "latest"
+> # on that index worth asking for
+> pipx install --index-url https://test.pypi.org/simple/ "nextbrief==0.3.0rc1"
+> ```
+>
+> Neither route needs an `--extra-index-url` fallback: the package declares zero
+> dependencies, so there is nothing for the resolver to go looking for elsewhere.
+>
+> Downloads below use the **tagged** URL rather than `/releases/latest/`. That
+> endpoint works now that a final release exists, but it resolves to the newest
+> *non-prerelease* — so from the moment the next candidate is tagged it would
+> hand you a different version from the one this page names, without saying so.
 
 **1 · Run it without installing anything**
 
 ```sh
-uvx --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc4" v0
+uvx nextbrief v0
 ```
 
 **2 · One file, no package manager**
@@ -211,18 +228,13 @@ uninstalls it.
 **3 · The durable install**
 
 ```sh
-pipx install --python /usr/bin/python3 \
-  --index-url https://test.pypi.org/simple/ "nextbrief==0.2.0rc4"
+pipx install --python /usr/bin/python3 nextbrief
 
-uv tool install --python /usr/bin/python3 \
-  --default-index https://test.pypi.org/simple/ "nextbrief==0.2.0rc4"
+uv tool install --python /usr/bin/python3 nextbrief
 
 pipx install --python /usr/bin/python3 \
   "git+https://github.com/hancheng-ai/nextbrief"            # straight from main
 ```
-
-No `--extra-index-url` fallback is needed: the package declares zero
-dependencies, so there is nothing for the resolver to go looking for on PyPI.
 
 `--python /usr/bin/python3` is deliberate. The scheduled run is started by a GUI
 launcher with a minimal `PATH`, so pinning the system interpreter means a
@@ -288,15 +300,15 @@ published contract with a `schema_version` to check before parsing.
 ### Distribution
 
 Which channels are live and which are not, at a glance. Everything here is
-`0.2.0rc4`, a prerelease.
+`0.2.0rc4`.
 
 | Channel | State |
 |---|---|
 | Source checkout — `git clone`, `pip install .` | **live** |
 | Zipapp built from a checkout | **live** |
-| [TestPyPI](https://test.pypi.org/project/nextbrief/) — `pip`, `pipx`, `uv`, `uvx` with an explicit index URL | **live**: `0.2.0rc4`, sdist and wheel |
-| PyPI | **not yet**: the release workflow routes pre-release versions to TestPyPI and only a final version to PyPI. `pip install nextbrief` with no index URL will not resolve |
-| GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.2.0rc4`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4), with a build-provenance attestation. Use the tagged URL: `/releases/latest/` skips prereleases |
+| [PyPI](https://pypi.org/project/nextbrief/) — `pip`, `pipx`, `uv tool`, `uvx`, no index URL and no pin | **live**: sdist and wheel |
+| [TestPyPI](https://test.pypi.org/project/nextbrief/) — the same four, with an explicit index URL and an explicit version | **live, prereleases only**: the workflow routes any `rc`, `a`, `b` or `.dev` version here and only a final version to PyPI |
+| GitHub release assets — sdist, wheel, `nextbrief.pyz`, `SHA256SUMS` | **live** on [`v0.2.0rc4`](https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.0rc4), with a build-provenance attestation. Documented by tag rather than `/releases/latest/`, which resolves to the newest non-prerelease |
 | Homebrew tap | **pending**: the formula exists and installs from a local path, the tap repository does not |
 | Claude Code plugin — `/plugin marketplace add hancheng-ai/nextbrief` | **live from this repository**: it is its own marketplace, so a clone or the GitHub repo is the source. Not listed in any third-party marketplace |
 
@@ -562,9 +574,11 @@ See [SECURITY.md](SECURITY.md).
 Newest first. Every entry links to the full detail in
 [CHANGELOG.md](CHANGELOG.md), which is the record; this table is the index.
 
-Dates are the day the tag was published. `0.1.0rc*` are prereleases and live on
-**TestPyPI** — the release workflow routes any version carrying `rc`, `a`, `b` or
-`.dev` there, and only a final version goes to PyPI.
+Dates are the day the tag was published. Every row carrying an `rc` is a
+prerelease and lives on **TestPyPI**; the rows without one are on **PyPI**. The
+release workflow decides that rather than a convention: any version carrying
+`rc`, `a`, `b` or `.dev` routes to TestPyPI, and only a final version goes to
+PyPI.
 
 <!-- bump-version:skip:begin -->
 <!-- Append-only. Every row states what a release that already happened

@@ -96,5 +96,5 @@ them reaches the snapshot, so nothing about them can reach the model or the page
 
 ## Supported versions
 
-The latest release only. This is a prerelease project; there is no backport
-branch, and pinning an old version means keeping it yourself.
+The latest release only. This is a young project with one maintainer; there is
+no backport branch, and pinning an old version means keeping it yourself.
