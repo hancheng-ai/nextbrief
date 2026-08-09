@@ -587,10 +587,11 @@ def write_brief_json(ws_root, brief):
 class TempCase(unittest.TestCase):
     """A temporary directory plus an environment that cannot reach the real machine.
 
-    ``HOME`` and ``XDG_CONFIG_HOME`` are redirected because ``init`` writes a
-    workspace pointer under the config home and sensing looks for agent sessions
-    under ``~``. A suite that leaves either pointing at the developer's account
-    can silently overwrite the workspace they use every day.
+    ``HOME``, ``USERPROFILE`` and ``XDG_CONFIG_HOME`` are redirected because
+    ``init`` writes a workspace pointer under the config home and sensing looks
+    for agent sessions under ``~``. A suite that leaves any of them pointing at
+    the developer's account can silently overwrite the workspace they use every
+    day.
     """
 
     def setUp(self):
@@ -607,6 +608,12 @@ class TempCase(unittest.TestCase):
         for name in ("NEXTBRIEF_WORKSPACE", "NEXTBRIEF_OUT", "NEXTBRIEF_LOCALE", "NEXTBRIEF_AGENT"):
             os.environ.pop(name, None)
         os.environ["HOME"] = str(self.home)
+        # Windows' expanduser reads USERPROFILE and never consults HOME, so
+        # setting HOME alone left `~` resolving to the real account and the
+        # containment promised above did not hold there at all. Three tests in
+        # test_paths went red on it; what they were reporting is that every test
+        # in the suite that expands `~` had been reaching the actual profile.
+        os.environ["USERPROFILE"] = str(self.home)
         os.environ["XDG_CONFIG_HOME"] = str(self.xdg)
         self._cwd = os.getcwd()
         self.addCleanup(self._restore)
