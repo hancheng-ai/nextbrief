@@ -256,6 +256,14 @@ chmod +x nextbrief.pyz
 ./nextbrief.pyz --version
 ```
 
+On Windows the two middle steps do not apply: there is no execute bit, and the
+shebang inside the archive is a POSIX convention the shell does not read. Hand
+the file to the launcher instead — it is the same artifact, run a different way:
+
+```powershell
+py -3 nextbrief.pyz --version
+```
+
 To check it against the published checksums — `--ignore-missing` because
 `SHA256SUMS` also covers the sdist and the wheel, which you did not download:
 
@@ -272,6 +280,11 @@ builds but cannot read its own locales still answers `--version` correctly:
 git clone --depth 1 https://github.com/hancheng-ai/nextbrief
 bash nextbrief/scripts/build-zipapp.sh    # writes dist/nextbrief.pyz
 ```
+
+Building needs a POSIX shell, so on Windows download the released `.pyz` rather
+than building one. The artifact is the same either way; what is not supported is
+running the build script there. See
+[CONTRIBUTING](https://github.com/hancheng-ai/nextbrief/blob/v0.2.1/CONTRIBUTING.md#windows).
 
 Put `nextbrief.pyz` anywhere on your `PATH` and you are done; deleting the file
 uninstalls it.

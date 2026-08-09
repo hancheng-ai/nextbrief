@@ -23,7 +23,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import REPO_ROOT
+from helpers import REPO_ROOT, requires_posix_dev_env
 
 from nextbrief import __version__
 
@@ -1259,6 +1259,11 @@ def _release_step_script(step_name):
     return "\n".join(body).rstrip() + "\n"
 
 
+# The step is a bash heredoc with a six-expression sed, and the stubs it runs
+# against are `#!/bin/sh` scripts made executable with POSIX mode bits. Both
+# halves are the release machine's, which is Linux; neither is something a
+# Windows contributor is being asked to reproduce.
+@requires_posix_dev_env
 class TheInstallBlockNamesTheIndexTheVersionRoutesTo(unittest.TestCase):
     """The release notes' two index-served lines, run rather than read.
 

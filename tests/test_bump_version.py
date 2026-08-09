@@ -33,7 +33,7 @@ import shutil
 import subprocess
 import unittest
 
-from helpers import REPO_ROOT, TempCase
+from helpers import REPO_ROOT, TempCase, requires_posix_dev_env
 
 SCRIPT = REPO_ROOT / "scripts" / "bump-version.sh"
 
@@ -177,7 +177,7 @@ def unfenced(text: str) -> str:
     return "".join(out)
 
 
-@unittest.skipUnless(shutil.which("bash"), "the release script needs bash")
+@requires_posix_dev_env
 class BumpTwice(TempCase):
     """Two consecutive release cycles in a throwaway tree.
 

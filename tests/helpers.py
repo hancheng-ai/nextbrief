@@ -94,6 +94,25 @@ HAS_GIT = shutil.which("git") is not None
 
 requires_git = unittest.skipUnless(HAS_GIT, "git is not installed")
 
+# Windows runs nextbrief; it does not build it. The release scripts, the fixture
+# generator and the pre-push fence are bash and POSIX file modes, and a release
+# is cut on Linux. That boundary is stated in CONTRIBUTING.md, and this is where
+# the suite is told about it.
+#
+# Asked as "is this a POSIX developer environment", NOT as "is bash installed",
+# which is the question the guards on these tests used to ask. Git for Windows
+# puts bash.exe on PATH, so `shutil.which("bash")` is true on windows-latest:
+# the guard never fired, the sh-only tests ran there, and eight of them failed.
+# Red for something nobody undertook to support is worse than no signal at all,
+# because it is indistinguishable from red for something that is broken.
+POSIX_DEV_ENV = os.name != "nt" and shutil.which("bash") is not None
+
+requires_posix_dev_env = unittest.skipUnless(
+    POSIX_DEV_ENV,
+    "developing nextbrief needs a POSIX shell -- Windows is supported for "
+    "running it, not for building it (see CONTRIBUTING.md)",
+)
+
 
 # ---------------------------------------------------------------------------
 # process / environment plumbing

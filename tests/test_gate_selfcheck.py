@@ -26,7 +26,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from helpers import TempCase, requires_git
+from helpers import TempCase, requires_git, requires_posix_dev_env
 
 REPO = Path(__file__).resolve().parent.parent
 SELFCHECK = REPO / "scripts" / "gate-selfcheck.py"
@@ -155,6 +155,12 @@ class ScratchClone(TempCase):
         self.assertEqual(code, EXIT_ABSENT, out)
         self.assertIn("drifted apart", out)
 
+    # The execute bit is a POSIX concept and Windows has not got one: NTFS
+    # carries no mode bits, chmod(0o644) is very nearly a no-op there, and
+    # os.access(X_OK) answers True for any file that exists. So this cannot be
+    # made to fail on Windows, and a check that cannot fail is not a check --
+    # skipping says that out loud rather than asserting something vacuous.
+    @requires_posix_dev_env
     @requires_git
     def test_a_non_executable_hook_fails_even_on_a_runner(self):
         hook = self.clone / ".githooks" / "pre-push"
