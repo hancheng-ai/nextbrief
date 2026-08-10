@@ -783,6 +783,21 @@ def agent_permissions(root: Path) -> Dict[str, Any]:
         # the last resort and is still correct once PATH catches up.
         candidate = Path(sys.argv[0]).resolve()
         exe = str(candidate) if candidate.name in ("nextbrief", "nb") else "nextbrief"
+    # A leading "//" marks an absolute path in a permission rule. On POSIX the
+    # path's own leading slash is the second one, so the rule used to be built
+    # as "/%s" % root -- correct there, and wrong everywhere else. A Windows
+    # root is "C:\Users\...\ws": it has no leading slash to donate, so the rule
+    # came out "Write(/C:\Users\...\ws/**)", with one marker slash instead of
+    # two and backslashes where a glob wants separators. Nothing reads these
+    # rules back and nothing reports a rule that matches nothing, so the
+    # workspace simply stayed unauthorised and the scheduled run it exists for
+    # stopped at the prompt it exists to prevent.
+    #
+    # Spelling the marker out and taking the path in posix form makes the two
+    # cases one case. The POSIX result is byte-identical to what shipped, which
+    # matters: `nextbrief permissions` merges by exact string, so a rule that
+    # moved would be appended beside the old one rather than replacing it.
+    glob = "//%s/**" % root.as_posix().lstrip("/")
     return {
         "permissions": {
             "allow": [
@@ -790,11 +805,8 @@ def agent_permissions(root: Path) -> Dict[str, Any]:
                 "Read",
                 "Glob",
                 "Grep",
-                # A leading "//" marks an absolute path in a permission rule,
-                # so the path's own leading slash is the second one -- "//%s"
-                # against an absolute path yields three and matches nothing.
-                "Write(/%s/**)" % root,
-                "Edit(/%s/**)" % root,
+                "Write(%s)" % glob,
+                "Edit(%s)" % glob,
             ]
         }
     }

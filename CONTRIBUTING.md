@@ -49,9 +49,42 @@ python3 -m unittest discover -s tests -v
 python3 -m pip install ruff && python3 -m ruff check .
 ```
 
-CI runs both across macOS and Linux on Python 3.9, 3.11 and 3.13, plus four
-guard jobs: zero runtime dependencies, locale catalogs in sync, version literals
-in agreement, and a clean `twine check` on the built artifacts.
+CI runs both across Linux, macOS and Windows on Python 3.9, 3.11 and 3.13, plus
+four guard jobs: zero runtime dependencies, locale catalogs in sync, version
+literals in agreement, and a clean `twine check` on the built artifacts. On
+Windows the POSIX-only developer scripts skip rather than fail — see
+[Windows](#windows) for what that boundary is and why.
+
+### Windows
+
+**nextbrief runs on Windows. It is not developed on Windows.** Those are two
+different promises and only the first one is made.
+
+Running is supported and tested: the engine is stdlib-only Python, and
+`windows-latest` is in the test matrix on the same three interpreters as the
+other platforms. If the CLI misbehaves on Windows, that is a bug — report it.
+
+Developing is not. Four things in this repository are POSIX and are staying
+that way:
+
+| What | Why it is not portable |
+|---|---|
+| `scripts/build-zipapp.sh` | builds the release artifact; runs on the release machine, which is Linux CI |
+| `scripts/bump-version.sh` | cuts a release; same machine, same reason |
+| the release-notes step in `release.yml` | a bash heredoc driving `gh` |
+| `.githooks/pre-push` | a `sh` script whose activation is a POSIX mode bit |
+
+The tests covering those skip on Windows rather than fail, through
+`requires_posix_dev_env` in `tests/helpers.py`. That guard asks whether this is
+a POSIX developer environment, **not** whether `bash` is installed — Git for
+Windows puts `bash.exe` on `PATH`, so the older `shutil.which("bash")` guard was
+true on `windows-latest`, the sh-only tests ran there, and eight of them failed.
+A suite that is red for something nobody undertook to support is
+indistinguishable from a suite that is red for something broken, which is the
+same class of mistake as a gate that never ran.
+
+So: to work on the engine on a Windows machine, use WSL. To *use* the engine,
+you need nothing but Python.
 
 ### Python 3.9 is the floor, and it is a hard floor
 

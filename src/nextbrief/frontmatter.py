@@ -45,7 +45,20 @@ def parse_frontmatter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
     Never raises: a malformed block yields ``(None, text)`` so callers can record
     a parse failure and carry on. Failing open is a project-wide contract -- one
     bad file must not take down the nightly run.
+
+    The result does not depend on the caller's line endings. That is a contract,
+    not a courtesy: thirteen of the fourteen call sites read through
+    ``Path.read_text``, which applies universal-newline translation, while
+    ``render._baseline_by_id`` parses ``git show HEAD:<item>`` straight off a
+    subprocess pipe with no translation at all -- and the write-permission gate
+    compares one against the other. Left to itself the body slice below assumes
+    ``\\n---`` is four characters, which under CRLF lands on the delimiter's own
+    ``\\r`` and welds it to the front of the body, and the block-scalar
+    accumulator rejoins with ``\\n`` while keeping the ``\\r`` that ``split``
+    left behind. Normalising once here is cheaper and harder to get wrong than
+    teaching each of those places about ``\\r`` separately.
     """
+    text = text.replace("\r\n", "\n")
     if not text.startswith("---"):
         return None, text
     end = text.find("\n---", 3)

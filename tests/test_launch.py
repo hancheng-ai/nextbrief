@@ -45,7 +45,13 @@ class Context(TempCase):
             self.assertTrue(why)
         self.assertEqual(self.ctx.cwd, self.ctx.dirs[0][0])
         # The project's own directory comes first: most likely to be right.
-        self.assertTrue(self.ctx.cwd.endswith("projects/orchard"))
+        #
+        # Compared as a whole path rather than by a posix-shaped suffix. `cwd`
+        # is a real directory the launcher changes into and prints to the
+        # reader, so on Windows its separators are backslashes and
+        # `endswith("projects/orchard")` was asserting about the separator
+        # instead of about which directory got chosen.
+        self.assertEqual(self.ctx.cwd, str(self.ws_dir / "projects" / "orchard"))
 
     def test_a_relative_registry_root_resolves_against_the_workspace(self):
         # `"root": "./projects"` is what the shipped example declares, so this is

@@ -17,6 +17,7 @@ import json
 import os
 import re
 import unittest
+from pathlib import PurePosixPath, PureWindowsPath
 
 from helpers import TempCase, capture
 
@@ -319,13 +320,63 @@ class AgentPermissions(TempCase):
         allow = json.loads(self.settings.read_text(encoding="utf-8"))["permissions"]["allow"]
         for rule in allow:
             if rule.startswith(("Write(", "Edit(")):
-                self.assertIn(str(self.target), rule)
+                # Compared in posix form because that is the form the rule is
+                # written in. On this host the two spellings are the same
+                # string; on Windows `str()` would be backslashed and this
+                # would be asserting against a path the rule never contained.
+                self.assertIn(self.target.as_posix(), rule)
 
     def test_an_existing_settings_file_is_never_overwritten(self):
         mine = {"permissions": {"allow": ["Read"]}}
         self.settings.write_text(json.dumps(mine), encoding="utf-8")
         capture(init_mod.init_workspace, str(self.target), yes=True, scan=False)
         self.assertEqual(json.loads(self.settings.read_text(encoding="utf-8")), mine)
+
+
+class ThePermissionRuleShape(unittest.TestCase):
+    """The generated rule itself, against both path flavours, from any host.
+
+    `init` is scaffolding: it writes this file once, nothing ever reads it back,
+    and Claude Code does not report rules that match nothing. So a malformed
+    rule is silent by construction and stays silent -- which is how the Windows
+    spelling shipped: one leading slash where two mark an absolute path, a drive
+    letter standing where the path's own slash was assumed to be, and
+    backslashes throughout. The workspace it was written to authorise was never
+    authorised, and the scheduled run it exists for would have stopped at the
+    prompt it exists to prevent.
+
+    Driven through ``PureWindowsPath`` rather than by running on Windows, so the
+    claim is checkable on the machine the developer actually has. The judgement
+    here is the rule string, not whether some other test went green.
+
+    The roots below are deliberately not home directories. Nothing about the
+    conversion depends on that, and a fixture shaped like somebody's home is the
+    shape the pre-push fence exists to keep out of this repository.
+    """
+
+    def _write_rule(self, root):
+        allow = init_mod.agent_permissions(root)["permissions"]["allow"]
+        return next(r for r in allow if r.startswith("Write("))
+
+    def test_a_posix_root_is_not_moved_by_a_byte(self):
+        # The POSIX spelling is already correct and already deployed. A fix for
+        # Windows that rewrote it would invalidate every settings.json in the
+        # field, and `permissions` merges by exact string, so the stale rule
+        # would sit there next to the new one looking authoritative.
+        self.assertEqual(self._write_rule(PurePosixPath("/srv/vault/ws")),
+                         "Write(//srv/vault/ws/**)")
+
+    def test_a_windows_root_becomes_a_rule_that_can_match(self):
+        self.assertEqual(self._write_rule(PureWindowsPath(r"D:\vault\ws")),
+                         "Write(//D:/vault/ws/**)")
+
+    def test_neither_flavour_loses_the_two_slash_marker(self):
+        for root in (PurePosixPath("/srv/vault/ws"),
+                     PureWindowsPath(r"D:\vault\ws")):
+            inner = self._write_rule(root)[len("Write("):-1]
+            self.assertTrue(inner.startswith("//"), inner)
+            self.assertFalse(inner.startswith("///"), inner)
+            self.assertNotIn("\\", inner)
 
 
 class GlobalFlagsThatInitCannotHonour(TempCase):

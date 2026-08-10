@@ -252,8 +252,11 @@ class TheFlagBeatsTheWorkspaceYouAreStandingIn(TempCase):
     def test_permissions_writes_rules_for_the_other_workspace(self):
         code, out, err = self._there("permissions")
         self.assertEqual(0, code, err)
-        self.assertIn(str(self.there), out)
-        self.assertNotIn(str(self.here), out)
+        # Posix form, because that is the form the rule is written in. The two
+        # spellings are the same string on this host, so `str()` would pass here
+        # and assert against a path the rule never contained on Windows.
+        self.assertIn(self.there.as_posix(), out)
+        self.assertNotIn(self.here.as_posix(), out)
 
 
 if __name__ == "__main__":

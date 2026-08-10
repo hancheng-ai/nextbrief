@@ -37,7 +37,7 @@ import shutil
 import subprocess
 import unittest
 
-from helpers import REPO_ROOT
+from helpers import REPO_ROOT, requires_posix_dev_env
 
 from nextbrief import __version__
 
@@ -296,6 +296,11 @@ class TheEngineMayNotBeInstalled(unittest.TestCase):
                 body, r"do not (run the install|install it) yourself",
                 "%s gives install commands without saying who runs them" % path.name)
 
+    # `/bin/sh` and a PATH of ("/usr/bin", "/bin") are the scaffolding, not the
+    # subject: what is under test is the skill's wording against a real shell's
+    # real "command not found". Windows has neither of those directories, so
+    # the harness would be measuring its own absence.
+    @requires_posix_dev_env
     def test_the_command_it_starts_with_really_does_fail_when_the_engine_is_gone(self):
         """The behavioural half, and the reason the two above are not enough.
 

@@ -94,6 +94,25 @@ HAS_GIT = shutil.which("git") is not None
 
 requires_git = unittest.skipUnless(HAS_GIT, "git is not installed")
 
+# Windows runs nextbrief; it does not build it. The release scripts, the fixture
+# generator and the pre-push fence are bash and POSIX file modes, and a release
+# is cut on Linux. That boundary is stated in CONTRIBUTING.md, and this is where
+# the suite is told about it.
+#
+# Asked as "is this a POSIX developer environment", NOT as "is bash installed",
+# which is the question the guards on these tests used to ask. Git for Windows
+# puts bash.exe on PATH, so `shutil.which("bash")` is true on windows-latest:
+# the guard never fired, the sh-only tests ran there, and eight of them failed.
+# Red for something nobody undertook to support is worse than no signal at all,
+# because it is indistinguishable from red for something that is broken.
+POSIX_DEV_ENV = os.name != "nt" and shutil.which("bash") is not None
+
+requires_posix_dev_env = unittest.skipUnless(
+    POSIX_DEV_ENV,
+    "developing nextbrief needs a POSIX shell -- Windows is supported for "
+    "running it, not for building it (see CONTRIBUTING.md)",
+)
+
 
 # ---------------------------------------------------------------------------
 # process / environment plumbing
@@ -568,10 +587,11 @@ def write_brief_json(ws_root, brief):
 class TempCase(unittest.TestCase):
     """A temporary directory plus an environment that cannot reach the real machine.
 
-    ``HOME`` and ``XDG_CONFIG_HOME`` are redirected because ``init`` writes a
-    workspace pointer under the config home and sensing looks for agent sessions
-    under ``~``. A suite that leaves either pointing at the developer's account
-    can silently overwrite the workspace they use every day.
+    ``HOME``, ``USERPROFILE`` and ``XDG_CONFIG_HOME`` are redirected because
+    ``init`` writes a workspace pointer under the config home and sensing looks
+    for agent sessions under ``~``. A suite that leaves any of them pointing at
+    the developer's account can silently overwrite the workspace they use every
+    day.
     """
 
     def setUp(self):
@@ -588,6 +608,12 @@ class TempCase(unittest.TestCase):
         for name in ("NEXTBRIEF_WORKSPACE", "NEXTBRIEF_OUT", "NEXTBRIEF_LOCALE", "NEXTBRIEF_AGENT"):
             os.environ.pop(name, None)
         os.environ["HOME"] = str(self.home)
+        # Windows' expanduser reads USERPROFILE and never consults HOME, so
+        # setting HOME alone left `~` resolving to the real account and the
+        # containment promised above did not hold there at all. Three tests in
+        # test_paths went red on it; what they were reporting is that every test
+        # in the suite that expands `~` had been reaching the actual profile.
+        os.environ["USERPROFILE"] = str(self.home)
         os.environ["XDG_CONFIG_HOME"] = str(self.xdg)
         self._cwd = os.getcwd()
         self.addCleanup(self._restore)

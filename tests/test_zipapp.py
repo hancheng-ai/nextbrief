@@ -31,7 +31,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from helpers import TempCase
+from helpers import TempCase, requires_posix_dev_env
 
 from nextbrief.jsonc import load_jsonc
 
@@ -75,11 +75,34 @@ def build_once():
     return _BUILT["path"], proc
 
 
-@unittest.skipUnless(shutil.which("bash"), "the build script needs bash")
+# Not "is bash installed" -- Git for Windows answers yes to that, and on
+# windows-latest the build then ran, failed somewhere inside, and left four
+# tests reporting `FileNotFoundError: dist\nextbrief.pyz`. Four downstream
+# symptoms of one absent artifact read as four separate bugs.
+#
+# The .pyz is a release asset, so the artifact matters on Windows even though
+# building it there does not: it is cut on Linux CI and downloaded, and a
+# Windows user runs it as `py -3 nextbrief.pyz` (see README). What is skipped
+# here is the build, which is a release-machine job, not the thing shipped.
+@requires_posix_dev_env
 class Zipapp(TempCase):
     @classmethod
     def setUpClass(cls):
         cls.pyz, cls.build = build_once()
+        # A build that produced nothing is one fact, and without this it is
+        # reported as four: the test below fails on the return code while the
+        # other three raise FileNotFoundError on a path that was never written,
+        # and reading the log you are looking for four bugs instead of one.
+        # Said once, here, with the build's own output attached -- which is the
+        # only place the reason is written down.
+        if not cls.pyz.is_file():
+            raise AssertionError(
+                "the build script exited %s and produced no %s, so every "
+                "assertion below this line is about an artifact that does not "
+                "exist:\n\n%s"
+                % (cls.build.returncode, cls.pyz.name,
+                   cls.build.stdout.decode("utf-8", "replace"))
+            )
 
     def _run(self, *args):
         return subprocess.run(
