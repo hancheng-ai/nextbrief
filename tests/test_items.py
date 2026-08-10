@@ -144,6 +144,25 @@ class MintingIds(unittest.TestCase):
     def test_a_cjk_title_still_produces_a_filename(self):
         self.assertTrue(items.slug("把防盗链的解法写下来"))
 
+    def test_the_shape_of_the_next_id_is_read_off_the_backlog(self):
+        # `followup` has an item in hand to copy the convention from; `new` does
+        # not, and inventing "NA-" for a backlog numbered P-001 mints into a
+        # namespace nothing else uses -- which reads as a working command.
+        existing = ["P-007", "P-012"]
+        self.assertEqual(
+            items.next_item_id(existing, items.id_shape(existing)), "P-013",
+            "the next id left the prefix the backlog actually uses")
+
+    def test_the_widest_padding_wins_when_a_backlog_has_grown(self):
+        # `NA-001` and `NA-0044` in one directory is what a backlog that outgrew
+        # its first numbering looks like. Narrowing is the direction that
+        # collides: at 3 digits the next one after NA-0044 is NA-045.
+        self.assertEqual(items.id_shape(["NA-001", "NA-0044"]), "NA-0001")
+
+    def test_an_empty_backlog_still_has_to_call_the_first_item_something(self):
+        self.assertEqual(items.id_shape([]), "NA-0001")
+        self.assertEqual(items.next_item_id([], items.id_shape([])), "NA-0001")
+
 
 class DeferRoundTrip(TempCase):
     """AC: one item goes the whole way -- parked, hidden, and back in the brief on

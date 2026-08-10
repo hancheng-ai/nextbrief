@@ -697,6 +697,10 @@ nextbrief open           open BRIEF.html in a browser
 nextbrief brief          print BRIEF.md to the terminal
 nextbrief log [-n N]     show the last few runs
 
+nextbrief new "<title>" --project <id>
+                         open an item, with the next free id taken for you —
+                         read off the working tree, so an entry nobody has
+                         committed yet still counts
 nextbrief do <id>        open an agent session in the right directory  (-y: don't ask)
 nextbrief show <id>      print one item in full
 nextbrief ok <id>        confirm an item: it is real, and written the way you meant it

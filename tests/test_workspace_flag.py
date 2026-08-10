@@ -63,6 +63,7 @@ SURVEY = {
     "open":        (HONOURED, "ws.brief_html"),
     "brief":       (HONOURED, "ws.brief_md"),
     "log":         (HONOURED, "ws.log"),
+    "new":         (HONOURED, "counts the ids under ws.backlog, and writes the file there"),
     "do":          (HONOURED, "finds the item under ws.backlog before it launches anything"),
     "show":        (HONOURED, "ws.backlog"),
     "ok":          (HONOURED, "ws.backlog"),
@@ -86,8 +87,16 @@ SURVEY = {
 # workspace resolution, before any of these mean anything.
 NEEDS_ID = ("do", "show", "ok", "drop", "done", "defer", "followup")
 
+# Commands whose own arguments are not an id. Spelled out rather than folded
+# into the line above, because getting one of these wrong turns a refusal test
+# into an argparse usage error -- which also exits non-zero and would be read as
+# the command having stopped at the flag.
+EXTRA_ARGV = {"new": ["a title", "--project", "orchard"]}
+
 
 def _argv_for(command):
+    if command in EXTRA_ARGV:
+        return [command] + EXTRA_ARGV[command]
     return [command] + (["XX-0001"] if command in NEEDS_ID else [])
 
 

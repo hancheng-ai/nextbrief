@@ -322,6 +322,34 @@ strains one, say so in the PR rather than working around it quietly.
    will keep reporting as broken, and a summary with a standing exception in it
    is one nobody reads to the end.
 
+8. **An item's id is allocated, never eyeballed.** Use `nextbrief new
+   "<title>" --project <id>`. It takes the next free id and writes the file in
+   the same command; `followup --promote` does the same thing from a closing
+   record. Do not read the directory and add one.
+
+   Both halves of that command matter, and the second is the one that looks
+   optional.
+
+   It counts over **the working tree**, not `git HEAD`. An entry that has been
+   created and not committed is invisible to the write-permission gate, to
+   anything reading git history, and to the next person doing arithmetic — and
+   that is not a hypothetical: on the night this rule was written, three backlog
+   files were in exactly that state.
+
+   And it **writes the file as it picks the number**. Two sessions nine hours
+   apart each took "the highest id, plus one" off the same directory, and both
+   were right about what they had seen, because neither had written anything
+   down yet. Two files ended up claiming `NA-0043`, one of them a P0. An
+   allocator that prints an id and trusts you to use it reproduces that exactly;
+   the gap between deciding and recording is the whole bug.
+
+   That narrows the window to one command rather than closing it, so
+   `nextbrief check` **fails** — exit 1, not a warning and not the exit 3 that
+   means "re-run me" — when two files claim one id, and every command that
+   resolves an id refuses rather than picking. It has to be a refusal: `done`
+   used to close whichever file the directory listing reached first, printing
+   the same success line it prints when it is right.
+
 ---
 
 ## The four extension points

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nextbrief new "<title>" --project <id>` — the id is allocated rather than
+  worked out by eye.** It takes the next free id, reading the *working tree*
+  rather than `git HEAD`, and writes the file in the same command. Both halves
+  are the fix. An entry that exists but is not committed is invisible to
+  anything reading git history and to the next person doing arithmetic; and an
+  allocator that prints an id and trusts you to use it leaves the same gap
+  between deciding and recording that caused the collision below.
+
+  The prefix and zero padding come off the backlog's own convention
+  (`items.id_shape`), so a workspace numbered `P-001` does not get its first
+  hand-typed item filed under `NA-`.
+
 - **The release gate runs the mutation harness.** Rule 7 of `CONTRIBUTING.md`
   says watch every guard fail, `scripts/watch-red.py` implements it, and for its
   whole life nothing ran it except a person remembering to. It spent an entire
@@ -35,6 +47,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   question still comes back green.
 
 ### Fixed
+
+- **Two backlog files could claim one id, and nothing anywhere said so.** `ls`
+  printed both rows, `show` silently picked one, `check` said nothing — so
+  `nextbrief done <id>` closed whichever file the directory listing reached
+  first, printing the same success line it prints when it is right. It happened:
+  two sessions nine hours apart each took "the highest id, plus one" off the
+  same directory, before either had written anything down, and the two items
+  that collided were a P0 and a P3.
+
+  Two changes, because either alone leaves the hole open:
+
+  - **`check` fails on a duplicated id** — exit 1, naming every file involved.
+    Not a warning, because a warning is read the way warnings are read while the
+    thing it warned about closes the wrong item; and not exit 3, which is the
+    code a scheduler answers by re-running the pipeline, which cannot fix this
+    and would render a brief confidently wrong about which item is which.
+  - **The id-resolution path refuses to guess.** `show`, `ok`, `done`, `drop`,
+    `defer`, `do` and `followup` all go through one lookup, and more than one
+    candidate is now a refusal that reads and writes nothing. There is no
+    candidate it could prefer that is not a guess, and a guess here is
+    indistinguishable from having worked.
+
+  This is the false-completion failure `CONTRIBUTING.md`'s rule 4 exists to
+  prevent, arriving through the door that rule does not watch: not an agent
+  writing `done`, but the tool resolving a person's `done` onto the wrong
+  object.
 
 - **`watch-red` no longer ends every run one guard short of a clean number on a
   healthy tree.** `tests/mutations.json` broke the pinned `brew install` guard by

@@ -42,7 +42,7 @@ __all__ = [
     "Closing", "FutureWork", "CLOSING_BEGIN", "CLOSING_END",
     "SUMMARY_HUMAN", "SUMMARY_DRAFT", "SUMMARY_NONE",
     "parse_closing", "render_closing", "upsert_closing", "record_promotion",
-    "next_item_id", "slug", "new_item_text",
+    "next_item_id", "id_shape", "slug", "new_item_text", "blank_item_text",
 ]
 
 OPEN_STATUSES = ("open", "in_progress", "waiting")
@@ -382,6 +382,37 @@ def next_item_id(existing: Sequence[str], like: str) -> str:
     return "%s-%0*d" % (prefix, width, highest + 1)
 
 
+def id_shape(existing: Sequence[str]) -> str:
+    """An id worth modelling the next one on, for a caller with no item in hand.
+
+    ``next_item_id`` takes the prefix and the zero padding from an id somebody
+    already chose, which ``followup`` has (the item being closed) and a bare
+    ``new`` does not. The backlog's own habit is the next best evidence: the
+    prefix most of it already uses, at the widest padding seen with that prefix.
+
+    Widest rather than commonest padding, because the two disagree exactly when
+    a backlog has grown past its first numbering -- ``NA-001`` alongside
+    ``NA-0044`` -- and narrowing is the direction that collides. ``NA-0001``
+    when there is nothing to go on, because a first item still has to be
+    called something.
+    """
+    counts: Dict[str, int] = {}
+    widths: Dict[str, int] = {}
+    for item_id in existing:
+        got = _ID.match(str(item_id).strip())
+        if not got:
+            continue
+        prefix, digits = got.group(1), got.group(2)
+        counts[prefix] = counts.get(prefix, 0) + 1
+        widths[prefix] = max(widths.get(prefix, 0), len(digits))
+    if not counts:
+        return "NA-0001"
+    # Ties broken alphabetically, so two prefixes used equally often do not make
+    # the answer depend on the order the directory happened to be read in.
+    prefix = sorted(counts, key=lambda p: (-counts[p], p))[0]
+    return "%s-%0*d" % (prefix, widths[prefix], 1)
+
+
 def slug(title: str, limit: int = 48) -> str:
     """A filename fragment. Keeps letters and digits in any script -- a CJK
     backlog would otherwise produce files named after nothing but their id."""
@@ -394,14 +425,20 @@ def slug(title: str, limit: int = 48) -> str:
     return "".join(out).strip("-")[:limit].strip("-") or "item"
 
 
-def new_item_text(item_id: str, title: str, project: str, discovered_from: str,
-                  today: str, source_note: str = "") -> str:
-    """A backlog file for a follow-up lifted out of a closing record.
+def _item_text(item_id: str, title: str, project: str, today: str,
+               source_doc: Optional[str], anchor: Optional[str],
+               discovered_from: Optional[str], note: str) -> str:
+    """The one shape a newly minted backlog file has.
+
+    Both minting paths go through it. Spelled twice, the two would drift the
+    first time a field was added -- and the drift would be invisible, because
+    each path produces a file that reads fine on its own and only the sensing
+    stage would notice that half the backlog is missing a key.
 
     ``human_confirmed: true`` and ``created_by: human``, and both are literally
-    true: a person typed this sentence while closing the item it came from, and
-    typed the command that promoted it. Automatic decay only ever withdraws the
-    agent's own unconfirmed guesses, and this is neither.
+    true on both paths: a person typed the sentence and typed the command that
+    wrote it down. Automatic decay only ever withdraws the agent's own
+    unconfirmed guesses, and this is neither.
     """
     lines = [
         "---",
@@ -421,12 +458,12 @@ def new_item_text(item_id: str, title: str, project: str, discovered_from: str,
         "  assessed_on: %s" % today,
         "  human_confirmed: false",
         "source:",
-        "  doc: backlog/%s" % (source_note or discovered_from),
-        "  anchor: closing record of %s" % discovered_from,
+        "  doc: %s" % (source_doc or "null"),
+        "  anchor: %s" % (anchor or "null"),
         "  seen_on: %s" % today,
         "estimate_min: 30",
         "dependencies: []",
-        "discovered_from: %s" % discovered_from,
+        "discovered_from: %s" % (discovered_from or "null"),
         "created_date: %s" % today,
         "updated_date: %s" % today,
         "created_by: human",
@@ -442,10 +479,41 @@ def new_item_text(item_id: str, title: str, project: str, discovered_from: str,
         "<!-- AC:END -->",
         "",
         "<!-- SECTION:NOTES:BEGIN -->",
-        "Lifted out of the closing record of %s on %s. Nobody has sized it, "
-        "scoped it, or decided it is worth doing -- it is here so that it stopped "
-        "being something only one person remembered." % (discovered_from, today),
+        note,
         "<!-- SECTION:NOTES:END -->",
         "",
     ]
     return "\n".join(lines)
+
+
+def new_item_text(item_id: str, title: str, project: str, discovered_from: str,
+                  today: str, source_note: str = "") -> str:
+    """A backlog file for a follow-up lifted out of a closing record."""
+    return _item_text(
+        item_id, title, project, today,
+        source_doc="backlog/%s" % (source_note or discovered_from),
+        anchor="closing record of %s" % discovered_from,
+        discovered_from=discovered_from,
+        note="Lifted out of the closing record of %s on %s. Nobody has sized it, "
+             "scoped it, or decided it is worth doing -- it is here so that it "
+             "stopped being something only one person remembered."
+             % (discovered_from, today),
+    )
+
+
+def blank_item_text(item_id: str, title: str, project: str, today: str) -> str:
+    """A backlog file for something a person decided to track, from nothing.
+
+    No ``source`` and no ``discovered_from``: this item came out of somebody's
+    head rather than out of a document, and inventing a provenance for it would
+    put a citation in the one field the whole tool treats as evidence. ``null``
+    is the honest value and the schema's own -- an item with no antecedent
+    already writes it.
+    """
+    return _item_text(
+        item_id, title, project, today,
+        source_doc=None, anchor=None, discovered_from=None,
+        note="Opened by hand on %s. Nothing here has been sized, scoped or "
+             "confirmed as worth doing -- it is written down so that it stopped "
+             "being something only one person remembered." % today,
+    )
