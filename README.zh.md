@@ -507,6 +507,9 @@ nextbrief open           在浏览器里打开 BRIEF.html
 nextbrief brief          把 BRIEF.md 打到终端
 nextbrief log [-n N]     看最近几次运行
 
+nextbrief new "<标题>" --project <id>
+                         新开一条，id 由它取——照着工作区目录数，
+                         所以还没提交的条目也算在内
 nextbrief do <id>        在对的目录里开一个带好上下文的会话   （-y：不问直接用）
 nextbrief show <id>      看某条的全文
 nextbrief ok <id>        确认：这条是真的、按我的意思写的

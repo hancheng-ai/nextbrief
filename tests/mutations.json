@@ -777,6 +777,51 @@
       "select": "test_the_raw_frontmatter_writers_stay_private_to_the_gate",
       "expect": "imports the unchecked frontmatter writer",
       "note": "The old assertion matched one exact import line and could not see this at all: a second writer, imported on its own line."
+    },
+    {
+      "label": "the id resolver picks the first file that claims the id",
+      "file": "src/nextbrief/cli.py",
+      "old": "        if fm and str(fm.get(\"id\") or \"\") == item_id:\n            found.append(path)",
+      "new": "        if fm and str(fm.get(\"id\") or \"\") == item_id:\n            return path",
+      "select": "test_done_on_a_duplicated_id_closes_nothing",
+      "expect": "done resolved a duplicated id onto one of the files",
+      "note": "The bug exactly as it shipped. Two files claimed NA-0043 and `done` closed whichever the directory listing reached first, printing the same success line it prints when it is right."
+    },
+    {
+      "label": "check reports a duplicated id and carries on anyway",
+      "file": "src/nextbrief/cli.py",
+      "old": "        return EXIT_FAIL\n\n    rc = _run_sense([\"--check\"])",
+      "new": "        pass\n\n    rc = _run_sense([\"--check\"])",
+      "select": "test_check_fails_and_names_both_files",
+      "expect": "3 is the code a scheduler answers by re-running",
+      "note": "A warning is the whole failure mode: it prints, nobody reads it, and the thing it warned about closes the wrong item. The exit code is the part that is machine-read."
+    },
+    {
+      "label": "the duplicate scan only looks at items still on the page",
+      "file": "src/nextbrief/cli.py",
+      "old": "    seen: Dict[str, List[Path]] = {}\n    for path, fm in _all_entries(ws):",
+      "new": "    seen: Dict[str, List[Path]] = {}\n    for path, fm in _open_entries(ws):",
+      "select": "test_a_closed_file_still_counts_as_a_claimant",
+      "expect": "a collision with a closed file went unreported",
+      "note": "The plausible wrong version: live items are what the brief is about, so scanning those looks right. But `show`, `followup` and `closed` all reach a done item by id, and a collision with one is harder to notice rather than less dangerous."
+    },
+    {
+      "label": "the allocator counts committed entries instead of the working tree",
+      "file": "src/nextbrief/cli.py",
+      "old": "    known = [str(fm.get(\"id\") or \"\") for _p, fm in _all_entries(ws)]",
+      "new": "    known = [str(fm.get(\"id\") or \"\") for _p, fm in _all_entries(ws)\n             if _git(ws.root, \"ls-files\", \"--error-unmatch\", \"--\", str(_p))[0] == 0]",
+      "select": "test_it_sees_an_item_that_is_not_committed_yet",
+      "expect": "Something else claimed NA-0002",
+      "note": "Reading git rather than the directory is the mistake this command exists to not make: an entry that is written but not committed is precisely the one the next person cannot see, and it is the state three backlog files were in on the night two sessions both minted NA-0043."
+    },
+    {
+      "label": "a new item is numbered into a namespace the backlog does not use",
+      "file": "src/nextbrief/items.py",
+      "old": "    return \"%s-%0*d\" % (prefix, widths[prefix], 1)",
+      "new": "    return \"NA-0001\"",
+      "select": "test_the_shape_of_the_next_id_is_read_off_the_backlog",
+      "expect": "the next id left the prefix the backlog actually uses",
+      "note": "Minting NA-0001 into a backlog numbered P-001 collides with nothing and so never fails: the item is simply filed under a convention nothing else uses. The first spelling of this mutation hard-coded the prefix alone and went red on a KeyError -- red for the wrong reason, which the harness caught and does not count."
     }
   ]
 }

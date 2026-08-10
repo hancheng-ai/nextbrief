@@ -65,7 +65,9 @@ from .items import (
     ac_lines,
     ac_owner,
     ac_progress,
+    blank_item_text,
     days_until_due,
+    id_shape,
     is_live,
     is_parked,
     new_item_text,
@@ -112,6 +114,7 @@ commands:
   brief        print BRIEF.md to the terminal
   log          show the last few runs
 
+  new <title>  open an item, with the next free id taken for you
   do <id>      open an agent session in the right directory, context already loaded
   show <id>    print one item in full
   ok <id>      confirm an item: it is real, and written the way you meant it
@@ -263,14 +266,47 @@ def _run_render(argv: Sequence[str]) -> int:
 
 
 def _find_item(ws: Workspace, item_id: str, cat: Optional[Catalog]) -> Optional[Path]:
-    """Locate the backlog file whose frontmatter ``id`` matches, or explain."""
+    """Locate the backlog file whose frontmatter ``id`` matches, or explain.
+
+    ★ Two files may claim one id, and picking either of them is the worst
+    available answer. ★
+
+    This used to return the first match, which meant `done NA-0043` closed
+    whichever file the directory listing reached first -- silently, with the
+    other one left open and no way to tell from the output which had happened.
+    It is the false-completion failure the design contract's rule 4 exists to
+    prevent, arriving through the one door that rule does not watch: not an
+    agent writing `done`, but the tool resolving a human's `done` onto the wrong
+    object.
+
+    So: every match, and more than one is a refusal. Nothing is read and nothing
+    is written, because there is no candidate this can prefer that is not a
+    guess -- and a guess here is indistinguishable from having worked.
+    """
+    found: List[Path] = []
     for path in sorted(ws.backlog.glob("*.md")):
         try:
             fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
         except OSError:
             continue
         if fm and str(fm.get("id") or "") == item_id:
-            return path
+            found.append(path)
+
+    if len(found) == 1:
+        return found[0]
+
+    if found:
+        _err(tr(cat, "cli.item.ambiguous",
+                "{n} files claim id {id}, so there is no telling which one you "
+                "meant. Nothing was read and nothing was written:",
+                n=len(found), id=item_id))
+        for path in found:
+            _err("  " + path.name)
+        _err(tr(cat, "cli.item.ambiguous_fix",
+                "Give each of them an id of its own -- `nextbrief new` takes the "
+                "next free one -- and run this again."))
+        return None
+
     _err(
         tr(
             cat,
@@ -497,6 +533,22 @@ def _all_entries(ws: Workspace) -> List[Tuple[Path, Dict[str, Any]]]:
     return entries
 
 
+def _duplicate_ids(ws: Workspace) -> List[Tuple[str, List[Path]]]:
+    """``(id, files)`` for every id more than one backlog file claims.
+
+    Every item, not only the live ones. A closed file still answers to its id --
+    `show`, `followup` and `closed` all reach it -- so a collision between an
+    open item and a done one is exactly as ambiguous as one between two open
+    ones, and rather harder to notice.
+    """
+    seen: Dict[str, List[Path]] = {}
+    for path, fm in _all_entries(ws):
+        item_id = str(fm.get("id") or "").strip()
+        if item_id:
+            seen.setdefault(item_id, []).append(path)
+    return [(i, paths) for i, paths in sorted(seen.items()) if len(paths) > 1]
+
+
 def _open_entries(ws: Workspace) -> List[Tuple[Path, Dict[str, Any]]]:
     """Frontmatter of every item that is still live, in filename order.
 
@@ -573,7 +625,38 @@ def cmd_check(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
     own, because a lint nobody runs is a lint that does not exist -- and they do
     not touch the exit code. Exit 3 means "out of date", a scheduler acts on it,
     and an item worded awkwardly is not a reason to re-run the pipeline.
+
+    Duplicate ids are the one thing here that is neither. See below.
     """
+    # First, and an error rather than a warning, and exit 1 rather than exit 3.
+    #
+    # All three of those are the same decision. Two files claiming one id makes
+    # every id-addressed command a coin toss -- `done` closes whichever the
+    # directory listing reaches first -- so it outranks "your brief is a few
+    # hours old", which is what everything below this line is about. A warning
+    # would be read the way warnings are read, which is not at all, and the
+    # thing being warned about silently closes the wrong item. And exit 3 is the
+    # code a scheduler answers by running the pipeline again, which cannot fix
+    # this and would produce a brief that is confidently wrong about which item
+    # is which; exit 1 says "a person has to look".
+    duplicates = _duplicate_ids(ws)
+    if duplicates:
+        for item_id, paths in duplicates:
+            # "error: " in code rather than in the catalog, the way the warnings
+            # below do it: a translator should be given the sentence, not the
+            # severity label the rest of the tool spells one way.
+            _err("error: " + tr(cat, "cli.check.duplicate_id",
+                                "{n} files claim id {id}, so `nextbrief done {id}` "
+                                "would close whichever one it reached first:",
+                                n=len(paths), id=item_id))
+            for path in paths:
+                _err("  " + path.name)
+        _err(tr(cat, "cli.check.duplicate_id_fix",
+                "Give each of them an id of its own -- `nextbrief new` takes the "
+                "next free one -- before running anything that addresses an item "
+                "by id."))
+        return EXIT_FAIL
+
     rc = _run_sense(["--check"])
     for line in _criteria_warnings(ws, cat):
         _err("warning: " + line)
@@ -2008,6 +2091,110 @@ def cmd_closed(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
     return EXIT_OK
 
 
+def cmd_new(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Open a backlog item, with the next free id assigned rather than eyeballed.
+
+    ★ The point is not the keystrokes. It is that "what is the next id" stops
+    being a question a person answers by looking. ★
+
+    Two sessions answered it nine hours apart on the same evening, and both were
+    right about what they had seen: the highest id in the directory, plus one.
+    Neither had written anything down yet. The result was two files claiming
+    NA-0043 -- one of them a P0 -- and every command that takes an id would have
+    picked between them silently.
+
+    Two properties, and the second is the one that is easy to leave out:
+
+    * **It reads the working tree, not ``git HEAD``.** An entry that exists but
+      is not committed is precisely the one the next person will not see. That
+      is not hypothetical here: the same night's brief reported three backlog
+      files with no committed version to compare against.
+    * **It writes the file in the command that picks the number.** An allocator
+      that prints an id and trusts somebody to use it reproduces the original
+      failure exactly, only faster -- the gap between deciding and recording is
+      the whole bug.
+
+    That narrows the window to the width of one command rather than closing it,
+    so the last step re-reads the directory and refuses to commit an id that
+    something else claimed in between. ``nextbrief check`` is the backstop for
+    whatever still gets through.
+    """
+    # Whitespace-collapsed: the title becomes a filename slug and the first line
+    # of `ls`, and a newline pasted into either is a mess in two places.
+    title = " ".join(str(getattr(args, "title", "") or "").split())
+    if not title:
+        _err(tr(cat, "cli.new.no_title",
+                "An item needs a title -- it is the sentence you read tomorrow "
+                "and decide from."))
+        return EXIT_USAGE
+
+    project = str(getattr(args, "project", "") or "").strip()
+    reg = _registry(ws)
+    known_projects = sorted(
+        str(p.get("id")) for p in (reg.get("projects") or [])
+        if isinstance(p, dict) and p.get("id")
+    )
+    # Only when the registry could be read and has projects in it. An
+    # unreadable registry is not a reason to refuse to write down a task, and
+    # this command has no business being the one that reports it.
+    if known_projects and project not in known_projects:
+        _err(tr(cat, "cli.new.unknown_project",
+                "{project} is not a project here, so the item would never appear "
+                "under one. This workspace has: {known}",
+                project=project or "-", known=", ".join(known_projects)))
+        return EXIT_USAGE
+
+    # Before writing, for the reason `_mark` gives: an uncommitted backlog file
+    # is what the write-permission gate reverts, so a workspace that cannot
+    # commit should say so instead of minting a file that will not survive.
+    gap, problem = _durability_problem(ws)
+    if problem is not None:
+        _err(problem)
+        return EXIT_FAIL
+    if gap is not None:
+        _err(gap)
+
+    known = [str(fm.get("id") or "") for _p, fm in _all_entries(ws)]
+    item_id = next_item_id(known, id_shape(known))
+    path = ws.backlog / ("%s-%s.md" % (item_id, slug(title)))
+    if path.exists():
+        _err("error: %s already exists" % path.name)
+        return EXIT_FAIL
+
+    today = dt.date.today().isoformat()
+    try:
+        write_text(ws, path, blank_item_text(item_id, title, project, today))
+    except OSError as exc:
+        _err("error: cannot write %s: %s" % (path, exc))
+        return EXIT_FAIL
+
+    # The window this command narrows but does not close, checked rather than
+    # assumed away. The file stays: it holds a sentence somebody just typed, and
+    # deleting that to tidy up a numbering problem is the wrong trade. Not
+    # committed, though -- an id collision is not something to make durable.
+    claimants = [p for p, fm in _all_entries(ws) if str(fm.get("id") or "") == item_id]
+    if len(claimants) > 1:
+        _err(tr(cat, "cli.new.raced",
+                "Something else claimed {id} while this was being written. "
+                "{file} was kept but not committed; renumber it by hand:",
+                id=item_id, file=path.name))
+        for other in claimants:
+            _err("  " + other.name)
+        return EXIT_FAIL
+
+    if gap is None and not _commit_human(ws, path, "add", item_id):
+        return EXIT_FAIL
+
+    print(tr(cat, "cli.new.made", "{id}  {title}", id=item_id, title=title))
+    print("  %s" % path.name)
+    print()
+    print(tr(cat, "cli.new.next",
+             "Nothing in it is sized, scoped or agreed yet. `nextbrief show "
+             "{id}` to fill it in, `nextbrief do {id}` to start on it.",
+             id=item_id))
+    return EXIT_OK
+
+
 def cmd_followup(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
     """Turn a closed item's future work into backlog items of its own.
 
@@ -3244,6 +3431,7 @@ _HANDLERS = {
     "done": cmd_done,
     "drop": cmd_drop,
     "defer": cmd_defer,
+    "new": cmd_new,
     "followup": cmd_followup,
     "closed": cmd_closed,
     "ls": cmd_ls,
@@ -3351,6 +3539,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", metavar="TEXT", help="why it is being put off")
     p.add_argument("--cancel", action="store_true",
                    help="bring it back now instead of on its date")
+
+    p = add("new", "open an item, taking the next free id")
+    p.add_argument("title", metavar="<title>", help="the sentence you will read tomorrow")
+    # Required rather than guessed. An item filed under a project that does not
+    # exist never appears under one in the brief, and that failure is silent.
+    p.add_argument("--project", metavar="ID", required=True,
+                   help="project id, as `nextbrief projects` lists it")
 
     p = add("followup", "promote a closed item's future work")
     p.add_argument("item_id", metavar="<id>")

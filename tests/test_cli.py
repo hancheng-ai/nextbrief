@@ -20,6 +20,7 @@ from helpers import (
     BASE_CONFIG,
     TempCase,
     capture,
+    git_commit_all,
     git_init,
     make_project_entry,
     make_snapshot,
@@ -291,6 +292,217 @@ class BacklogCommands(TempCase):
         code, _out, err = self._run("ls")
         self.assertNotEqual(code, 0)
         self.assertEqual(err.strip().splitlines(), ["error: %s: Permission denied" % target])
+
+
+class DuplicateIds(TempCase):
+    """Two files claiming one id, which is not hypothetical.
+
+    Two sessions nine hours apart each took "the highest id, plus one" off the
+    same directory, and both were right about what they had seen. The result was
+    two files with `id: NA-0043`, one of them a P0. `ls` printed both rows, `show`
+    silently picked one, `check` said nothing at all -- so `done NA-0043` would
+    have closed whichever file the directory listing reached first, with no
+    output distinguishing that from having closed the right one.
+
+    That is the false-completion failure the design contract's rule 4 is about,
+    arriving through the door that rule does not watch: not an agent writing
+    `done`, but the tool resolving a person's `done` onto the wrong object.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        # Same id, two files, exactly as it happened. `write_backlog_item` names
+        # the file after the id, so the rename is what makes them two files
+        # rather than one overwriting the other.
+        self.first = self._claim("NA-0043-windows-support-measured.md",
+                                 "Windows support, measured")
+        self.second = self._claim("NA-0043-video-narration-theme.md",
+                                  "The narration should state the theme")
+
+    def _claim(self, filename, title):
+        path = write_backlog_item(self.ws, "NA-0043", title=title)
+        target = path.with_name(filename)
+        path.rename(target)
+        return target
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _status(self, path):
+        return parse_frontmatter(path.read_text(encoding="utf-8"))[0]["status"]
+
+    def test_the_fixture_really_does_claim_one_id_twice(self):
+        # The trigger, asserted. Every other test in this class says "nothing
+        # was closed" or "this failed", and a fixture that had quietly become
+        # one file would satisfy all of them for the wrong reason.
+        ids = [parse_frontmatter(p.read_text(encoding="utf-8"))[0]["id"]
+               for p in (self.first, self.second)]
+        self.assertEqual(ids, ["NA-0043", "NA-0043"])
+        self.assertNotEqual(self.first.name, self.second.name)
+
+    def test_check_fails_and_names_both_files(self):
+        code, _out, err = self._run("check")
+        self.assertEqual(code, 1,
+                         "a duplicated id has to fail, and with 1 rather than 3: "
+                         "3 is the code a scheduler answers by re-running the "
+                         "pipeline, which cannot fix this")
+        self.assertIn("NA-0043", err)
+        self.assertIn(self.first.name, err)
+        self.assertIn(self.second.name, err)
+
+    def test_check_says_error_rather_than_warning(self):
+        # The distinction the item was filed about. A warning is read the way
+        # warnings are read -- which is not at all -- and the thing being warned
+        # about closes the wrong item.
+        _code, _out, err = self._run("check")
+        line = next(ln for ln in err.splitlines() if "NA-0043" in ln)
+        self.assertTrue(line.startswith("error: "), line)
+
+    def test_done_on_a_duplicated_id_closes_nothing(self):
+        code, out, err = self._run("done", "NA-0043")
+        self.assertEqual(code, 1,
+                         "done resolved a duplicated id onto one of the files")
+        self.assertNotIn("-> done", out)
+        # Both files, because closing "only one of them" is the exact defect.
+        self.assertEqual(self._status(self.first), "open")
+        self.assertEqual(self._status(self.second), "open")
+        self.assertIn(self.first.name, err)
+        self.assertIn(self.second.name, err)
+
+    def test_every_command_that_resolves_an_id_refuses(self):
+        # One resolution path, so this is really asking whether each command
+        # goes through it. `do` is included because it opens an agent session in
+        # a directory chosen from the item, and the wrong item is the wrong
+        # directory.
+        for args in (("show", "NA-0043"),
+                     ("ok", "NA-0043"),
+                     ("done", "NA-0043"),
+                     ("drop", "NA-0043"),
+                     ("defer", "NA-0043", "--until", "2099-01-01"),
+                     ("do", "NA-0043"),
+                     ("followup", "NA-0043")):
+            code, _out, err = self._run(*args)
+            self.assertEqual(code, 1, "%s did not refuse" % (args,))
+            self.assertIn(self.first.name, err, "%s did not name both files" % (args,))
+            self.assertIn(self.second.name, err, "%s did not name both files" % (args,))
+        self.assertEqual(self._status(self.first), "open")
+        self.assertEqual(self._status(self.second), "open")
+
+    def test_an_id_only_one_file_claims_still_resolves(self):
+        # The other half. A refusal that fired on every id would pass every
+        # assertion above and break the tool.
+        write_backlog_item(self.ws, "NA-0044", title="Only one of me")
+        code, out, err = self._run("show", "NA-0044")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Only one of me", out)
+
+    def test_a_closed_file_still_counts_as_a_claimant(self):
+        # `show`, `followup` and `closed` all reach a done item by id, so a
+        # collision between an open item and a closed one is exactly as
+        # ambiguous -- and much easier to miss.
+        parse_frontmatter(self.first.read_text(encoding="utf-8"))
+        self.first.write_text(
+            self.first.read_text(encoding="utf-8").replace(
+                "status: open", "status: done", 1),
+            encoding="utf-8")
+        code, _out, err = self._run("check")
+        self.assertEqual(code, 1,
+                         "a collision with a closed file went unreported")
+        self.assertIn(self.first.name, err)
+
+
+class NewItem(TempCase):
+    """`new` assigns the id, because a person doing it by eye is what collided.
+
+    The property under test is not "it counts correctly". It is *what it counts
+    over*: the working tree, including entries that exist but are not committed
+    yet -- which is precisely the entry the next person does not see.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _ids(self):
+        return sorted(parse_frontmatter(p.read_text(encoding="utf-8"))[0]["id"]
+                      for p in (self.ws / "backlog").glob("*.md"))
+
+    def test_it_takes_the_next_id_and_keeps_the_backlog_s_own_shape(self):
+        write_backlog_item(self.ws, "NA-0007", title="Something already here")
+        code, out, err = self._run("new", "A thing to do", "--project", "orchard")
+        self.assertEqual(code, 0, err)
+        self.assertIn("NA-0008", out)
+        self.assertEqual(self._ids(), ["NA-0007", "NA-0008"])
+
+    def test_a_first_item_in_an_empty_backlog(self):
+        code, out, err = self._run("new", "The very first one", "--project", "orchard")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._ids(), ["NA-0001"])
+        self.assertIn("NA-0001", out)
+
+    @requires_git
+    def test_it_sees_an_item_that_is_not_committed_yet(self):
+        """The criterion this command exists for.
+
+        `git show HEAD:` cannot see a file that was created and not committed,
+        and the same night this was filed, three backlog files were in exactly
+        that state. An allocator that reads the committed history hands out
+        NA-0002 here -- on top of the NA-0002 already sitting on disk.
+        """
+        git_init(self.ws)
+        write_backlog_item(self.ws, "NA-0001", title="Committed")
+        git_commit_all(self.ws, "backlog: the committed one")
+        write_backlog_item(self.ws, "NA-0002", title="Written, never committed")
+        proc = subprocess.run(
+            ["git", "-C", str(self.ws), "show", "HEAD:backlog/NA-0002.md"],
+            capture_output=True)
+        self.assertNotEqual(proc.returncode, 0,
+                            "the fixture committed NA-0002, so it cannot show "
+                            "that uncommitted entries are counted")
+
+        code, out, err = self._run("new", "The third one", "--project", "orchard")
+        self.assertEqual(code, 0, err)
+        self.assertIn("NA-0003", out)
+        self.assertEqual(self._ids(), ["NA-0001", "NA-0002", "NA-0003"])
+
+    def test_two_in_a_row_do_not_collide(self):
+        # The whole point, end to end: the second call sees what the first
+        # wrote, and `check` agrees afterwards.
+        self.assertEqual(self._run("new", "First", "--project", "orchard")[0], 0)
+        self.assertEqual(self._run("new", "Second", "--project", "orchard")[0], 0)
+        self.assertEqual(self._ids(), ["NA-0001", "NA-0002"])
+        self.assertEqual(len(cli._duplicate_ids(
+            cli.resolve_workspace(str(self.ws), None))), 0)
+
+    def test_an_unknown_project_is_refused_rather_than_filed_under_nothing(self):
+        # An item filed under a project that does not exist never appears under
+        # one in the brief, and nothing says so.
+        code, _out, err = self._run("new", "Homeless", "--project", "no-such-project")
+        self.assertEqual(code, 2)
+        self.assertIn("orchard", err)
+        self.assertEqual(self._ids(), [])
+
+    def test_a_title_of_nothing_but_spaces_is_refused(self):
+        code, _out, _err = self._run("new", "   ", "--project", "orchard")
+        self.assertEqual(code, 2)
+        self.assertEqual(self._ids(), [])
+
+    @requires_git
+    def test_the_item_it_writes_is_committed(self):
+        # Same reasoning as `ok` / `done`: an uncommitted backlog file is what
+        # the write-permission gate reverts, and the next `new` would then reuse
+        # the id of an item that had been announced.
+        git_init(self.ws)
+        code, _out, err = self._run("new", "Committed on the way out", "--project", "orchard")
+        self.assertEqual(code, 0, err)
+        proc = subprocess.run(
+            ["git", "-C", str(self.ws), "status", "--porcelain", "--", "backlog"],
+            capture_output=True)
+        self.assertEqual(proc.stdout.decode("utf-8", "replace").strip(), "")
 
 
 class Durability(TempCase):
