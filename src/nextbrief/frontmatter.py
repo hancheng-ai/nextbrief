@@ -16,7 +16,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-__all__ = ["parse_frontmatter", "rewrite_fields", "remove_fields", "format_value"]
+__all__ = ["parse_frontmatter", "rewrite_fields", "rewrite_block", "remove_fields",
+           "format_value"]
 
 _KEY = re.compile(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$")
 _NESTED_KEY = re.compile(r"^\s+([A-Za-z_][\w-]*)\s*:\s*(.*)$")
@@ -148,6 +149,72 @@ def rewrite_fields(path, fields: Dict[str, Any]) -> bool:
         lines.append("%s: %s" % (key, format_value(value)))
 
     new_block = "\n".join(lines)
+    if new_block == block:
+        return False
+    p.write_text(text[:head_start] + new_block + text[end:], encoding="utf-8")
+    return True
+
+
+def rewrite_block(path, key: str, mapping: Optional[Dict[str, Any]]) -> bool:
+    """Set a one-level nested mapping in the frontmatter. True if the file changed.
+
+    ``rewrite_fields`` writes scalars one line at a time and has no way to say
+    ``claim:`` followed by four indented lines -- handed a dict it would flatten
+    the mapping onto a single line, which this file's own parser cannot read
+    back. That is not a gap worth working around at the call site: the schema has
+    carried nested blocks (``automation``, ``source``) since the beginning, and
+    the writer simply never learned to write one.
+
+    ``mapping=None`` removes the block. ``remove_fields`` deliberately refuses to
+    do that -- there, removing a header would orphan its indented lines into the
+    previous key, and it is reverting an illegal edit rather than replacing a
+    value -- so the removal belongs here, where the whole block is accounted for.
+
+    The block is replaced *in place* when the key is already there. Appending a
+    fresh copy at the end and leaving the old one above it would give the file
+    two ``claim:`` keys, and this module's parser takes the last one -- so the
+    file would read correctly and a person would read it wrong.
+    """
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)
+    if end == -1:
+        return False
+
+    head_start = text.find("\n") + 1
+    block = text[head_start:end]
+    lines = block.split("\n")
+
+    rendered: list = []
+    if mapping:
+        rendered.append("%s:" % key)
+        rendered.extend("  %s: %s" % (k, format_value(v)) for k, v in mapping.items())
+
+    kept: list = []
+    idx = 0
+    replaced = False
+    while idx < len(lines):
+        line = lines[idx]
+        m = _KEY.match(line)
+        if m and not line.startswith((" ", "\t")) and m.group(1) == key:
+            idx += 1
+            # Its indented lines belong to it and go with it. Blank lines do not:
+            # a blank line inside frontmatter separates sections a person wrote,
+            # and swallowing it moves the comment underneath onto the wrong key.
+            while idx < len(lines) and lines[idx].startswith((" ", "\t")):
+                idx += 1
+            if not replaced:
+                kept.extend(rendered)
+                replaced = True
+            continue
+        kept.append(line)
+        idx += 1
+    if not replaced:
+        kept.extend(rendered)
+
+    new_block = "\n".join(kept)
     if new_block == block:
         return False
     p.write_text(text[:head_start] + new_block + text[end:], encoding="utf-8")

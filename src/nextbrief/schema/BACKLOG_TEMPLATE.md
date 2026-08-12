@@ -22,6 +22,13 @@ proposed_status: null         # an agent's SUGGESTION of a terminal status. It i
 priority: 2                   # 0-4, 0 highest. HUMAN ONLY
 blocked_by: me                # me | agent | external-party | approval | decision | none
 is_next_action: false         # at most one true per project (GTD). HUMAN ONLY
+# Written by `nextbrief do <id>` when it opens a session, never by hand. See
+# "The claim record" below: it is a note saying somebody started, not a lock.
+claim:
+  by: whoever ran `do`, under the git identity this workspace commits with
+  at: 2026-03-16               # the day the session was opened
+  where: the directory the session was opened in
+  branch: the branch that directory was on, or null when it is not a repository
 # -- the three-rung automation ladder ------------------------------------------
 automation:
   tier: explore               # explore | skill | hook -- promotion depends on variance, not repetition count
@@ -82,6 +89,27 @@ puts them on the list, which is what dropping one of the agent's looks like).
 `check` warns when an item has more than two on you, or has criteria carrying no
 label at all. An unlabelled criterion is treated as yours, because nobody has said
 otherwise yet.
+
+## The claim record — a note, not a lock
+
+`nextbrief do <id>` sets `status: in_progress` and writes the `claim` block above
+before it hands the terminal to an agent. Nothing else writes either of them, and
+nothing anywhere refuses on the strength of them.
+
+Run `do` on an item that already carries a claim and it prints the claim exactly
+as it stands in the file, then asks — and *carrying on is allowed*, after which
+the claim is replaced by yours. That is deliberate. The failure this was written
+for is a session that went idle still holding the work, three times out of three;
+an enforcing lock's answer to that is to seal the item shut, and the item you can
+no longer touch is precisely the one somebody needs to pick up. A stale claim
+tells you something and never stops you.
+
+`nextbrief check` warns when an item has been claimed since before today and the
+branch in `claim.where` has had no commit since `claim.at` — the one reading that
+would have caught the idle session the morning after instead of two days later.
+It stays quiet on a claim taken today, on a branch with commits on it, and on any
+claim it cannot check (no branch recorded, no git, a directory that has gone),
+because a warning fired on absent evidence teaches you to ignore the warning.
 
 ## The closing record — do not write this by hand
 

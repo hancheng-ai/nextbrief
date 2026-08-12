@@ -804,8 +804,16 @@ Two questions, not five. A form that costs more than it returns is answered with
 Enter inside a fortnight, and empty fields look like findings.
 
 Each question comes with a **draft** derived from what is already on disk — the
-project's commits since the item was opened, and how many acceptance criteria are
-ticked. Nothing is asked of a model and nothing is fetched; `done` stays instant.
+project's commits since the item was opened, how many acceptance criteria are
+ticked, and any file in the workspace named `<id>-*`. Nothing is asked of a model
+and nothing is fetched; `done` stays instant.
+
+That last one is there because `project:` was answering two questions at once —
+what an item is *about*, and where its evidence lives. For a design spike those
+are different places: closing one printed `51 commits`, counted in the repository
+the item names, not one of them belonging to it, while `docs/design/NA-0033-*.md`
+sat in the workspace the whole time. The file is **shown, never offered**: a
+filename is not an answer to *what actually happened*, so `=` cannot take it.
 
 **The draft is never what Enter means.** Enter skips, exactly as it always did;
 `=` takes the draft; typing gives your own words. That line is the whole design:
@@ -867,6 +875,17 @@ the selector for every item written before the marker existed.
 
 `nextbrief check` warns when an item has more than two criteria on you, or has
 criteria carrying no marker at all. One line per rule, however large the backlog.
+
+It also warns when a live item has **not one criterion ticked while a file named
+`<id>-*` sits in the workspace** — the case where the work landed and the ticking
+did not. The convention was already in practice before anything read it: two
+design spikes were delivered as `docs/design/NA-0033-*.md` and
+`docs/design/NA-0029-*.md` while both items read 0/6 and 0/4. It **reports and
+never ticks**: a matching filename proves there is something worth looking at, not
+that six separate criteria were each met, and that is a reading rather than a
+match. The scan stays inside the workspace root and never enters a `backlog/`
+directory at any depth — an item file is named the same way, and another
+workspace's `NA-0001` is not yours.
 
 `nextbrief show <id>` prints the open ones that are yours above the file, and
 counts the rest, so "how much of this needs me" is answerable without reading all

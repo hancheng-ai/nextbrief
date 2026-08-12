@@ -822,6 +822,105 @@
       "select": "test_the_shape_of_the_next_id_is_read_off_the_backlog",
       "expect": "the next id left the prefix the backlog actually uses",
       "note": "Minting NA-0001 into a backlog numbered P-001 collides with nothing and so never fails: the item is simply filed under a convention nothing else uses. The first spelling of this mutation hard-coded the prefix alone and went red on a KeyError -- red for the wrong reason, which the harness caught and does not count."
+    },
+    {
+      "label": "`do` opens a session and writes down nothing",
+      "file": "src/nextbrief/cli.py",
+      "old": "        rewrite_block(ws, path, CLAIM, claim)",
+      "new": "        rewrite_block(ws, path, CLAIM, None)",
+      "select": "test_it_writes_in_progress_and_the_claim",
+      "expect": "nothing recorded that this item was started",
+      "note": "The state before this item: `status: in_progress` was in the schema and in OPEN_STATUSES, read by the engine, and written by nothing. An item could be opened twice because no place in the workspace said it had been opened once."
+    },
+    {
+      "label": "the claim already on an item is not shown to the second caller",
+      "file": "src/nextbrief/cli.py",
+      "old": "        _show_existing_claim(existing, text, cat)",
+      "new": "        pass",
+      "select": "test_the_claim_already_there_is_printed_verbatim",
+      "expect": "the claim already on the item was not shown",
+      "note": "A record nobody is shown is the state this replaced. The whole advisory posture is 'make it visible'; skipping the notice leaves only the friction."
+    },
+    {
+      "label": "an existing claim refuses instead of asking",
+      "file": "src/nextbrief/cli.py",
+      "old": "    if existing is not None:\n        _show_existing_claim(existing, text, cat)",
+      "new": "    if existing is not None:\n        _show_existing_claim(existing, text, cat)\n        return EXIT_FAIL",
+      "select": "test_an_abandoned_claim_still_lets_the_work_go_on",
+      "expect": "stopped somebody working",
+      "note": "The mutation is the enforcing lock the author declined. It seals shut exactly the abandoned items somebody needs to pick up, which is the only one of these three failures that has actually happened."
+    },
+    {
+      "label": "`check` cannot tell an empty branch from a busy one",
+      "file": "src/nextbrief/cli.py",
+      "old": "    return bool(out.strip()) if rc == 0 else False",
+      "new": "    return True",
+      "select": "test_a_claim_with_no_commits_on_its_branch_is_reported",
+      "expect": "its branch is empty, and check said",
+      "note": "NA-0045 was claimed, the session carrying the work went idle, and it was found two days later by reading a transcript. This is the reading that would have said so the next morning."
+    },
+    {
+      "label": "the abandoned-claim warning fires the minute you start work",
+      "file": "src/nextbrief/cli.py",
+      "old": "CLAIM_QUIET_DAYS = 1",
+      "new": "CLAIM_QUIET_DAYS = 0",
+      "select": "test_a_claim_taken_today_says_nothing",
+      "expect": "reported as gone quiet",
+      "note": "A claim dated today has had no chance to produce a commit. An alarm that rings on the morning you start is the alarm people switch off, after which the one that matters goes past unread too."
+    },
+    {
+      "label": "the id allocator goes back to believing what it read",
+      "file": "src/nextbrief/cli.py",
+      "old": "            won = claim_exclusively(ws, ws.ids / item_id)",
+      "new": "            won = True",
+      "select": "ExclusiveAllocation",
+      "expect": "both writers left with the same number",
+      "note": "The exact bug restored: two sessions nine hours apart each read a directory whose highest id was NA-0042 and each concluded NA-0043. Both were right. Only the exclusive create can pick between them, because only it is a write."
+    },
+    {
+      "label": "the deliverable scan reads item files as deliverables",
+      "file": "src/nextbrief/cli.py",
+      "old": "SKIP_DIRS = frozenset({\n    \"backlog\",\n    \".git\", \".hg\", \".svn\",",
+      "new": "SKIP_DIRS = frozenset({\n    \".git\", \".hg\", \".svn\",",
+      "select": "test_every_item_in_the_workspace_stays_quiet",
+      "expect": "backlog/NA-0001-the-thing-itself.md",
+      "note": "A backlog entry is named `NA-0049-some-words.md` -- the very convention the scan reads. Without the exclusion every item in every workspace reports itself on the first run, which is an alarm that fires on everything and is therefore read as nothing."
+    },
+    {
+      "label": "the deliverable scan starts at the portfolio instead of the workspace",
+      "file": "src/nextbrief/cli.py",
+      "old": "    root = str(ws.root)\n    for dirpath, dirnames, filenames in os.walk(root, topdown=True):",
+      "new": "    root = str(ws.root.parent)\n    for dirpath, dirnames, filenames in os.walk(root, topdown=True):",
+      "select": "test_a_file_outside_the_workspace_root_is_never_seen",
+      "expect": "NA-9999-reconciler.md",
+      "note": "Ids are unique inside one workspace and nowhere else. A scan one directory too wide reads a sibling tree's same-numbered files as evidence about this one -- which is what an early scan of ~/Projects did, reporting six of the example workspace's invented items at once."
+    },
+    {
+      "label": "the deliverable warning stops caring whether anything is ticked",
+      "file": "src/nextbrief/cli.py",
+      "old": "        if item_id and total and not ticked:",
+      "new": "        if item_id and total:",
+      "select": "test_one_tick_is_enough_to_stay_quiet",
+      "expect": "docs/design/NA-9999-reconciler.md",
+      "note": "One tick means somebody has already been here with their eyes open. The reported failure is an item that reads as never started; an item under active hand is not it, and warning about it is how the warning gets tuned out."
+    },
+    {
+      "label": "the deliverable path is matched anywhere in the filename",
+      "file": "src/nextbrief/cli.py",
+      "old": "                if name.startswith(prefix):",
+      "new": "                if prefix in name:",
+      "select": "test_the_id_has_to_start_the_name",
+      "expect": "docs/ARCHIVE-NA-9999-notes.md",
+      "note": "The measured signal is `<id>-*`, at 2 hits and 2 true positives. Matching the id anywhere in the name is the first step back towards the candidate that scored 7 and 0."
+    },
+    {
+      "label": "the deliverable crosses onto the side of the line `=` files",
+      "file": "src/nextbrief/cli.py",
+      "old": "        if delivered:\n            scope = \" · \".join(p for p in (",
+      "new": "        if delivered:\n            summary = \" · \".join(p for p in (",
+      "select": "test_the_deliverable_is_never_offered_as_the_summary_draft",
+      "expect": "NA-9999-reconciler.md",
+      "note": "A filename says a thing exists, never what happened. Offered as a draft it becomes a machine sentence filed under a person's name by one keystroke, which is the failure the whole draft/reference split exists to prevent."
     }
   ]
 }
