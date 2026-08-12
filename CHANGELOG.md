@@ -9,6 +9,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nextbrief do <id>` writes down that it started, and `check` notices when
+  nothing came of it.** `do` handed the terminal to an agent and left no trace
+  anywhere, so the same item could be opened twice and an item opened but never
+  worked on was indistinguishable from one nobody had touched. It now sets
+  `status: in_progress` and a `claim` block — who, when, which directory, which
+  branch — before it execs.
+
+  `status: in_progress` was already in the schema and already in
+  `items.OPEN_STATUSES`; a grep for it across the package found exactly one
+  line, the one that reads it. This is not a new mechanism, it is the producer
+  that was never written.
+
+  **It is advisory, deliberately.** Run `do` on an item that already carries a
+  claim and it prints the claim exactly as it stands in the file and asks;
+  carrying on is allowed, and the claim then becomes yours. An enforcing lock
+  was considered and declined, on the evidence: all three failures actually
+  observed were *nobody could see it*, none was two sessions editing at once —
+  and what a lock adds is the stale lock, which seals shut precisely the
+  abandoned item somebody needs to pick up. `AClaimIsNotALock` holds that line,
+  and the mutation that turns the notice into a refusal is in the manifest.
+
+  The payment for the record is the third failure, which comes free: **`check`
+  now warns when an item has been claimed since before today and the branch in
+  `claim.where` has had no commit since `claim.at`.** That is the reading that
+  would have caught an idle session the next morning instead of two days later
+  via a transcript. It stays quiet on a claim taken today, on a branch with
+  commits on it, and on any claim it cannot check — no branch recorded, no git,
+  a directory that has gone — because a warning fired on absent evidence teaches
+  you to ignore the warning. A warning, not the exit code: exit 3 tells a
+  scheduler to re-run the pipeline, and re-running it cannot make a forgotten
+  session commit anything.
+
+  Known limit, found by reproducing the original incident rather than a fixture:
+  a claim taken on a shared branch that other work lands on is masked by that
+  other work. The narrow signal is the price of not being an alarm that always
+  rings.
+
+- **`check` reads the edge that was already in the filenames.** Two design
+  spikes were delivered — 45KB and 25KB of prose, one of them already committed
+  — and both items read as never started. The evidence had been sitting in the
+  workspace the whole time under a name that says which item it belongs to:
+  `docs/design/NA-0033-reconciler.md`. **The convention was in practice; nothing
+  was reading it.** `check` now warns when a live item has criteria, not one of
+  them ticked, and a file named `<id>-*` somewhere in the workspace.
+
+  **It reports; it does not tick.** A matching filename proves there is
+  something worth looking at. It cannot prove that six separate criteria were
+  each met — that is a reading, not a match — and ticking from a filename would
+  be the evidence-free completion rule 4 forbids, arriving in the costume of a
+  check.
+
+  **The signal was measured before it was built, not chosen by intuition.**
+  `<id>-*` files scored 2 hits and 2 true positives on the real backlog. The
+  obvious alternative — "a path the item's prose mentions exists" — scored 7 and
+  0, every one of them a `README.md` or a `CLAUDE.md` named in passing, and a
+  warning at that precision is worse than none because what it teaches is to
+  scroll past warnings.
+
+  Two narrowings carry the precision, and both are in the mutation manifest. The
+  scan is **rooted at the workspace and cannot leave it** — `os.walk` does not
+  follow symlinks — because ids are unique inside one workspace and nowhere
+  else; a scan one directory wider reads a sibling tree's same-numbered files as
+  evidence about this one. And it **never enters a `backlog/` directory, at any
+  depth**: a backlog entry is itself named `NA-0049-some-words.md`, so without
+  that exclusion every item in every workspace reports itself. Measured on the
+  real workspace: 25 live items, 25 warnings without it, 2 with — and one of the
+  25 was a genuinely foreign item, an invented `NA-0002` in an example workspace
+  nested inside the tree.
+
+  A warning, and it does not touch the exit code, for the same reason as the
+  abandoned-claim one: exit 3 tells a scheduler to re-run the pipeline, and no
+  number of re-runs will make a person read a file.
+
+- **`done`'s reference line looks where the work landed, not only where the item
+  is filed.** `project:` was answering two questions at once — what this item is
+  *about*, and where its evidence lives — and for a design spike those are
+  different places. Closing one printed `51 commits since 2026-08-07`, counted
+  in the engine's repository, not one of them belonging to the item, while the
+  thing actually delivered sat in the workspace under the item's own name. The
+  line now names any `<id>-*` file alongside the commit count.
+
+  Shown, never offered. It is appended after the summary draft is derived, so
+  `=` cannot file a filename as an answer to *what actually happened?* — a
+  machine sentence signed by a person with one keystroke is precisely what the
+  draft/reference split exists to prevent.
+
 - **`nextbrief new "<title>" --project <id>` — the id is allocated rather than
   worked out by eye.** It takes the next free id, reading the *working tree*
   rather than `git HEAD`, and writes the file in the same command. Both halves
@@ -73,6 +159,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prevent, arriving through the door that rule does not watch: not an agent
   writing `done`, but the tool resolving a person's `done` onto the wrong
   object.
+
+- **`new` takes the number by writing, not by reading.** Reading the working
+  tree narrowed the window and could never close it: both colliding sessions
+  *were* right about what they had seen, and neither had written anything down
+  yet, so there was nothing for the other to have seen. The id is now taken with
+  one `O_CREAT | O_EXCL` create under `state/ids/`, and a caller that loses steps
+  to the next number and asks again. A silent duplicate becomes a retry.
+
+  The exclusive create is on the **id**, not on the item file. Doing it on the
+  filename would not have caught the collision that happened: the two titles
+  differed, so the two filenames differed, and both creations would have
+  succeeded — with both files claiming NA-0043. `test_two_different_titles_cannot_share_one_id`
+  is that shape.
+
+  Markers are never removed, so an id burned by a run that died between taking
+  the number and writing the file stays burned. A gap in the numbering costs
+  nothing — ids are names, not a count — and reusing one puts a second file under
+  a name that has already been announced. The ledger lives under `state/` because
+  it is bookkeeping rather than a record anybody reads; the permanent answer to
+  *which ids exist* is still the backlog directory, and a workspace whose `state/`
+  was wiped simply falls back to it.
 
 - **`watch-red` no longer ends every run one guard short of a clean number on a
   healthy tree.** `tests/mutations.json` broke the pinned `brew install` guard by

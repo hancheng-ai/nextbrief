@@ -45,6 +45,7 @@ import os
 from pathlib import Path
 
 from .frontmatter import remove_fields as _remove_fields_unchecked
+from .frontmatter import rewrite_block as _rewrite_block_unchecked
 from .frontmatter import rewrite_fields as _rewrite_fields_unchecked
 from .paths import CONFIG_NAME, REGISTRY_NAME, Workspace, WorkspaceError
 
@@ -53,11 +54,13 @@ __all__ = [
     "ProtectedPathError",
     "append_jsonl",
     "append_text",
+    "claim_exclusively",
     "ensure_dir",
     "human_only",
     "remove",
     "remove_fields",
     "replace",
+    "rewrite_block",
     "rewrite_fields",
     "write_outside_workspace",
     "write_text",
@@ -187,6 +190,43 @@ def rewrite_fields(ws: Workspace, path, fields) -> bool:
     p = Path(path)
     _require_inside(ws, p, "rewrite")
     return _rewrite_fields_unchecked(p, fields)
+
+
+def rewrite_block(ws: Workspace, path, key, mapping) -> bool:
+    """Rewrite one nested frontmatter mapping in place, inside the workspace only."""
+    p = Path(path)
+    _require_inside(ws, p, "rewrite")
+    return _rewrite_block_unchecked(p, key, mapping)
+
+
+def claim_exclusively(ws: Workspace, path) -> bool:
+    """Create ``path`` if and only if nothing else has. True when we made it.
+
+    ★ The only mutation here whose answer depends on losing. ★
+    Every other function in this module either does the write or raises; this one
+    reports that somebody else got there first, because that report is the point.
+
+    ``O_CREAT | O_EXCL`` is one syscall, and the kernel picks exactly one winner
+    however many callers arrive together. What it replaces is *read the highest
+    id, add one, write it* -- three steps with a gap between the first and the
+    last, which is where two sessions nine hours apart each allocated NA-0043.
+    Both were right about what they had seen. Neither had written anything down
+    yet, and nothing existed that a second reader could have seen.
+
+    The loser is not blocked and nothing is retried here: the caller takes the
+    next number and asks again, so a collision costs one more syscall instead of
+    producing two files that answer to the same name. No lock, no lease, no
+    cleanup, nothing to expire -- a file either exists or it does not.
+    """
+    p = Path(path)
+    _require_inside(ws, p, "create")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    os.close(fd)
+    return True
 
 
 def remove_fields(ws: Workspace, path, keys) -> bool:

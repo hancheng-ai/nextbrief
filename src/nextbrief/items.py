@@ -43,6 +43,7 @@ __all__ = [
     "SUMMARY_HUMAN", "SUMMARY_DRAFT", "SUMMARY_NONE",
     "parse_closing", "render_closing", "upsert_closing", "record_promotion",
     "next_item_id", "id_shape", "slug", "new_item_text", "blank_item_text",
+    "IN_PROGRESS", "CLAIM", "CLAIM_KEYS", "claim_of", "claim_lines", "claim_age_days",
 ]
 
 OPEN_STATUSES = ("open", "in_progress", "waiting")
@@ -195,6 +196,92 @@ def is_parked(fm: Dict[str, Any], today: dt.date) -> bool:
 def days_until_due(fm: Dict[str, Any], today: dt.date) -> Optional[int]:
     due = defer_due(fm)
     return None if due is None else (due - today).days
+
+
+# ---------------------------------------------------------------------------
+# the claim record
+# ---------------------------------------------------------------------------
+
+# ★ A record, not a lock. ★
+#
+# `in_progress` sat in OPEN_STATUSES and in the schema from the beginning, and
+# nothing in the engine had ever written it: a state with a reader and no
+# producer. `do` is the producer, and what it writes is the answer to "has
+# somebody started on this, and where" -- a question that had no answer anywhere
+# in the workspace, which is why the same item could be opened twice and why a
+# session that went idle carrying the work was found two days later by reading
+# transcripts.
+#
+# It is deliberately not a lock. The failure actually observed three times was
+# **abandonment**, not collision, and the punishment a lock hands out for
+# abandonment is to seal the item shut -- after which you need expiry, a clock,
+# and a policy, which is a distributed lock manager living inside a single-user
+# CLI. So a claim is shown and never enforced: `do` prints the one already there
+# and asks, and every path through it ends with the work being possible.
+IN_PROGRESS = "in_progress"
+CLAIM = "claim"
+
+# `where` is the directory the session was opened in and `branch` is the branch
+# that directory was on, rather than one field holding "a branch or a worktree".
+# `check` has to ask git a question about the branch, and git cannot be asked
+# anything without a directory to ask it in -- a single polymorphic field would
+# have to be guessed at by the one reader that exists, and guessing which of two
+# things a field holds is how the id collision this came from behaved.
+CLAIM_KEYS = ("by", "at", "where", "branch")
+
+
+def claim_of(fm: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The claim block, or ``None`` when the item carries none.
+
+    A block with nothing in it is ``None`` as well: ``claim:`` with no subkeys
+    parses to ``{}``, and an empty mapping is not a record of anybody.
+    """
+    claim = fm.get(CLAIM)
+    if not isinstance(claim, dict) or not claim:
+        return None
+    return claim
+
+
+def claim_lines(text: str) -> List[str]:
+    """The claim block's own lines, verbatim, out of a whole item file.
+
+    Verbatim because the one thing `do` owes a second caller is *what is already
+    written down*, and a re-rendering of parsed values is a paraphrase -- it
+    drops a hand-edited comment, normalises a date somebody typed differently,
+    and quietly hides the very oddity that would tell you this claim is not what
+    you think it is.
+    """
+    fm_end = text.find("\n---", 3)
+    if not text.startswith("---") or fm_end == -1:
+        return []
+    out: List[str] = []
+    inside = False
+    for line in text[text.find("\n") + 1:fm_end].split("\n"):
+        if inside:
+            if line.startswith((" ", "\t")) or not line.strip():
+                out.append(line)
+                continue
+            break
+        # Column zero, so a nested key that happens to be called `claim` inside
+        # some other block is not mistaken for the item's own claim.
+        if line.startswith("%s:" % CLAIM):
+            inside = True
+            out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    return out
+
+
+def claim_age_days(claim: Dict[str, Any], today: dt.date) -> Optional[int]:
+    """Days since ``claim.at``. ``None`` when the date is missing or unreadable.
+
+    ``None`` rather than zero, so a caller deciding whether a claim has gone
+    quiet cannot get that answer from a date nobody wrote.
+    """
+    try:
+        return (today - dt.date.fromisoformat(str(claim.get("at")).strip()[:10])).days
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------

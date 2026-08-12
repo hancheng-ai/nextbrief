@@ -120,6 +120,23 @@ class Workspace:
         return self.state / "brief.json"
 
     @property
+    def ids(self) -> Path:
+        """One empty file per id ``new`` has ever handed out, and never deleted.
+
+        The allocator's exclusive-create target. Under ``state`` rather than in
+        ``backlog`` because it is bookkeeping and not a record anybody reads: the
+        permanent answer to "which ids exist" is the backlog directory itself,
+        and this only has to close the window between reading that directory and
+        writing into it. Two writers racing for a number are necessarily on one
+        machine, so a ledger that does not travel loses nothing.
+
+        A workspace whose ``state`` was wiped starts the ledger again, which
+        costs nothing: the directory scan still refuses every id that is on disk,
+        and this narrows a window rather than being the guarantee.
+        """
+        return self.state / "ids"
+
+    @property
     def probes(self) -> Path:
         """Cached probe readings. Written only by ``nextbrief probe``; ``sense``
         reads it like any other file on disk, which is what keeps stage 1

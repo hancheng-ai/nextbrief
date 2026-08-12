@@ -47,7 +47,13 @@ from .annotate import (
     store_answer,
 )
 from .frontmatter import parse_frontmatter
-from .fs import rewrite_fields, write_outside_workspace, write_text
+from .fs import (
+    claim_exclusively,
+    rewrite_block,
+    rewrite_fields,
+    write_outside_workspace,
+    write_text,
+)
 from .i18n import Catalog, load_catalog
 from .inventory import INVENTORY_NAME
 from .items import (
@@ -56,7 +62,10 @@ from .items import (
     AC_DROPPED,
     AC_OPEN,
     AC_YOU,
+    CLAIM,
+    CLAIM_KEYS,
     DEFERRED,
+    IN_PROGRESS,
     SUMMARY_DRAFT,
     SUMMARY_HUMAN,
     SUMMARY_NONE,
@@ -66,6 +75,9 @@ from .items import (
     ac_owner,
     ac_progress,
     blank_item_text,
+    claim_age_days,
+    claim_lines,
+    claim_of,
     days_until_due,
     id_shape,
     is_live,
@@ -75,6 +87,7 @@ from .items import (
     parse_closing,
     record_promotion,
     slug,
+    status_of,
     upsert_closing,
 )
 from .jsonc import JSONCError, load_jsonc
@@ -658,7 +671,8 @@ def cmd_check(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
         return EXIT_FAIL
 
     rc = _run_sense(["--check"])
-    for line in _criteria_warnings(ws, cat):
+    for line in (_criteria_warnings(ws, cat) + _abandoned_claims(ws, cat)
+                 + _delivered_but_unticked(ws, cat)):
         _err("warning: " + line)
     if rc != EXIT_OK:
         return rc
@@ -674,6 +688,14 @@ MAX_YOURS = 2
 # How many ids a warning names before it stops. A warning that prints thirty ids
 # is a warning people learn to scroll past, and the count carries the size.
 NAMED = 3
+
+
+def _named(things: Sequence[str]) -> str:
+    """At most ``NAMED`` of them, then a count. Ids, paths, whatever is being
+    listed: the first few are what a reader acts on and the count is what tells
+    them how big the pile is."""
+    head = ", ".join(things[:NAMED])
+    return head if len(things) <= NAMED else "%s (+%d)" % (head, len(things) - NAMED)
 
 
 def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
@@ -720,16 +742,12 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
         if yours > MAX_YOURS:
             crowded.append((item_id, yours))
 
-    def named(ids: Sequence[str]) -> str:
-        head = ", ".join(ids[:NAMED])
-        return head if len(ids) <= NAMED else "%s (+%d)" % (head, len(ids) - NAMED)
-
     out: List[str] = []
     if unmarked:
         out.append(tr(cat, "cli.check.unmarked_criteria",
                       "{n} open item(s) have criteria with no ({agent})/({you}) "
                       "marker, so `done` has to ask you about all of them: {ids}",
-                      n=len(unmarked), ids=named(unmarked),
+                      n=len(unmarked), ids=_named(unmarked),
                       agent=AC_AGENT, you=AC_YOU))
     if crowded:
         out.append(tr(cat, "cli.check.crowded_criteria",
@@ -737,7 +755,212 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
                       "which is a problem with the item rather than with you: "
                       "{ids}",
                       n=len(crowded), max=MAX_YOURS,
-                      ids=named(["%s (%d)" % (i, c) for i, c in crowded])))
+                      ids=_named(["%s (%d)" % (i, c) for i, c in crowded])))
+    return out
+
+
+# A claim dated today has had no chance to produce a commit, and a check that
+# fires the minute you start work is a check people turn off on the first
+# morning. The claim's own resolution is a day, so one day is the soonest it can
+# be *late* rather than merely young.
+CLAIM_QUIET_DAYS = 1
+
+
+def _claim_has_commits(where: str, branch: str, since: str) -> Optional[bool]:
+    """Whether ``branch`` in ``where`` has any commit since ``since``.
+
+    ``None`` means the question could not be put -- no git, or a directory that
+    is gone or was never a repository -- and the caller stays silent on it. A
+    branch that does not exist is ``False`` rather than ``None``: that is git
+    answering, and "the branch was never made" is the loudest form of the thing
+    this is looking for, not a gap in the evidence.
+    """
+    if shutil.which("git") is None or not Path(where).is_dir():
+        return None
+    root = Path(where)
+    if _git(root, "rev-parse", "--git-dir")[0] != 0:
+        return None
+    rc, out, _ = _git(root, "log", "-1", "--format=%H",
+                      "--since=%s" % since, branch, "--")
+    return bool(out.strip()) if rc == 0 else False
+
+
+def _abandoned_claims(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
+    """Items somebody started, on a branch that has nothing on it.
+
+    ★ One field, two problems. ★ The record that lets `do` show you a second
+    claim is the same record that makes this question askable at all, and this is
+    the half that pays for the other: nothing here was previously findable by any
+    command. NA-0045 was claimed, the session carrying the work went idle, and
+    the fact surfaced two days later because somebody read a transcript.
+
+    Deliberately narrow, and each narrowing is a way of not becoming an alarm
+    that always rings:
+
+    * a claim younger than ``CLAIM_QUIET_DAYS`` is quiet -- you are working;
+    * a claim whose branch has any commit since the claim date is quiet, even if
+      the item is nowhere near done, because something is happening and this
+      warning has nothing to add to it;
+    * a claim this cannot check -- no branch recorded, no git, a directory that
+      has gone -- is quiet, because a warning fired on absent evidence teaches
+      the reader that the warning does not mean anything.
+
+    A warning rather than an error, and it does not touch the exit code. It is
+    telling you where to go and look, which is a thing only a person can act on;
+    exit 3 is a signal to a scheduler, and re-running the pipeline cannot make a
+    forgotten session commit anything.
+    """
+    today = dt.date.today()
+    found: List[Tuple[str, Dict[str, Any], int]] = []
+    for _path, fm in _open_entries(ws):
+        if status_of(fm) != IN_PROGRESS:
+            continue
+        claim = claim_of(fm)
+        if claim is None:
+            continue
+        where, branch = claim.get("where"), claim.get("branch")
+        age = claim_age_days(claim, today)
+        if not where or not branch or age is None or age < CLAIM_QUIET_DAYS:
+            continue
+        if _claim_has_commits(str(where), str(branch), str(claim.get("at"))) is False:
+            found.append((str(fm.get("id") or ""), claim, age))
+    if not found:
+        return []
+
+    out = []
+    for item_id, claim, age in found[:NAMED]:
+        out.append(tr(cat, "cli.check.abandoned_claim",
+                      "{id} has been claimed by {by} since {at} ({days}d), and "
+                      "{branch} in {where} has had no commit since. Either the "
+                      "work is somewhere else or the session was lost.",
+                      id=item_id, by=claim.get("by"), at=claim.get("at"),
+                      days=age, branch=claim.get("branch"),
+                      where=_tilde(str(claim.get("where")))))
+    if len(found) > NAMED:
+        out.append(tr(cat, "cli.check.abandoned_claim_more",
+                      "and {n} more claimed item(s) with nothing on their branch.",
+                      n=len(found) - NAMED))
+    return out
+
+
+# Directories the deliverable scan does not enter.
+#
+# ``backlog`` is the load-bearing one and the only one that is about meaning
+# rather than about cost. An item file is named `NA-0049-some-words.md` -- the
+# very convention this scan reads -- so without it every item in every workspace
+# reports itself on the first run, which is an alarm that fires on everything.
+# It is matched at *any* depth, not just at the workspace root, because a
+# checkout sitting inside a workspace can carry another workspace's backlog, and
+# another workspace's NA-0001 has nothing to do with this one's.
+#
+# The rest are generated or vendored trees. Nothing a person delivers lives in
+# them, and walking a `.git` or a `node_modules` is how a check that has to stay
+# instant stops being run.
+SKIP_DIRS = frozenset({
+    "backlog",
+    ".git", ".hg", ".svn",
+    "node_modules", "vendor", "__pycache__", ".venv", "venv",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "dist", "build", "target",
+})
+
+
+def _deliverables(ws: Workspace, ids: Sequence[str]) -> Dict[str, List[str]]:
+    """Workspace-relative paths of files named ``<id>-*``, keyed by id.
+
+    ★ The edge was already in the filenames; nothing was reading them. ★
+
+    Two design spikes were delivered as `docs/design/NA-0033-reconciler.md` and
+    `docs/design/NA-0029-decisions-schema.md` while both items read 0/6 and 0/4.
+    The convention that ties a file to an item was already in practice -- it was
+    just not in any code.
+
+    **The name, and only the name.** The other candidate signal was "a path the
+    item's prose mentions exists", and it was measured before either was built:
+    7 hits, 0 true positives, every one of them a README or a CLAUDE.md named in
+    passing. `<id>-*` scored 2 of 2. A warning at the first precision is worse
+    than no warning, because what it teaches is to scroll past warnings.
+
+    **Rooted at the workspace, and it cannot leave.** ``os.walk`` does not follow
+    symlinks, so a link out of the tree is not a way around this. That containment
+    is the second half of the precision: ids are unique inside one workspace and
+    nowhere else, and a scan that wandered up to the portfolio root would read
+    the example workspace's invented NA-0001 as evidence about a real one.
+
+    One walk for every id at once. The caller asks about the handful of items
+    that are actually at zero, and an empty ``ids`` walks nothing at all.
+    """
+    wanted = {"%s-" % i: str(i) for i in (str(x).strip() for x in ids) if i}
+    found: Dict[str, List[str]] = {}
+    if not wanted:
+        return found
+    root = str(ws.root)
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        for name in sorted(filenames):
+            for prefix, item_id in wanted.items():
+                if name.startswith(prefix):
+                    rel = os.path.relpath(os.path.join(dirpath, name), root)
+                    found.setdefault(item_id, []).append(rel.replace(os.sep, "/"))
+                    break
+    return found
+
+
+def _delivered_but_unticked(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
+    """Items with a file named after them and not one criterion ticked.
+
+    ★ It reports. It does not tick. ★ A matching filename proves there is
+    something worth looking at; it cannot prove that six separate criteria were
+    each met, and deciding that is a reading, not a match. Ticking from a
+    filename would be exactly the evidence-free completion the rest of this tool
+    is built to refuse -- and it would be worse here than elsewhere, because it
+    would arrive wearing the appearance of a check.
+
+    Narrow in three ways, each one a way of not becoming an alarm that always
+    rings:
+
+    * **live items only.** A deliverable next to a closed item is what closing an
+      item is supposed to leave behind.
+    * **zero ticks.** One tick means somebody has already been here with their
+      eyes open. The reported failure is an item that reads as never started.
+    * **criteria must exist.** At 0/0 there is no box to tick, so the sentence
+      would be true, unactionable, and permanent.
+
+    A warning, and it does not touch the exit code -- the same reason as
+    :func:`_abandoned_claims`. Exit 3 tells a scheduler to run the pipeline
+    again, and no number of re-runs will make a person read a file.
+    """
+    today = dt.date.today()
+    zero: List[Tuple[str, int]] = []
+    for path in sorted(ws.backlog.glob("*.md")):
+        try:
+            fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if not fm or not is_live(fm, today):
+            continue
+        ticked, _dropped, total = _ac_progress(body or "")
+        item_id = str(fm.get("id") or "").strip()
+        if item_id and total and not ticked:
+            zero.append((item_id, total))
+
+    delivered = _deliverables(ws, [i for i, _t in zero])
+    found = [(i, t, delivered[i]) for i, t in zero if i in delivered]
+    if not found:
+        return []
+
+    out = []
+    for item_id, total, paths in found[:NAMED]:
+        out.append(tr(cat, "cli.check.delivered_unticked",
+                      "{id} has {total} criteria and not one is ticked, while "
+                      "this workspace holds a file named after it: {paths}. "
+                      "Either the work landed and the ticks did not, or the file "
+                      "is a beginning -- only reading it says which.",
+                      id=item_id, total=total, paths=_named(paths)))
+    if len(found) > NAMED:
+        out.append(tr(cat, "cli.check.delivered_unticked_more",
+                      "and {n} more item(s) with nothing ticked and a file named "
+                      "after them.", n=len(found) - NAMED))
     return out
 
 
@@ -1530,6 +1753,13 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
     since = str(fm.get("created_date") or fm.get("updated_date") or "").strip()[:10]
     ticked, gone, total = _ac_progress(body)
     commits = _project_commits(ws, reg, fm.get("project"), since)
+    # ``project`` answers "what is this item about"; the reference line has been
+    # reading it as "where is the evidence", and for a design spike those are two
+    # different places. `project: nextbrief` sent this to count commits in the
+    # engine's repository -- 51 of them, not one belonging to the item, while the
+    # thing actually delivered sat in the workspace under the item's own name.
+    item_id = str(fm.get("id") or "").strip()
+    delivered = _deliverables(ws, [item_id]).get(item_id, []) if item_id else []
 
     # What the reader is shown, and what `=` will file, are two different things.
     #
@@ -1565,7 +1795,7 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
                        "dropped {n} criteria: {text}",
                        n=len(dropped), text="; ".join(dropped)))
     summary = " · ".join(said)
-    if commits or total:
+    if commits or total or delivered:
         parts = [_project_name(reg, fm.get("project"))]
         if len(commits) == 1:
             # One commit since the item was opened is the only case where a
@@ -1593,6 +1823,16 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
         # scope line doubles as the draft. Any more commits and it is context.
         if not summary and len(commits) == 1:
             summary = scope
+        # Appended *after* the draft is taken, and that ordering is the whole
+        # point. A filename says a thing exists; it does not say what happened,
+        # and `=` files what it is given under a person's name. On the wrong side
+        # of this line it becomes a machine sentence signed by a human -- the
+        # failure the draft/reference split exists to prevent. So the deliverable
+        # is shown, always, and offered, never.
+        if delivered:
+            scope = " · ".join(p for p in (
+                scope, tr(cat, "cli.close.scope_delivered", "delivered: {paths}",
+                          paths=_named(delivered))) if p)
 
     future = _unticked_acs(body) if 0 < ticked < total else []
     return summary, future, scope
@@ -2091,6 +2331,54 @@ def cmd_closed(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
     return EXIT_OK
 
 
+# How many numbers the allocator will walk past before giving up. Far above any
+# real contention -- this workspace has single-digit writers and arguments lasting
+# seconds -- and here only so that a directory somebody made unwritable produces a
+# sentence rather than a spin.
+ALLOC_ATTEMPTS = 50
+
+
+def _allocate_id(ws: Workspace) -> Optional[str]:
+    """Take an id nothing else can also take. ``None`` if the numbers ran out.
+
+    ★ The directory scan proposes; the exclusive create decides. ★
+
+    Reading the working tree for the highest id is right and is not enough: two
+    sessions nine hours apart both read a directory whose highest id was NA-0042,
+    both concluded NA-0043, and both were correct -- neither had written anything
+    down yet, so there was nothing for the other to have seen. Any allocator built
+    only out of reads has that gap, however carefully it reads.
+
+    So the number is taken by creating a file named after it, in one syscall that
+    cannot half-happen. The loser of that race finds out *at the moment of
+    losing* rather than two days later in the brief, and its answer is to step to
+    the next number and try again -- a silent duplicate becomes a retry, which is
+    the entire change.
+
+    The marker is never removed. An id burned by a run that died between taking
+    the number and writing the file is a gap in the numbering, and a gap in the
+    numbering costs nothing: ids are names, not a count of anything. Reusing one
+    is what costs -- it puts a second file under a name the first has already been
+    announced under, which is the failure this exists to prevent, arriving by the
+    tidier-looking road.
+    """
+    known = [str(fm.get("id") or "") for _p, fm in _all_entries(ws)]
+    item_id = next_item_id(known, id_shape(known))
+    for _attempt in range(ALLOC_ATTEMPTS):
+        try:
+            won = claim_exclusively(ws, ws.ids / item_id)
+        except OSError:
+            # No ledger available -- an unwritable or missing `state`. The scan
+            # above still refuses every id on disk, so this degrades to the
+            # behaviour that shipped, rather than refusing to write down a task.
+            return item_id
+        if won:
+            return item_id
+        known.append(item_id)
+        item_id = next_item_id(known, item_id)
+    return None
+
+
 def cmd_new(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
     """Open a backlog item, with the next free id assigned rather than eyeballed.
 
@@ -2114,10 +2402,11 @@ def cmd_new(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> 
       failure exactly, only faster -- the gap between deciding and recording is
       the whole bug.
 
-    That narrows the window to the width of one command rather than closing it,
-    so the last step re-reads the directory and refuses to commit an id that
-    something else claimed in between. ``nextbrief check`` is the backstop for
-    whatever still gets through.
+    Reading the directory narrows that window to the width of one command and
+    does not close it, so the number itself is taken by **exclusive creation** --
+    see ``_allocate_id``. The last step re-reads the directory anyway and refuses
+    to commit an id that something else claimed in between, and
+    ``nextbrief check`` is the backstop for whatever still gets through.
     """
     # Whitespace-collapsed: the title becomes a filename slug and the first line
     # of `ls`, and a newline pasted into either is a mess in two places.
@@ -2154,8 +2443,12 @@ def cmd_new(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> 
     if gap is not None:
         _err(gap)
 
-    known = [str(fm.get("id") or "") for _p, fm in _all_entries(ws)]
-    item_id = next_item_id(known, id_shape(known))
+    item_id = _allocate_id(ws)
+    if item_id is None:
+        _err(tr(cat, "cli.new.no_free_id",
+                "Gave up looking for a free id after {n} tries. Something else is "
+                "minting items as fast as this is; run it again.", n=ALLOC_ATTEMPTS))
+        return EXIT_FAIL
     path = ws.backlog / ("%s-%s.md" % (item_id, slug(title)))
     if path.exists():
         _err("error: %s already exists" % path.name)
@@ -2709,6 +3002,112 @@ def _exec_session(cfg: Dict[str, Any], target: str, prompt: str) -> int:
     return EXIT_OK  # unreachable; exec does not return
 
 
+def _who(ws: Workspace) -> str:
+    """Whoever is at the keyboard, in the terms this workspace already uses.
+
+    The workspace's own git identity first -- the name ``_identity_problem``
+    insists on and every backlog commit is signed with -- so the claim and the
+    commits it is about say the same word. Read from ``ws.root`` rather than from
+    the current directory, because the commit that carries the claim is made
+    there and a per-repository ``user.name`` would otherwise file the claim under
+    one name and commit it under another.
+
+    Nothing new is collected about the machine or the person: a claim is meant to
+    tell you who to go and ask, and any name you would not recognise fails at
+    that.
+    """
+    rc, name, _ = _git(ws.root, "config", "--get", "user.name")
+    if rc == 0 and name.strip():
+        return name.strip()
+    try:
+        import getpass
+
+        return getpass.getuser() or "unknown"
+    except Exception:  # pragma: no cover - getuser consults four env vars and pwd
+        return "unknown"
+
+
+def _branch_of(directory: str) -> Optional[str]:
+    """The branch ``directory`` is on, or ``None``.
+
+    ``None`` for a detached HEAD as well as for a directory that is not a
+    repository. Both are honest: `check` asks "has this branch had any commits",
+    and there is no branch here to have had any. Recording the literal string
+    ``HEAD`` would give that question an answer that looks like a branch name and
+    is not one.
+
+    ``symbolic-ref`` rather than ``rev-parse --abbrev-ref``, because the second
+    one resolves HEAD and so fails on a repository with no commits yet -- which
+    is a branch, and a very plausible one to start an item on.
+    """
+    rc, out, _ = _git(Path(directory), "symbolic-ref", "--short", "-q", "HEAD")
+    return out.strip() or None if rc == 0 else None
+
+
+def _record_claim(ws: Workspace, cat: Optional[Catalog], path: Path,
+                  item_id: str, target: str) -> None:
+    """Write down that this item has been started, and where.
+
+    ★ Never raises and never refuses. ★ The whole argument for a claim being a
+    note rather than a lock collapses if failing to write the note can stop the
+    work: that would be a lock with an unreliable trigger, which is worse than
+    either honest design. So every failure below is reported and stepped over.
+
+    Not committed through ``_mark``/``_commit_human``'s contract either, for the
+    same reason in the other direction: those treat a failed commit as a failed
+    command because the write-permission gate reverts uncommitted human edits.
+    It does not revert this one -- ``status`` and ``claim`` are not on
+    ``HUMAN_ONLY_FIELDS`` and ``in_progress`` is not a human-only status -- so an
+    uncommitted claim is still a claim, still on disk, and still the thing the
+    next reader sees.
+    """
+    claim = {
+        "by": _who(ws),
+        "at": dt.date.today().isoformat(),
+        "where": target,
+        "branch": _branch_of(target),
+    }
+    try:
+        rewrite_fields(ws, path, {"status": IN_PROGRESS,
+                                  "updated_date": claim["at"]})
+        rewrite_block(ws, path, CLAIM, claim)
+    except (OSError, WorkspaceError) as exc:
+        _err("warning: " + tr(cat, "cli.do.claim_unwritten",
+                              "could not record the claim on {id} ({why}); the "
+                              "session is opening anyway.",
+                              id=item_id, why=_os_error_line(exc)
+                              if isinstance(exc, OSError) else str(exc)))
+        return
+
+    print("  " + tr(cat, "cli.do.claimed",
+                    "Recorded on {id}: in_progress, claimed by {by} in {where}.",
+                    id=item_id, by=claim["by"], where=_tilde(target)))
+    if _baseline_gap(ws) is None and not _commit_human(ws, path, "claim", item_id):
+        _err("warning: " + tr(cat, "cli.do.claim_uncommitted",
+                              "the claim on {id} is written but not committed. It "
+                              "still reads from the working tree; it is just not "
+                              "in the history yet.", id=item_id))
+
+
+def _show_existing_claim(claim: Dict[str, Any], text: str,
+                         cat: Optional[Catalog]) -> None:
+    """Print the claim that is already on the item, verbatim."""
+    print("  " + tr(cat, "cli.do.already_claimed",
+                    "Somebody has already started on this:"))
+    print()
+    lines = claim_lines(text)
+    if not lines:
+        # Only reachable from a file whose claim came from somewhere other than
+        # the frontmatter writer. Print the parsed values rather than nothing:
+        # this notice exists to make the claim visible, and a blank space where
+        # it should be is the failure it was written against.
+        lines = ["%s:" % CLAIM] + ["  %s: %s" % (k, claim[k])
+                                   for k in CLAIM_KEYS if claim.get(k) is not None]
+    for line in lines:
+        print("    " + line)
+    print()
+
+
 def cmd_do(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
     path = _find_item(ws, args.item_id, cat)
     if path is None:
@@ -2724,6 +3123,37 @@ def cmd_do(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
     print(tr(cat, "cli.do.header", "> {id} · {title}", id=args.item_id, title=ctx.title))
     print("  " + tr(cat, "cli.do.project", "Project: {project}", project=ctx.project))
     print()
+
+    # Before the picker, because it is the one thing that might change your mind
+    # about opening a session at all -- and after it would mean asking the
+    # question at the moment the answer has stopped being useful.
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    fm, _body = parse_frontmatter(text)
+    existing = claim_of(fm or {})
+    if existing is not None:
+        _show_existing_claim(existing, text, cat)
+        # Shown, then asked, and the answer is allowed to be "go ahead". A claim
+        # that could refuse would seal shut exactly the items that most need
+        # picking up: the ones somebody started and walked away from, which is
+        # the only one of these failures that has actually happened.
+        if not args.yes:
+            print("  " + tr(cat, "cli.do.claim_advisory",
+                            "That is a note, not a lock -- nothing here stops you. "
+                            "Enter to carry on and take it over  ·  q to leave it "
+                            "alone and go and ask."))
+            try:
+                answer = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                print("  " + tr(cat, "cli.do.cancelled", "Cancelled."))
+                return EXIT_OK
+            if answer.lower() in ("q", "n", "no"):
+                print("  " + tr(cat, "cli.do.cancelled", "Cancelled."))
+                return EXIT_OK
+            print()
 
     if args.yes:
         target = ctx.cwd
@@ -2788,6 +3218,10 @@ def cmd_do(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
             break
 
     print()
+    # After the last chance to cancel and before the exec, which is the only
+    # moment both facts are known: that a session is definitely being opened, and
+    # which directory it is being opened in. `_exec_session` does not return.
+    _record_claim(ws, cat, path, args.item_id, target)
     print("  " + tr(cat, "cli.do.opening", "Opening a session in {path}", path=_tilde(target)))
     print()
     return _exec_session(cfg, target, ctx.prompt)
