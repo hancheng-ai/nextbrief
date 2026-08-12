@@ -176,6 +176,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same file the same way. So this change can only ever narrow: nothing counted
   today stops being counted.
 
+- **"The one parser" was three parsers, and fixing one of them left two.**
+  `ac_lines` states in its own docstring that every other reader of criteria is
+  a comprehension over it, and that this is load-bearing rather than tidy. It
+  was not true. `html._item_details` and `launch.build_context` each scanned the
+  body for `- [` themselves, so the fix above landed in `show`, `check`, `sense`
+  and `future_work` and **left the phantom criterion in both of the places a
+  reader actually meets it**:
+
+  - **`BRIEF.html`** — the page opened each morning — still listed the quoted
+    sentence as a criterion;
+  - **the session prompt `do` hands to an agent** still carried it under
+    **`Done when`**. That is the expensive one, and the irony is that
+    `ac_lines`'s docstring names `launch` as a reason the parser lives in
+    `items` at all: "the session prompt quotes the criteria at an agent, and a
+    criterion that was set aside must not arrive as part of the definition of
+    done." `future_work` mints a task somebody may still read and reject; this
+    opens the session that starts on it.
+
+  Both now select through `ac_lines` and render the raw line exactly as before,
+  so the prompt and the page are byte-identical for every item that was already
+  correct. Four readers, one parser, and for the first time the docstring's
+  claim is a property of the code.
+
+  Two smaller things fell out of the same line. The brief matched only `- [`
+  while `ac_lines` also accepts `* [`, so a criterion written with the other
+  bullet was counted by `show` and silently missing from the page — a
+  subtraction, and a list of criteria one line short looks exactly like a
+  complete one. And `launch` re-derived the `[~]` mark itself with a slice
+  rather than taking it from the parser; that spelling was equivalent, but it
+  was the fourth place the mark was read and the one most likely to drift.
+
 - **Two backlog files could claim one id, and nothing anywhere said so.** `ls`
   printed both rows, `show` silently picked one, `check` said nothing — so
   `nextbrief done <id>` closed whichever file the directory listing reached

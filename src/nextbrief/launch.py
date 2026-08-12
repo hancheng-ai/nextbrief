@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .frontmatter import parse_frontmatter
 from .i18n import Catalog, load_catalog
-from .items import AC_DROPPED
+from .items import AC_DROPPED, ac_lines
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, expand
 
@@ -244,9 +244,19 @@ def build_context(ws: Workspace, item_path, cat: Optional[Catalog] = None) -> La
             )
         )
 
-    # Acceptance criteria are checkbox lines in the body. Copied verbatim: they are
-    # the definition of done a human wrote, and paraphrasing them would be a way of
-    # quietly moving the goalposts.
+    # Acceptance criteria are whatever `items.ac_lines` says they are. Copied
+    # verbatim: they are the definition of done a human wrote, and paraphrasing
+    # them would be a way of quietly moving the goalposts.
+    #
+    # ★ Selected by the shared parser, not by a scan of our own. ★
+    #
+    # This read its own checkbox lines out of the whole body until NA-0051, which
+    # is the second copy `ac_lines` says in its docstring must not exist -- and it
+    # cost exactly what that docstring predicts. A line of NOTES *quoting* what a
+    # criterion looks like arrived here under "**Done when**", which is not a
+    # miscount in a report somebody skims: it is a sentence about criteria handed
+    # to an agent as part of the definition of done. Of the three readers that
+    # had drifted, this is the expensive one.
     #
     # Except for the ones marked `[~]`, which are the definition of done a human
     # wrote and then withdrew. Listed under "Done when", such a line is an
@@ -255,9 +265,15 @@ def build_context(ws: Workspace, item_path, cat: Optional[Catalog] = None) -> La
     # would be the very failure the mark was added to stop: work being started on
     # a goal somebody deliberately abandoned, one step earlier in the chain than
     # the follow-up drafts where it was caught the first time.
-    acs = [ln.strip() for ln in body.splitlines() if ln.strip().startswith("- [")]
-    set_aside = [ln for ln in acs if ln[:5].endswith("[%s]" % AC_DROPPED)]
-    done_when = [ln for ln in acs if ln not in set_aside]
+    #
+    # The mark comes from the parser too, rather than being re-read off the line
+    # here. The old split was equivalent -- a `- [~]` line can never string-equal
+    # a `- [ ]` one, so membership was safe -- but it re-derived the mark in a
+    # fourth place, and one of the two spellings was going to drift eventually.
+    raw = body.splitlines()
+    marked = [(mark, raw[i].strip()) for i, mark, _text in ac_lines(body)]
+    set_aside = [ln for mark, ln in marked if mark == AC_DROPPED]
+    done_when = [ln for mark, ln in marked if mark != AC_DROPPED]
     if done_when:
         lines.append("")
         lines.append(tr(cat, "launch.prompt.acceptance", "**Done when**:"))

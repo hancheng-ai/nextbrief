@@ -993,6 +993,42 @@
       "select": "test_an_empty_block_reports_zero_rather_than_falling_back",
       "expect": "#9 (you) a quote",
       "note": "Zero is an answer when the markers are there. Falling back on an empty block resurrects every checkbox in NOTES on exactly the items whose criteria have all been dropped."
+    },
+    {
+      "label": "the brief scans for its own criteria instead of asking the parser",
+      "file": "src/nextbrief/html.py",
+      "old": "    acs = [raw[i] for i, _mark, _text in ac_lines(body)]",
+      "new": "    acs = [ln for ln in raw if ln.strip().startswith(\"- [\")]",
+      "select": "test_prose_quoting_a_criterion_is_not_rendered_as_one",
+      "expect": "decide the posture",
+      "note": "The second copy `ac_lines` says must not exist. Kept it, and NA-0051 survives its own fix on the one page the author actually opens each morning -- gone from `show`, gone from `future_work`, still printed here."
+    },
+    {
+      "label": "the brief goes back to matching only the dash bullet",
+      "file": "src/nextbrief/html.py",
+      "old": "    acs = [raw[i] for i, _mark, _text in ac_lines(body)]",
+      "new": "    acs = [ln for ln in raw if ln.strip().startswith(\"- [\")]",
+      "select": "test_a_criterion_written_with_a_star_bullet_reaches_the_page",
+      "expect": "the old aggregate still resolves",
+      "note": "`ac_lines` accepts `* [` and the page's own scan did not, so an item using the other bullet listed its criteria in `show` and none in the brief. A subtraction with no symptom: one line short reads exactly like complete."
+    },
+    {
+      "label": "the session prompt scans for its own criteria",
+      "file": "src/nextbrief/launch.py",
+      "old": "    marked = [(mark, raw[i].strip()) for i, mark, _text in ac_lines(body)]",
+      "new": "    marked = [(ln.strip()[3:4], ln.strip()) for ln in raw if ln.strip().startswith(\"- [\")]",
+      "select": "test_it_does_not_arrive_under_done_when",
+      "expect": "decide the posture",
+      "note": "The expensive one. `ac_lines` names `launch` as a reason it lives in `items`, then `launch` scanned the body itself -- so a sentence quoting what a criterion looks like arrived at an agent under **Done when**. `future_work` mints a task somebody may still reject; this opens the session that starts on it."
+    },
+    {
+      "label": "a withdrawn criterion quoted in prose reaches the prompt",
+      "file": "src/nextbrief/launch.py",
+      "old": "    marked = [(mark, raw[i].strip()) for i, mark, _text in ac_lines(body)]",
+      "new": "    marked = [(ln.strip()[3:4], ln.strip()) for ln in raw if ln.strip().startswith(\"- [\")]",
+      "select": "test_it_does_not_arrive_under_no_longer_applies_either",
+      "expect": "legacy sidecar",
+      "note": "The opposite mistake and the same door: a heading telling an agent not to work on something nobody ever proposed, minted out of a line of NOTES."
     }
   ]
 }

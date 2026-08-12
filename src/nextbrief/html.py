@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from .annotate import QUESTIONS, question_targets
 from .i18n import Catalog
+from .items import ac_lines
 
 # Markdown checkbox prefix: "- [ ] " / "- [x] " / "* [X] " / "- [~] ".
 #
@@ -637,7 +638,19 @@ def _item_details(b: Dict[str, Any], P: Dict[Any, Any], cat: Catalog, launchable
         o.append("<div class=kv><div class=k>%s</div>%s</div>"
                  % (e(cat.t("html.label.next_probe")), md_inline(a["next_probe"])))
     body = b.get("_body") or ""
-    acs = [ln for ln in body.splitlines() if ln.strip().startswith("- [")]
+    # ★ Selected by `items.ac_lines`, not by a scan of our own. ★
+    #
+    # This picked its own `- [` lines out of the whole body until NA-0051, so a
+    # sentence in NOTES quoting what a criterion looks like was rendered as a
+    # criterion on the page the reader actually opens each morning -- and it
+    # matched only `- [`, never `* [`, so a criterion written with the other
+    # bullet was counted by `show` and absent from the brief. Both are the
+    # subtraction failure `ac_lines` describes: nothing looks wrong on the page.
+    #
+    # The raw line is what gets rendered, so `_AC_PREFIX` still does the
+    # stripping; only the CHOICE of lines moved to the shared parser.
+    raw = body.splitlines()
+    acs = [raw[i] for i, _mark, _text in ac_lines(body)]
     if acs:
         o.append("<div class=kv><div class=k>%s</div><ul class=ac>"
                  % e(cat.t("html.label.acceptance")))

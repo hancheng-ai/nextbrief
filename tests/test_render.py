@@ -1153,3 +1153,49 @@ class EveryNotifyReasonIsReRenderSafe(NotificationEndToEnd):
             {"title": "A claim with no evidence", "project": "orchard", "evidence": []}]})
         self.assertEqual(self._render()[0], 0)
         self.assertEqual(len(self.delivered), 1)
+
+
+class TheBriefShowsTheCriteriaAndNothingShapedLikeThem(RenderCase):
+    """★ The reader outside `cli`, and the one the author actually opens. ★
+
+    `ac_lines` says in its docstring that it is the one parser and that every
+    other reader is a comprehension over it. `html` was not: it picked its own
+    `- [` lines out of the whole body, which made it a second copy carrying the
+    NA-0051 bug *after* the parser was fixed -- a phantom criterion gone from
+    `show`, from `check` and from `future_work`, and still printed on the page.
+    It also matched only `- [` and never `* [`, which `ac_lines` accepts, so a
+    criterion written with the other bullet was counted by `show` and missing
+    from the brief.
+
+    Both are subtractions, and neither looks wrong on the page: a list of
+    criteria is exactly as plausible one line short as it is complete.
+    """
+
+    def _html(self, body):
+        write_backlog_item(self.ws, "NA-0001", title="An open item", body=body)
+        code, _out, err = self.render()
+        self.assertEqual(code, 0, err)
+        return (self.ws / "BRIEF.html").read_text(encoding="utf-8")
+
+    def test_prose_quoting_a_criterion_is_not_rendered_as_one(self):
+        page = self._html("\n".join([
+            "<!-- AC:BEGIN -->",
+            "- [ ] #1 p95 is reported per tenant",
+            "<!-- AC:END -->",
+            "<!-- SECTION:NOTES:BEGIN -->",
+            "A criterion is written like this:",
+            "",
+            "    - [ ] #9 (you) decide the posture: advice or enforcement",
+            "<!-- SECTION:NOTES:END -->"]))
+        # The trigger reached the page at all -- without this the assertion
+        # below passes just as well on a brief carrying no criteria.
+        self.assertIn("p95 is reported per tenant", page)
+        self.assertNotIn("decide the posture", page)
+
+    def test_a_criterion_written_with_a_star_bullet_reaches_the_page(self):
+        """`ac_lines` accepts `* [`; the brief's own scan did not. The item then
+        showed its criteria in `show` and none at all in the page."""
+        page = self._html("\n".join(["<!-- AC:BEGIN -->",
+                                     "* [ ] #1 the old aggregate still resolves",
+                                     "<!-- AC:END -->"]))
+        self.assertIn("the old aggregate still resolves", page)
