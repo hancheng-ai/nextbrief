@@ -921,6 +921,78 @@
       "select": "test_the_deliverable_is_never_offered_as_the_summary_draft",
       "expect": "NA-9999-reconciler.md",
       "note": "A filename says a thing exists, never what happened. Offered as a draft it becomes a machine sentence filed under a person's name by one keystroke, which is the failure the whole draft/reference split exists to prevent."
+    },
+    {
+      "label": "the acceptance parser goes back to reading the whole body",
+      "file": "src/nextbrief/items.py",
+      "old": "    lo, hi = ac_span(body)",
+      "new": "    lo, hi = 0, len(lines)",
+      "select": "test_prose_quoting_a_criterion_does_not_become_one",
+      "expect": "decide the posture",
+      "note": "NA-0051, seen three times on 2026-08-12 and once inside the bug report describing it. A line of NOTES quoting what a criterion looks like is counted as one; `.strip()` means an indented code block is no shelter."
+    },
+    {
+      "label": "a phantom criterion in NOTES is handed to future_work and minted",
+      "file": "src/nextbrief/items.py",
+      "old": "    lo, hi = ac_span(body)",
+      "new": "    lo, hi = 0, len(lines)",
+      "select": "test_followup_mints_one_item_and_it_is_not_the_prose",
+      "expect": "NA-0006-9-you-decide-the-posture",
+      "note": "The end of the chain and the only expensive part. `_unticked_acs` drafts as `future_work` and `followup` mints it, so the wrong number becomes a backlog file on disk asking somebody to do a sentence. NA-0031 closed this door on dropped criteria; the entrance here is prose."
+    },
+    {
+      "label": "the criterion's line index is rebased onto the span",
+      "file": "src/nextbrief/items.py",
+      "old": "                out.append((i, mark, s[5:].strip()))",
+      "new": "                out.append((i - lo, mark, s[5:].strip()))",
+      "select": "test_the_line_indexes_stay_relative_to_the_whole_body",
+      "expect": "is not that line",
+      "note": "The trap in the fix itself. `_apply_marks` writes a tick at `body.splitlines()[i]`, so an index counted from the span rewrites a frontmatter line instead -- silently, because splicing characters 3..5 of the wrong line raises nothing."
+    },
+    {
+      "label": "the AC markers are found by substring instead of by whole line",
+      "file": "src/nextbrief/items.py",
+      "old": "            if stripped == AC_BEGIN:",
+      "new": "            if AC_BEGIN in stripped:",
+      "select": "test_the_markers_are_recognised_by_the_whole_line_not_a_substring",
+      "expect": "shaped like a box",
+      "note": "Real items name both markers inline: NA-0051's own `what_agent_can_do:` field quotes them in one frontmatter sentence, and three more items do it in prose. A `find()` opens the span there and reads the frontmatter as criteria."
+    },
+    {
+      "label": "an indented AC marker is allowed to open the span",
+      "file": "src/nextbrief/items.py",
+      "old": "        stripped = line.rstrip()",
+      "new": "        stripped = line.strip()",
+      "select": "test_an_indented_marker_does_not_open_the_span",
+      "expect": "the shape of a criterion",
+      "note": "Indentation is what makes a code block, which is the disguise the criteria needed protecting from in the first place. An indented marker is somebody showing you a marker. Trailing whitespace stays forgiven: it is invisible and an editor may add it."
+    },
+    {
+      "label": "a body with no markers reports zero criteria instead of falling back",
+      "file": "src/nextbrief/items.py",
+      "old": "    return 0, len(lines)",
+      "new": "    return 0, 0",
+      "select": "test_a_body_with_no_markers_is_read_whole",
+      "expect": "(1, 0, 2)",
+      "note": "The rejected half of the choice for missing markers, kept red so the choice stays one. Reporting zero fails by subtraction: `AC 2/5` becomes `AC 0/0`, which reads as an item that never promised anything rather than as a broken parser."
+    },
+    {
+      "label": "an unclosed AC:BEGIN runs to the bottom of the file",
+      "file": "src/nextbrief/items.py",
+      "old": "    return 0, len(lines)",
+      "new": "    if begin is not None:\n        return begin + 1, len(lines)\n    return 0, len(lines)",
+      "select": "test_a_begin_with_no_end_falls_back_rather_than_running_to_the_bottom",
+      "expect": "#0 above",
+      "note": "Half a pair is a malformed file. Running to EOF lets one unclosed marker swallow NOTES whole -- this item's own bug arriving through the repair for it."
+    },
+    {
+      "label": "a well-formed but empty AC block falls back to the whole body",
+      "file": "src/nextbrief/items.py",
+      "old": "            return begin + 1, i",
+      "new": "            return (begin + 1, i) if i > begin + 1 else (0, len(lines))",
+      "select": "test_an_empty_block_reports_zero_rather_than_falling_back",
+      "expect": "#9 (you) a quote",
+      "note": "Zero is an answer when the markers are there. Falling back on an empty block resurrects every checkbox in NOTES on exactly the items whose criteria have all been dropped."
     }
   ]
 }

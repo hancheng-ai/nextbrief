@@ -37,7 +37,8 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 __all__ = [
     "OPEN_STATUSES", "TERMINAL_STATUSES", "DEFERRED", "HUMAN_ONLY_STATUSES",
     "AC_OPEN", "AC_DONE", "AC_DROPPED", "AC_YOU", "AC_AGENT",
-    "ac_owner", "ac_lines", "ac_progress",
+    "AC_BEGIN", "AC_END",
+    "ac_owner", "ac_span", "ac_lines", "ac_progress",
     "status_of", "defer_due", "is_live", "is_parked", "days_until_due",
     "Closing", "FutureWork", "CLOSING_BEGIN", "CLOSING_END",
     "SUMMARY_HUMAN", "SUMMARY_DRAFT", "SUMMARY_NONE",
@@ -97,11 +98,74 @@ AC_AGENT = "agent"
 
 _AC_OWNER = re.compile(r"^(?:#\d+\s*)?\((you|agent)\)", re.IGNORECASE)
 
+# The edge of the criteria. `_item_text` has written both since items had
+# bodies, so every file this engine mints already carries them -- they were
+# simply never read, which is how the whole body ended up being the scan range.
+AC_BEGIN = "<!-- AC:BEGIN -->"
+AC_END = "<!-- AC:END -->"
+
 
 def ac_owner(text: str) -> Optional[str]:
     """``"you"``, ``"agent"``, or ``None`` for a criterion carrying no marker."""
     m = _AC_OWNER.match(text.strip())
     return m.group(1).lower() if m else None
+
+
+def ac_span(body: str) -> Tuple[int, int]:
+    """The half-open range of line indexes ``ac_lines`` is allowed to read.
+
+    ★ Whole line, never a substring, and never indented. ★
+
+    Both halves are load-bearing and both were learned from real files in this
+    workspace. Items *name* these markers inline -- one item's
+    ``what_agent_can_do:`` field quotes both of them in a single frontmatter
+    sentence, and three more do it in prose -- so a ``find()`` would open the
+    span inside the frontmatter and read the rest of it as criteria. And an
+    indented marker is somebody showing you a marker: indentation is what makes
+    a code block, which is exactly the disguise the criteria themselves need
+    protecting from. Trailing whitespace is allowed because it is invisible and
+    an editor may add it; leading whitespace is meaning.
+
+    **When a well-formed pair is absent, the range is the whole body** -- which
+    is to say, precisely what this parser did before it had a range at all. That
+    is a choice, and the alternative (report zero) was rejected for the reason
+    written at the top of ``ac_lines``: a reader that does not recognise a
+    criterion fails by *subtraction*, and subtraction has no symptom. ``AC 2/5``
+    turning into ``AC 0/0`` does not read as a broken parser; it reads as an item
+    that never promised anything, and the promise is gone with nothing to say it
+    was made.
+
+    Measured before choosing, on 2026-08-12: 51 of 51 items in the live
+    workspace carry the pair, and 3 of 3 in ``examples/workspace/backlog/``, so
+    nothing ``new`` writes ever takes this path and the narrowing costs nothing.
+    But a body somebody *typed* is the normal shape for everything else --
+    ``helpers.write_backlog_item`` writes its default without them, and an item
+    older than the markers has no way to grow them. ``_needs_you`` settled the
+    identical question in this file and reached the same answer: reading the
+    absence of a marker as a claim "would empty the tick selector for the entire
+    existing backlog in one move". Rule 6 of CONTRIBUTING points the same way.
+
+    So this change can only ever narrow. Nothing counted today stops being
+    counted, and the honest residue is that a marker-less body is still open to
+    a criterion quoted in its prose -- for which the fix is markers.
+
+    Half a pair is not a range. An ``AC:BEGIN`` with no ``AC:END`` falls back
+    rather than running to the bottom of the file, because running to EOF would
+    let one unclosed marker swallow NOTES whole -- this item's own bug, arriving
+    through the repair for it. A pair that *is* well formed is an answer even
+    when it is empty: falling back there would resurrect every checkbox in NOTES
+    on exactly the items whose criteria have all been dropped.
+    """
+    begin = None
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.rstrip()
+        if begin is None:
+            if stripped == AC_BEGIN:
+                begin = i
+        elif stripped == AC_END:
+            return begin + 1, i
+    return 0, len(lines)
 
 
 def ac_lines(body: str) -> List[Tuple[int, str, str]]:
@@ -121,10 +185,32 @@ def ac_lines(body: str) -> List[Tuple[int, str, str]]:
     ``sense`` may not import ``cli`` -- the dependency runs the other way. A
     second parser in the sensing stage would be the subtraction failure above
     with an extra copy to keep in step.
+
+    ★ It reads ``ac_span``, not the whole body, and that is the second thing
+    every reader inherits at once. ★
+
+    A criterion is a line in a place, not a line anywhere. Scanning the whole
+    body meant a sentence of NOTES *quoting* what a criterion looks like became
+    one -- observed three times on 2026-08-12, the third time inside the bug
+    report describing it, which is to say the report reproduced its own subject
+    while being written. ``.strip()`` is why an indented code block was no
+    shelter: by the time the shape was tested the indentation was gone.
+
+    The cost was never the number. Per ``_unticked_acs``, an unticked criterion
+    is drafted as ``future_work`` and ``followup`` mints that into a real
+    backlog item -- so prose about criteria could become a task somebody is
+    asked to do.
+
+    The index returned is into ``body.splitlines()``, still, and that is not
+    incidental: ``_apply_marks`` writes a tick at exactly that index. Re-indexing
+    from the span would rewrite a line in the frontmatter instead, silently,
+    because splicing characters 3..5 of the wrong line raises nothing.
     """
     out = []
-    for i, line in enumerate(body.splitlines()):
-        s = line.strip()
+    lines = body.splitlines()
+    lo, hi = ac_span(body)
+    for i in range(lo, hi):
+        s = lines[i].strip()
         if s[:3] in ("- [", "* [") and len(s) > 5 and s[4] == "]":
             mark = s[3].lower()
             if mark in (AC_OPEN, AC_DONE, AC_DROPPED) and s[5:].strip():

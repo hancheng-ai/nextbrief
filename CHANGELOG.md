@@ -134,6 +134,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **You could not quote an acceptance criterion without writing one.**
+  `items.ac_lines` scanned the *whole* item body for checkbox lines rather than
+  the span between `<!-- AC:BEGIN -->` and `<!-- AC:END -->`, and it tested each
+  line after `.strip()`, so indentation — a fenced or indented code block
+  included — offered no protection at all. A sentence in NOTES showing what a
+  criterion looks like became a criterion.
+
+  Observed three times on 2026-08-12, the third while the bug report was being
+  typed: `nextbrief show NA-0046` went from `共 6 条` to `共 7 条` and grew a
+  phantom `(you)`, and the report reproduced its own subject mid-sentence.
+
+  **The cost was never the number.** By `_unticked_acs`'s own docstring, an
+  unticked criterion is what `done` drafts as `future_work` and `followup`
+  mints into a real backlog item — "a minted task travels". A regression test
+  drives that whole chain and, before the fix, it produced
+  `NA-0006-9-you-decide-the-posture-advice-or-enforcement.md`: a task on disk,
+  asking somebody to do a sentence about tasks. That is the failure `NA-0031`
+  spent an entire item closing; the entrance this time was prose.
+
+  The markers were never missing — `_item_text` has written both since items had
+  bodies. The edge existed and no reader knew about it, which is the same shape
+  as the rest of this week's catch. **Only the scan range changed**: `ac_lines`
+  remains the one parser every other reader is a comprehension over, and it still
+  returns indexes into the whole body, because `_apply_marks` writes a tick at
+  exactly that index and an index counted from the span would rewrite a
+  frontmatter line instead, silently.
+
+  The markers are matched as a whole line and never as a substring, because real
+  items name them *inline* — one item quotes both in a single `what_agent_can_do:`
+  field — and an indented marker is somebody showing you a marker.
+
+  **When a well-formed pair is absent the whole body is scanned, exactly as
+  before.** That is a choice and not a leftover. Reporting zero was the
+  alternative and it fails by *subtraction*, which has no symptom: `AC 2/5`
+  becoming `AC 0/0` reads as an item that never promised anything. Measured
+  first — 51 of 51 items in the live workspace carry the pair and 3 of 3 in
+  `examples/workspace/backlog/`, so nothing `new` writes ever takes that path,
+  while hand-typed bodies routinely have no markers and an item older than the
+  markers cannot grow them. `_needs_you` settled the identical question in the
+  same file the same way. So this change can only ever narrow: nothing counted
+  today stops being counted.
+
 - **Two backlog files could claim one id, and nothing anywhere said so.** `ls`
   printed both rows, `show` silently picked one, `check` said nothing — so
   `nextbrief done <id>` closed whichever file the directory listing reached
