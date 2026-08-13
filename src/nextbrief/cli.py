@@ -785,6 +785,35 @@ def _claim_has_commits(where: str, branch: str, since: str) -> Optional[bool]:
     return bool(out.strip()) if rc == 0 else False
 
 
+def _trunk_of(where: str) -> Optional[str]:
+    """The branch this repository treats as its trunk, or ``None``.
+
+    ``origin/HEAD`` first, because that is the repository saying so rather than
+    this code guessing. It is unset more often than not -- of the nine
+    repositories this was measured against, five had no remote HEAD -- so the
+    two names git itself reaches for are the fallback, and anything else is
+    ``None``.
+
+    ``None`` means the trunk could not be identified, and the caller stays quiet
+    on it. That is the same narrowing as every other one in
+    :func:`_abandoned_claims`: this warning is only worth as much as the evidence
+    under it, and a guess about which branch is shared is not evidence.
+    """
+    root = Path(where)
+    rc, out, _ = _git(root, "symbolic-ref", "--short", "-q",
+                      "refs/remotes/origin/HEAD")
+    if rc == 0 and out.strip():
+        # ``origin/main`` -> ``main``; split once, so a branch whose own name
+        # has slashes in it survives.
+        _, _, name = out.strip().partition("/")
+        return name or None
+    for name in ("main", "master"):
+        if _git(root, "rev-parse", "--verify", "-q",
+                "refs/heads/%s" % name)[0] == 0:
+            return name
+    return None
+
+
 def _abandoned_claims(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
     """Items somebody started, on a branch that has nothing on it.
 
@@ -798,12 +827,40 @@ def _abandoned_claims(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
     that always rings:
 
     * a claim younger than ``CLAIM_QUIET_DAYS`` is quiet -- you are working;
+    * a claim made on the repository's trunk is quiet, because the question this
+      asks cannot be answered there -- see below;
     * a claim whose branch has any commit since the claim date is quiet, even if
       the item is nowhere near done, because something is happening and this
       warning has nothing to add to it;
     * a claim this cannot check -- no branch recorded, no git, a directory that
-      has gone -- is quiet, because a warning fired on absent evidence teaches
-      the reader that the warning does not mean anything.
+      has gone, a trunk that cannot be identified -- is quiet, because a warning
+      fired on absent evidence teaches the reader that the warning does not mean
+      anything.
+
+    ★ Why the trunk is out of scope (NA-0050). ★ The question here is "has this
+    branch had a commit", and on a shared branch somebody else answers it for
+    you. Replaying pm's 53 items against the real history of the repositories
+    they were worked in -- claiming each on the day its work started -- put
+    **92% of claims on the trunk**, and **51% of all claims were silenced by
+    commits that never touched the item**. In the three repositories actually
+    being worked at the time that rose to 61%. The old criterion was not
+    conservative there; it was reading someone else's traffic as this item's
+    progress, and its answer was decided by whether the *repository* was busy
+    rather than by whether the *item* was.
+
+    Restricting it to branches somebody made on purpose is what the same replay
+    prefers: warnings drop from 18 to 4 over that fortnight, ten of the
+    eighteen having been fired at items that were already finished, and the one
+    real abandonment on record -- NA-0045, whose session went idle on
+    ``fix/duplicate-ids`` -- is still caught.
+
+    The honest cost, and it is the whole cost: starting an item on the trunk is
+    the most common way to start one, and this now says nothing about those at
+    all. It said nothing useful about them before either; what changes is that
+    the silence is now a rule rather than an accident, and cannot be mistaken
+    for a clean bill of health. Narrowing it to the item's own commits was the
+    other candidate and the same replay rejected it: no such convention exists
+    yet outside pm's own bookkeeping, so it would have fired on 88% of claims.
 
     A warning rather than an error, and it does not touch the exit code. It is
     telling you where to go and look, which is a thing only a person can act on;
@@ -821,6 +878,9 @@ def _abandoned_claims(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
         where, branch = claim.get("where"), claim.get("branch")
         age = claim_age_days(claim, today)
         if not where or not branch or age is None or age < CLAIM_QUIET_DAYS:
+            continue
+        trunk = _trunk_of(str(where))
+        if trunk is None or str(branch) == trunk:
             continue
         if _claim_has_commits(str(where), str(branch), str(claim.get("at"))) is False:
             found.append((str(fm.get("id") or ""), claim, age))

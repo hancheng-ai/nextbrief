@@ -104,12 +104,29 @@ an enforcing lock's answer to that is to seal the item shut, and the item you ca
 no longer touch is precisely the one somebody needs to pick up. A stale claim
 tells you something and never stops you.
 
-`nextbrief check` warns when an item has been claimed since before today and the
-branch in `claim.where` has had no commit since `claim.at` — the one reading that
-would have caught the idle session the morning after instead of two days later.
-It stays quiet on a claim taken today, on a branch with commits on it, and on any
-claim it cannot check (no branch recorded, no git, a directory that has gone),
-because a warning fired on absent evidence teaches you to ignore the warning.
+`nextbrief check` warns when an item has been claimed since before today, the
+claim was made on a branch somebody created on purpose, and that branch has had
+no commit since `claim.at` — the one reading that would have caught the idle
+session the morning after instead of two days later. It stays quiet on a claim
+taken today, on a branch with commits on it, and on any claim it cannot check (no
+branch recorded, no git, a directory that has gone), because a warning fired on
+absent evidence teaches you to ignore the warning.
+
+**It also stays quiet on every claim made on the repository's trunk, and that is
+the boundary worth knowing about.** The question it asks — has this branch had a
+commit — is one that anybody else's push answers for you, so on a shared branch
+the answer is about the repository rather than about your item. Replaying a real
+portfolio's whole backlog against the history of the repositories each item was
+worked in, claiming each on the day its work started, put **92% of claims on the
+trunk**, and **51% of all claims were silenced by commits that had never touched
+the item**. Restricting the warning to dedicated branches cut it from 18 firings
+to 4 over that fortnight — ten of the eighteen had been fired at items that were
+already finished — while still catching the one real abandonment on record.
+
+Starting an item on the trunk is the most common way to start one, so state the
+consequence plainly: **this warning is a net under dedicated branches only, and
+its silence is never evidence that an item is progressing.** If you want the
+check to be able to speak for an item, give the work a branch of its own.
 
 ## The closing record — do not write this by hand
 

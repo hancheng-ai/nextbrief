@@ -353,6 +353,134 @@ class AClaimWithNothingBehindIt(TempCase):
         self.assertIn("warning", err)
 
 
+@requires_git
+class TheTrunkIsNotEvidence(TempCase):
+    """On a shared branch, somebody else answers the question for you.
+
+    Measured before it was changed (NA-0050): replaying pm's 53 items against
+    the real history of the repositories they were worked in put 92% of claims
+    on the trunk, and 51% of all claims were silenced by commits that never
+    touched the item -- 61% among the repositories actually being worked at the
+    time. The old criterion's answer was decided by whether the *repository* was
+    busy, not by whether the *item* was, which made it quiet exactly where work
+    happens and loud exactly where none does.
+
+    So the trunk is out of scope, and these tests hold both halves of that: it
+    stops speaking about the trunk, and it does not start speaking anywhere it
+    used to be right to stay quiet.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+        self.project = self.ws / "projects" / "orchard"
+
+    def _claimed(self, branch, days_ago=2, where=None):
+        at = dt.date.today() - dt.timedelta(days=days_ago)
+        path = write_backlog_item(self.ws, "NA-0045",
+                                  title="Duplicate ids are silent",
+                                  status="in_progress")
+        rewrite_block(path, "claim", {
+            "by": "the session that had the work in it",
+            "at": str(at),
+            "where": str(self.project) if where is None else where,
+            "branch": branch,
+        })
+        return at
+
+    def _warnings(self):
+        ws = cli.resolve_workspace(str(self.ws), None)
+        return cli._abandoned_claims(ws, None)
+
+    def _commit_on(self, branch, when, message="orchard: unrelated work"):
+        git(self.project, "checkout", "-q", branch)
+        note = self.project / "src" / ("%s.py" % when.isoformat().replace("-", "_"))
+        note.write_text("LINE = 1\n", encoding="utf-8")
+        git_commit_all(self.project, message,
+                       when="%sT09:00:00+00:00" % when)
+
+    # -- it stops speaking about the trunk ---------------------------------
+
+    def test_a_claim_on_the_trunk_is_not_judged(self):
+        # The branch is empty since the claim, which is the one thing the old
+        # criterion looked for -- and on the trunk it means nothing, because
+        # the next person to push anything would have silenced it.
+        self._claimed(branch="main")
+        self.assertEqual(self._warnings(), [],
+                         "a claim on the trunk was judged on a question the "
+                         "trunk cannot answer")
+
+    def test_the_trunk_is_quiet_whether_or_not_anybody_else_commits(self):
+        # The defect itself: the old answer flipped on traffic belonging to
+        # other work. Same claim, same emptiness of *its* work, and the only
+        # difference is somebody else's commit. Both must read the same now.
+        at = self._claimed(branch="main")
+        before = self._warnings()
+        self._commit_on("main", at + dt.timedelta(days=1),
+                        message="orchard: something else entirely")
+        self.assertEqual(before, self._warnings())
+        self.assertEqual(before, [])
+
+    def test_the_repository_decides_which_branch_is_its_trunk(self):
+        # origin/HEAD is the repository saying so. Where it says the trunk is
+        # `release`, a claim on `main` is a claim on a branch somebody made on
+        # purpose, and is judged like one.
+        git(self.project, "branch", "release")
+        git(self.project, "symbolic-ref", "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/release")
+        self._claimed(branch="main")
+        warnings = self._warnings()
+        self.assertEqual(len(warnings), 1,
+                         "origin/HEAD called `release` the trunk, so `main` is "
+                         "not one, and check said %r" % (warnings,))
+        self.assertIn("NA-0045", warnings[0])
+
+    def test_a_repository_with_no_recognisable_trunk_says_nothing(self):
+        # Neither origin/HEAD nor a branch by either name git itself uses. A
+        # guess about which branch is shared is not evidence, so it stays quiet
+        # rather than warning on the strength of one.
+        git(self.project, "branch", "-m", "main", "steading")
+        self._claimed(branch="fix/duplicate-ids")
+        self.assertEqual(self._warnings(), [])
+
+    # -- and it does not start speaking anywhere it should not -------------
+
+    def test_the_same_claim_one_branch_over_is_still_reported(self):
+        # NA-0046 measured exactly this pair: one claim, only claim.branch
+        # differs. The dedicated branch is where the question still has an
+        # answer, and NA-0045 -- the abandonment actually on record -- is this
+        # case.
+        git(self.project, "checkout", "-q", "-b", "fix/duplicate-ids")
+        git(self.project, "checkout", "-q", "main")
+        self._claimed(branch="fix/duplicate-ids")
+        warnings = self._warnings()
+        self.assertEqual(len(warnings), 1,
+                         "the branch made for this item is empty and check "
+                         "said %r" % (warnings,))
+        self.assertIn("fix/duplicate-ids", warnings[0])
+
+    def test_a_busy_dedicated_branch_says_nothing(self):
+        # The half that matters more than the catch: somebody is working, on a
+        # branch of their own, and has been all week. An alarm that rings
+        # through that is one nobody reads by Friday.
+        at = self._claimed(branch="feat/tenancy")
+        git(self.project, "checkout", "-q", "-b", "feat/tenancy")
+        for day in range(1, 4):
+            self._commit_on("feat/tenancy", at + dt.timedelta(days=day),
+                            message="orchard: still going")
+        self.assertEqual(self._warnings(), [],
+                         "an item being actively worked on its own branch was "
+                         "reported as abandoned")
+
+    def test_a_claim_taken_today_on_a_dedicated_branch_still_says_nothing(self):
+        # The trunk rule is an extra narrowing, not a replacement for the ones
+        # already there.
+        git(self.project, "checkout", "-q", "-b", "feat/tenancy")
+        git(self.project, "checkout", "-q", "main")
+        self._claimed(branch="feat/tenancy", days_ago=0)
+        self.assertEqual(self._warnings(), [])
+
+
 class ExclusiveAllocation(TempCase):
     """Two writers that read the same directory must not leave with one number.
 
