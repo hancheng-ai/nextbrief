@@ -479,14 +479,70 @@ already use.
 
 ---
 
+## Sign your work
+
+This project uses the [Developer Certificate of Origin](DCO) (DCO 1.1). It is not
+a copyright assignment; it is a statement that you have the right to submit what
+you are submitting, under the project's existing licence.
+
+Add a sign-off line to every commit:
+
+    git commit -s -m "your message"
+
+which appends:
+
+    Signed-off-by: Your Name <your.email@example.com>
+
+Use your real name and an address you can be reached at. By signing off you
+certify the DCO, whose full text is in the DCO file at the repository root.
+
+This project's licence will not change: nextbrief stays Apache-2.0. The DCO
+exists so provenance is traceable, not so the licence can be altered later.
+
+---
+
 ## Releasing (maintainers)
 
 Everything after the tag is automated, and both indexes use Trusted Publishing --
 there are no API tokens anywhere in this repository.
 
-1. Move the `Unreleased` section of `CHANGELOG.md` into a dated version heading.
-2. Set the version in `pyproject.toml`. That value is the source of truth; the
-   release workflow refuses to publish a tag that disagrees with it.
+1. Set the version with the script, never by hand:
+
+   ```bash
+   scripts/bump-version.sh 0.2.0rc1
+   ```
+
+   **The version is not in one place.** Three files carry it as a machine-readable
+   literal -- `pyproject.toml` (what pip and PyPI see), `src/nextbrief/__init__.py`
+   (what `nextbrief --version` prints, and the only one a zipapp can read: an
+   archive has no installed metadata, so `importlib.metadata` is not available
+   inside one), and `CITATION.cff` (what a citation resolves to). It also appears
+   in prose and URLs across `README.md`, `README.zh.md` and the Homebrew formula,
+   and the script sweeps those too -- updating only the three machine-readable
+   ones left badges and install commands pointing at the previous release, which
+   the docs-consistency tests caught one tag too late.
+
+   The script also moves `CHANGELOG.md`'s `Unreleased` section into a dated
+   heading for the new version, leaves a fresh empty `Unreleased` behind it, and
+   adds the compare/tag links at the bottom. It does *not* blanket-replace inside
+   the changelog, or inside the release-history table in either README: those are
+   append-only records of releases that already happened, and a blanket replace
+   rewrites the last one out of existence. The boundary is a pair of
+   `<!-- bump-version:skip:begin -->` / `:end` markers.
+
+   Editing any of this by hand is how you get a package whose `--version`
+   disagrees with its own metadata, which nobody notices until a bug is filed
+   against a version that was never released.
+
+   `pyproject.toml` remains the source of truth for publishing; the release
+   workflow refuses to publish a tag that disagrees with it.
+
+   PEP 440 normalized form only -- `0.2.0rc1`, never `0.2.0-rc1`. The script
+   rejects the shapes that would pass locally and fail in CI, where the mistake
+   costs a tag.
+2. Read the diff the script produced before going further. It touched seven
+   files; the changelog heading and the release-history rows are the two places
+   a wrong answer is invisible.
 3. Tag a release candidate and push it:
 
    ```bash
