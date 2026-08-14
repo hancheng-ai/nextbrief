@@ -1083,6 +1083,33 @@
       "select": "test_exactly_one_thing_reads_it",
       "expect": "should have exactly one reader",
       "note": "The criterion this replaced was a grep, and a grep counts the definition, the __all__ entry and every docstring that names the symbol -- so it could be satisfied by rewording prose and broken by adding a comment. Counting ast.Load instead makes the rule the one worth having: who reads this value. The mutation is the exact regression it guards, a second module composing the version for itself, which is how the constant came to live in three files before."
+    },
+    {
+      "label": "the criteria nothing settled go back to being withheld",
+      "file": "src/nextbrief/cli.py",
+      "old": "              else [g for g in ((yours, False), (theirs, True)) if g[0]])",
+      "new": "              else [g for g in ((yours, False),) if g[0]])",
+      "select": "test_yours_are_asked_first_and_the_rest_get_their_own_list",
+      "expect": "1. #1 (agent) the exporter writes one file per crate",
+      "note": "The exact state that closed NA-0050 at 1/3 while its own commit message recorded that the other two had landed. Withheld, they are named in a count that can only be acted on by abandoning the close and running it again with a flag -- so the second list simply stops existing and nothing says the close went past a promise nobody judged."
+    },
+    {
+      "label": "the agent's criteria are asked before the ones that are yours",
+      "file": "src/nextbrief/cli.py",
+      "old": "              else [g for g in ((yours, False), (theirs, True)) if g[0]])",
+      "new": "              else [g for g in ((theirs, True), (yours, False)) if g[0]])",
+      "select": "test_numbering_follows_the_list_that_was_shown",
+      "expect": "the exporter writes one file per crate",
+      "note": "Order is what replaced withholding, so order is now load-bearing rather than cosmetic. The question being protected was never keystrokes -- it is 'which of these actually need me', and putting the agent's list first hands that question back on every close."
+    },
+    {
+      "label": "the second list is shown without saying why it is there",
+      "file": "src/nextbrief/cli.py",
+      "old": "    for rows, unsettled in groups:\n        if unsettled:",
+      "new": "    for rows, unsettled in groups:\n        if False:",
+      "select": "test_the_ones_nothing_settled_are_counted_out_loud",
+      "expect": "2 still open and the agent's to verify",
+      "note": "Unlabelled, the second list reads as more of your own criteria rather than as work nobody has judged -- which is the reading that gets it ticked on trust. The count and the reason are the whole difference between asking and pressuring."
     }
   ]
 }

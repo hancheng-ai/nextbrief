@@ -240,7 +240,7 @@ class TheClosingReferenceLine(DeliverableCase):
     def test_done_prints_the_reference_line(self):
         self.item()
         write_file(self.ws / "docs" / "design" / "NA-9999-reconciler.md")
-        typed = iter(["", ""])
+        typed = iter(["", "", ""])
         with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
                 mock.patch("builtins.input", lambda _p="": next(typed)):
             code, out, err = capture(cli.main,

@@ -84,8 +84,9 @@ command can see, so that criterion is the agent's. `(agent)` is the default.
 Reserve `(you)` for what only you can settle: direction, UAT, access, resources an
 agent cannot obtain, and your own judgement as the user.
 
-`done` asks you about the `(you)` ones and holds the rest back (`--all-criteria`
-puts them on the list, which is what dropping one of the agent's looks like).
+`done` asks you about the `(you)` ones first, then about any the agent's that
+nothing settled, in a list of their own (`--all-criteria` asks about all of them
+in one list). Enter leaves them open.
 `check` warns when an item has more than two on you, or has criteria carrying no
 label at all. An unlabelled criterion is treated as yours, because nobody has said
 otherwise yet.

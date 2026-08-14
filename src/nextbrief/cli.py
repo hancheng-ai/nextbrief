@@ -1686,34 +1686,73 @@ def _ask_ticks(body: str, cat: Optional[Catalog],
 
     ★ And only the ones only a person can answer. ★
 
-    Criteria marked `(agent)` are held back, because the thing being protected
-    here is not keystrokes -- it is the question "which of these actually need
-    me", which was being asked and answered from scratch on every close. Held
-    back is not hidden: the count is printed, and what stays open still drafts as
-    follow-up work exactly as before. `--all-criteria` puts them back on the
-    list, which is what the day you need to DROP one looks like -- an item whose
-    criteria are all the agent's would otherwise have no way to record that its
-    design moved, and that is the state this whole third mark exists for.
+    Criteria marked `(agent)` are asked SECOND, in a list of their own, because
+    the thing being protected here is not keystrokes -- it is the question
+    "which of these actually need me", which was being asked and answered from
+    scratch on every close. Ordering answers it; withholding them did not.
+
+    They were withheld once, and the count was printed with `--all-criteria`
+    named beside it. That flag is the only way to reach them, and reaching for
+    it means abandoning the close and typing the command again -- so the advice
+    arrived at the one moment it was most expensive to take, and the measurement
+    says nobody took it: 41 of 72 marks on items closed since were already in
+    the file, hand-edited during the work, and NA-0050 closed 1/3 with its own
+    commit message recording that the other two had landed.
+
+    `--all-criteria` still exists and now means one list instead of two.
     """
     open_rows = [(i, text) for i, mark, text in _ac_lines(body) if mark == AC_OPEN]
-    rows = open_rows if include_agent else [r for r in open_rows if _needs_you(r[1])]
-    held_back = len(open_rows) - len(rows)
-    if not rows and not held_back:
+    if not open_rows:
         return [], []
+    yours = [r for r in open_rows if _needs_you(r[1])]
+    theirs = [r for r in open_rows if not _needs_you(r[1])]
+    # Two lists, asked in one run. Holding the agent's criteria back was right
+    # and stays: the question being protected is "which of these actually need
+    # me", not keystrokes. What was wrong is where the escape hatch lived. The
+    # held-back count named `--all-criteria`, which you can only act on by
+    # abandoning the close and running it again -- advice delivered at the one
+    # moment it is most expensive to take, so nobody took it. Measured on the
+    # live backlog: of the criteria settled on items closed since the selector
+    # shipped, 41 of 72 marks were already in the file, hand-edited during the
+    # work; and NA-0050 closed 1/3 with its own commit message recording that
+    # the other two had landed.
+    #
+    # So the second list is shown here instead of being described. Enter still
+    # leaves them open -- nothing is forced, and a close is never blocked on a
+    # criterion only the agent can judge -- but answering one costs a keypress
+    # rather than a re-run.
+    groups = ([(open_rows, False)] if include_agent
+              else [g for g in ((yours, False), (theirs, True)) if g[0]])
     print()
-    if held_back:
-        # Said out loud, always. A list that is shorter than the file without
-        # saying why is this repo's characteristic bug: it does not read as
-        # something missing, it reads as an item that was always this small.
-        # Worded so the count never has to agree with a noun: `t()` has no plural
-        # mechanism, and "dropped 1 criteria" already shipped once.
-        print("  " + tr(cat, "cli.done.agent_criteria",
-                        "{n} still open and the agent's to verify, so not asked "
-                        "here. They still draft as follow-ups; --all-criteria "
-                        "puts them back on this list.",
-                        n=held_back))
-    if not rows:
-        return [], []
+    picked: List[int] = []
+    dropped: List[int] = []
+    for rows, unsettled in groups:
+        if unsettled:
+            # Said out loud, always. A list shorter than the file with nothing
+            # saying why is this repo's characteristic bug: it does not read as
+            # something missing, it reads as an item that was always this small.
+            # Worded so the count never has to agree with a noun: `t()` has no
+            # plural mechanism, and "dropped 1 criteria" already shipped once.
+            print("  " + tr(cat, "cli.done.unsettled_criteria",
+                            "{n} still open and the agent's to verify. Nothing "
+                            "settled them, so they are asked here too -- Enter "
+                            "leaves them open and they draft as follow-ups.",
+                            n=len(rows)))
+        got, gone = _ask_one_list(rows, cat)
+        picked.extend(got)
+        dropped.extend(gone)
+    return sorted(set(picked)), sorted(set(dropped))
+
+
+def _ask_one_list(rows: List[Tuple[int, str]],
+                  cat: Optional[Catalog]) -> Tuple[List[int], List[int]]:
+    """One list of criteria, asked once. ``(ticked, dropped)`` line indexes.
+
+    Split out of ``_ask_ticks`` so the second list is asked by the same code as
+    the first: a second copy would be the subtraction failure this file keeps
+    finding, with the held-back criteria answered by a selector that drifts from
+    the one everybody sees.
+    """
     # The selector first, the numbers as the fallback. Both exist because the
     # terminal is not always one that can do the first, and a `done` that cannot
     # ask is a `done` that goes back to being unanswerable. That applies to
@@ -4028,7 +4067,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--future-work", dest="future_work", metavar="TEXT", action="append",
                    help="something this turned up that does not belong to it; repeatable")
     p.add_argument("--all-criteria", dest="all_criteria", action="store_true",
-                   help="also ask about criteria marked (agent), which are held back by default")
+                   help="ask about every criterion in one list, rather than yours first and the rest after")
 
     p = add("defer", "park an item until a date")
     p.add_argument("item_id", metavar="<id>")

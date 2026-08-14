@@ -181,6 +181,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An item could close over criteria nobody had judged, and the only way to
+  reach them was to abandon the close.** `done` asked about the `(you)`
+  criteria and printed a count of the agent's, naming `--all-criteria` as the
+  way to see them — a flag you can only act on by quitting and typing the
+  command again, which is advice delivered at the one moment it is most
+  expensive to take. Measured on the live backlog: of the criteria settled on
+  items closed since the selector shipped, **41 of 72 marks were already in the
+  file**, hand-edited during the work rather than written by `done`; and an item
+  whose criteria were *all* the agent's was asked nothing at all. NA-0050 closed
+  **1/3** while its own commit message recorded that the other two had landed.
+
+  `done` now asks about the agent's criteria too, second, in a list of their own
+  with the count and the reason above it. Enter still leaves them open and they
+  still draft as follow-up work, so a close is never blocked on a criterion only
+  the agent can judge — but answering one costs a keypress instead of a re-run.
+  Holding them back was right and is unchanged in spirit: ordering protects the
+  question "which of these actually need me" without also making them
+  unreachable. `--all-criteria` still exists and now means one list rather than
+  two. Three mutations, each watched red.
+
 - **You could not quote an acceptance criterion without writing one.**
   `items.ac_lines` scanned the *whole* item body for checkbox lines rather than
   the span between `<!-- AC:BEGIN -->` and `<!-- AC:END -->`, and it tested each

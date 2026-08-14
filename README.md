@@ -706,7 +706,7 @@ nextbrief show <id>      print one item in full
 nextbrief ok <id>        confirm an item: it is real, and written the way you meant it
 nextbrief done <id>      close it, and record what actually happened
                          (--summary "<text>", --future-work "<text>" — repeatable)
-                         (--all-criteria: also ask about the (agent) ones)
+                         (--all-criteria: ask about all of them in one list)
 nextbrief drop <id>      drop it. The file stays, and so does its git history
 nextbrief defer <id> --until <date|"what you are waiting on">
                          park it. It comes back into the brief on its own
@@ -867,9 +867,9 @@ command can see — so that criterion is the agent's. `(agent)` is the default.
 Reserve `(you)` for direction, UAT, access, resources an agent cannot obtain, and
 your own judgement as the user.
 
-`done` asks about yours and counts the rest out loud; they still draft as
-follow-up work. `--all-criteria` puts them back on the list, which is what
-dropping one of the agent's looks like. An unmarked criterion counts as yours —
+`done` asks about yours first, then about the ones nothing has settled, in a list
+of their own — Enter leaves those open and they draft as follow-up work.
+`--all-criteria` asks about all of them in one list. An unmarked criterion counts as yours —
 nobody has said otherwise, and reading the absence as "the agent's" would empty
 the selector for every item written before the marker existed.
 
