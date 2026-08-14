@@ -1807,7 +1807,8 @@ def _ask_one_list(rows: List[Tuple[int, str]],
 
 def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
                     cat: Optional[Catalog],
-                    dropped: Sequence[str] = ()) -> Tuple[str, List[str], str]:
+                    dropped: Sequence[str] = (),
+                    asked: bool = False) -> Tuple[str, List[str], str]:
     """``(summary draft, follow-up drafts, scope line)``, from facts on disk.
 
     No model, no network, nothing that can be slow or cost money: ``done`` has to
@@ -1933,7 +1934,24 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
                 scope, tr(cat, "cli.close.scope_delivered", "delivered: {paths}",
                           paths=_named(delivered))) if p)
 
-    future = _unticked_acs(body) if 0 < ticked < total else []
+    # Nothing ticked used to mean nothing at all, and that was right while it was
+    # ambiguous. The NA-0017 shape is six criteria, none ticked, all six shipped:
+    # drafting them would have minted six backlog items for finished work,
+    # because the engine cannot tell "not done" from "not ticked", and at 0/n it
+    # was the tick habit that failed rather than the work.
+    #
+    # What changed is not the reading, it is what 0/n can mean. `_ask_ticks` now
+    # puts every open criterion in front of somebody -- the agent's second, in a
+    # list of their own -- so 0/n on a run that asked is a person looking at each
+    # one and declining it, which is evidence. On a run that did NOT ask (no tty,
+    # or answers already given as flags) nobody was shown anything, 0/n is still
+    # the absence of an answer, and inventing follow-ups from it would be the
+    # original mistake with a new coat of paint.
+    #
+    # Hence `asked`, and not `sys.stdin.isatty()` read a second time here: the
+    # question is whether THIS run asked, which is a fact the caller holds and
+    # this function cannot re-derive without getting it subtly wrong.
+    future = _unticked_acs(body) if (ticked or asked) and ticked < total else []
     return summary, future, scope
 
 
@@ -2142,7 +2160,8 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
             fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except OSError:
             return "", [], ""
-        return _closing_drafts(ws, fm or {}, body or "", cat, dropped_now)
+        return _closing_drafts(ws, fm or {}, body or "", cat, dropped_now,
+                               asked=asking)
 
     try:
         closing = _ask_closing(args, cat, drafts)

@@ -761,22 +761,42 @@ class DraftsAreDerivedNotInvented(TempCase):
         super().setUp()
         self.ws = self.workspace(with_git=False)
 
-    def _drafts(self, item_id, **fields):
+    def _drafts(self, item_id, asked=False, **fields):
         path = write_backlog_item(self.ws, item_id, **fields)
         fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         ws = Workspace(root=self.ws, out=self.ws, source="test")
-        return cli._closing_drafts(ws, fm, body, None)
+        return cli._closing_drafts(ws, fm, body, None, asked=asked)
 
-    def test_nothing_ticked_offers_no_follow_ups_at_all(self):
+    def test_nothing_ticked_on_a_run_that_never_asked_offers_nothing(self):
         """The NA-0017 shape: six criteria, none ticked, all six in fact shipped.
 
         Drafting the unticked ones here would have minted six backlog items for
         finished work -- the engine cannot tell "not done" from "not ticked",
-        and at 0/n the tick habit is what failed, not the work.
+        and on a run where nobody was asked, 0/n is the absence of an answer
+        rather than an answer. This is the half of the rule that did not change.
         """
         _summary, future, scope = self._drafts(
             "NA-0017", body=_acceptance(*[(False, "criterion %d" % i) for i in range(1, 7)]))
         self.assertEqual(future, [])
+        self.assertIn("AC 0/6", scope)
+
+    def test_nothing_ticked_on_a_run_that_asked_offers_all_of_them(self):
+        """★ The other half, and why the pair has to be read together. ★
+
+        `_ask_ticks` now puts every open criterion in front of somebody, the
+        agent's included. So 0/n on a run that asked is a person looking at each
+        one and declining to tick it -- which is evidence that they are
+        outstanding, where the same number on an unasked run was evidence of
+        nothing at all.
+
+        The distinction is the run, not the file: these two tests hand
+        `_closing_drafts` byte-identical bodies and differ only in whether
+        anybody was asked.
+        """
+        _summary, future, scope = self._drafts(
+            "NA-0018", asked=True,
+            body=_acceptance(*[(False, "criterion %d" % i) for i in range(1, 7)]))
+        self.assertEqual(future, ["#%d criterion %d" % (i, i) for i in range(1, 7)])
         self.assertIn("AC 0/6", scope)
 
     def test_everything_ticked_offers_no_follow_ups_either(self):
@@ -1838,6 +1858,26 @@ class WhoCanSayThisIsDone(TempCase):
         self.assertEqual(code, 0, err)
         recorded = [e.text for e in items.parse_closing(self._text()).future_work]
         self.assertEqual(recorded, ["#1 (agent) the exporter writes one file per crate",
+                                    "#3 (agent) the migration guide names the new flag"])
+
+    def test_declining_every_criterion_still_records_them_as_outstanding(self):
+        """★ That the `asked` flag is actually wired, through the real command. ★
+
+        `_closing_drafts` taking an `asked` argument and `done` passing the right
+        value are two different claims, and the unit test for the first cannot
+        see the second: a `done` that never passed it would leave this at the old
+        behaviour with every unit test still green.
+
+        Declining all three -- Enter through both lists -- is the shape that used
+        to record nothing anywhere. The criteria are now offered as follow-ups,
+        because a person looked at each one and did not tick it.
+        """
+        code, _out, err = self._typed(["", "", "", cli.ACCEPT_DRAFT, ""],
+                                      "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        recorded = [e.text for e in items.parse_closing(self._text()).future_work]
+        self.assertEqual(recorded, ["#1 (agent) the exporter writes one file per crate",
+                                    "#2 (you) the sample export reads right to you",
                                     "#3 (agent) the migration guide names the new flag"])
 
     def test_the_header_still_counts_every_criterion(self):

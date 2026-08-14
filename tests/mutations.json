@@ -1110,6 +1110,33 @@
       "select": "test_the_ones_nothing_settled_are_counted_out_loud",
       "expect": "2 still open and the agent's to verify",
       "note": "Unlabelled, the second list reads as more of your own criteria rather than as work nobody has judged -- which is the reading that gets it ticked on trust. The count and the reason are the whole difference between asking and pressuring."
+    },
+    {
+      "label": "a close that asked and got no ticks records nothing",
+      "file": "src/nextbrief/cli.py",
+      "old": "    future = _unticked_acs(body) if (ticked or asked) and ticked < total else []",
+      "new": "    future = _unticked_acs(body) if 0 < ticked and ticked < total else []",
+      "select": "test_nothing_ticked_on_a_run_that_asked_offers_all_of_them",
+      "expect": "#1 criterion 1",
+      "note": "The state before NA-0050's fix moved the premise: 0/n drafted nothing because it could not be distinguished from nobody-was-asked. Now that every open criterion is put in front of somebody, declining all of them is an answer, and dropping it on the floor loses the whole promise at exactly the close that judged it."
+    },
+    {
+      "label": "follow-ups are drafted from criteria nobody was shown",
+      "file": "src/nextbrief/cli.py",
+      "old": "    future = _unticked_acs(body) if (ticked or asked) and ticked < total else []",
+      "new": "    future = _unticked_acs(body) if ticked < total else []",
+      "select": "test_nothing_ticked_on_a_run_that_never_asked_offers_nothing",
+      "expect": "criterion 1",
+      "note": "The opposite mistake, and the more expensive one -- NA-0017 exactly: six criteria, none ticked, all six in fact shipped, so a scripted close would mint six backlog items for finished work. A minted task travels, which is why it costs more than a wrong record sitting still. `asked` is the whole distinction and this is the mutation that proves it is read."
+    },
+    {
+      "label": "done stops telling the drafts whether it asked",
+      "file": "src/nextbrief/cli.py",
+      "old": "        return _closing_drafts(ws, fm or {}, body or \"\", cat, dropped_now,\n                               asked=asking)",
+      "new": "        return _closing_drafts(ws, fm or {}, body or \"\", cat, dropped_now)",
+      "select": "test_declining_every_criterion_still_records_them_as_outstanding",
+      "expect": "#1 (agent) the exporter writes one file per crate",
+      "note": "`asked` defaults to False, so an unwired call site is not an error -- it is silently the old behaviour, with every unit test on `_closing_drafts` still green because they pass the argument themselves. This repo's dominant defect shape is a guard that exists and was never put on the path, and a keyword argument with a safe default is the purest form of it."
     }
   ]
 }

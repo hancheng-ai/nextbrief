@@ -201,6 +201,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unreachable. `--all-criteria` still exists and now means one list rather than
   two. Three mutations, each watched red.
 
+- **An item that closed with nothing ticked recorded its criteria nowhere.**
+  Follow-ups were drafted only when at least one criterion was ticked, and that
+  was the right reading while `0/n` was ambiguous: the NA-0017 shape is six
+  criteria, none ticked, all six in fact shipped, so drafting them would have
+  minted six backlog items for finished work — and a minted task travels, which
+  costs more than a wrong record sitting still.
+
+  The fix above moved that premise rather than the reading. Every open criterion
+  is now put in front of somebody, so `0/n` **on a run that asked** is a person
+  looking at each one and declining it, which is evidence that they are
+  outstanding. On a run that did not ask — no tty, or answers already given as
+  flags — nobody was shown anything, `0/n` is still the absence of an answer, and
+  nothing is drafted. The distinction is the run, not the file: two closes over
+  byte-identical bodies now differ, correctly, on whether anybody was asked.
+  Three mutations, each watched red, one of them for the call site itself —
+  `asked` defaults to safe, so a `done` that forgot to pass it would be silently
+  the old behaviour with every unit test still green.
+
 - **You could not quote an acceptance criterion without writing one.**
   `items.ac_lines` scanned the *whole* item body for checkbox lines rather than
   the span between `<!-- AC:BEGIN -->` and `<!-- AC:END -->`, and it tested each
