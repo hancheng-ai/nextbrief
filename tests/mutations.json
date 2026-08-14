@@ -1029,6 +1029,60 @@
       "select": "test_it_does_not_arrive_under_no_longer_applies_either",
       "expect": "legacy sidecar",
       "note": "The opposite mistake and the same door: a heading telling an agent not to work on something nobody ever proposed, minted out of a line of NOTES."
+    },
+    {
+      "label": "a zipapp claims to be the checkout it was built in",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    if not os.path.isdir(here):\n        return \"\"",
+      "new": "    if False:\n        return \"\"",
+      "select": "test_a_path_through_an_archive_is_not_a_directory",
+      "expect": "+dev.g",
+      "note": "Inside an archive `__file__` is a path *through* a file, so the package directory is not a directory. Drop that and a .pyz sitting in the root of its own checkout reports a commit -- and the zipapp is the one artifact that has no business claiming one."
+    },
+    {
+      "label": "the version walk climbs out of its own project",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    for _ in range(2):",
+      "new": "    for _ in range(6):",
+      "select": "test_the_walk_stops_before_it_finds_an_unrelated_repository",
+      "expect": "+dev.g",
+      "note": "Two levels is as far as a src-layout root can be. Climb further and a venv inside a home directory that is itself a repository stamps this build with a commit from someone's dotfiles."
+    },
+    {
+      "label": "a modified tree reports itself as clean",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    return \"+dev.g%s%s\" % (sha, \".dirty\" if dirty else \"\")",
+      "new": "    return \"+dev.g%s%s\" % (sha, \"\")",
+      "select": "test_an_uncommitted_change_is_said_out_loud",
+      "expect": "a modified tree reported itself as",
+      "note": "The whole point of the segment is to name the code that is running. A dirty tree wearing a clean commit sends the reader to a diff that does not match what is on disk."
+    },
+    {
+      "label": "an unanswerable dirty check is assumed clean",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    if dirty is None:\n        return \"\"",
+      "new": "    if dirty is None:\n        dirty = \"\"",
+      "select": "test_a_dirtiness_it_could_not_determine_is_not_reported_as_clean",
+      "expect": "+dev.g",
+      "note": "Not knowing and knowing-it-is-clean are different answers. This mutation is why the obvious test (git off PATH) was not enough: rev-parse fails first and never reaches the branch, so the guard was green for the wrong reason until a git that answers one question and fails the other was put on PATH."
+    },
+    {
+      "label": "the version probe shells out on every call",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    if _BUILD_VERSION is None:\n        _BUILD_VERSION = __version__ + _local_version()",
+      "new": "    if True:\n        _BUILD_VERSION = __version__ + _local_version()",
+      "select": "test_the_probe_runs_at_most_once",
+      "expect": "the probe ran",
+      "note": "--version is on the argument parser, which is built on every invocation, and sense asks again on every run. Without the cache both pay for two git subprocesses each time."
+    },
+    {
+      "label": "the release constant grows a second reader",
+      "file": "src/nextbrief/sense.py",
+      "old": "            \"generator_version\": build_version(),",
+      "new": "            \"generator_version\": __version__,",
+      "select": "test_exactly_one_thing_reads_it",
+      "expect": "should have exactly one reader",
+      "note": "The criterion this replaced was a grep, and a grep counts the definition, the __all__ entry and every docstring that names the symbol -- so it could be satisfied by rewording prose and broken by adding a comment. Counting ast.Load instead makes the rule the one worth having: who reads this value. The mutation is the exact regression it guards, a second module composing the version for itself, which is how the constant came to live in three files before."
     }
   ]
 }

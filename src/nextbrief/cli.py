@@ -34,7 +34,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import __version__, resources
+from . import build_version, resources
 from .annotate import (
     ANNOTATIONS_NAME,
     QUESTIONS,
@@ -3961,7 +3961,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=DESCRIPTION,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--version", action="version", version="nextbrief %s" % __version__)
+    # The composed build string, not the bare release constant: an editable
+    # install and the wheel on PATH print the same three digits otherwise, and
+    # the documented way to tell them apart was to grep both installs for a
+    # function name.
+    ap.add_argument("--version", action="version", version="nextbrief %s" % build_version())
     # SUPPRESS, because argparse would otherwise print its own list of the same
     # twenty subcommands underneath the hand-written one in the description --
     # the same information twice, in two different orders and two different

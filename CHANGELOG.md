@@ -132,6 +132,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow step leaves no trace either, and a release that asks one fewer
   question still comes back green.
 
+### Changed
+
+- **`--version` now says which build it is, not just which release.** An editable
+  install from a checkout, the wheel on `PATH`, and the source tree all printed
+  the same three digits, so the documented way to tell two installs apart was to
+  run `grep -c claim_exclusively` against both of them. An install that has
+  quietly stopped being the code its owner is reading is not a hypothetical: it
+  went unnoticed here for nine days, and every artifact produced in that window
+  was stamped with a version that could not distinguish them.
+
+  A checkout now reports a PEP 440 local version — `0.2.1+dev.g1a2b3c4`, and
+  `.dirty` when the tree has uncommitted changes. A released wheel and the
+  zipapp report the plain version, unchanged.
+
+  The discriminator is **whether this is the tree or the package**, not whether
+  it matches a release. Answering the second question — clean, and exactly at
+  the tag — would print the plain version for a checkout one commit ahead, and
+  one commit ahead is the entire case this exists to catch. A zipapp is settled
+  before any path walking, on the package directory not being a directory at
+  all, so a `.pyz` sitting in the root of its own checkout still reports plain.
+  The walk upward stops after two levels, which is as far as a src-layout root
+  can be and short of the point where it would find the `.git` of whatever else
+  the machine keeps under version control.
+
+  `__version__` is untouched and stays the plain release version; the suffix is
+  computed at runtime for display only, so `bump-version.sh`, the three files
+  that carry a version, and the release workflow's byte-for-byte tag comparison
+  all work exactly as before. The probe returns the local *segment* rather than
+  a whole version string, which leaves `build_version` as the one reader of
+  `__version__` anywhere in the package: a constant rewritten by a regex, that
+  three files then have to agree about, is a constant several readers can be
+  several kinds of wrong about. That is now a test rather than an intention, and
+  it counts `ast.Load` rather than grepping — a grep for a symbol also counts the
+  definition, the `__all__` entry and every docstring that names it, so it could
+  be satisfied by rewording prose and broken by adding a comment. Every failure
+  — no git, no checkout, an unborn HEAD, a subprocess error, a timeout — returns
+  an empty segment and says nothing.
+
+  **PyPI rejects local version identifiers, which makes this a latch rather than
+  a label:** a build carrying `+dev.g...` physically cannot be uploaded.
+
+- **`snapshot.json` records the build that produced it.** `run.generator_version`
+  carries the same string as `--version`, for the same reason: the question you
+  ask of a stale artifact is which code wrote it, and the release number alone
+  could not answer that. `canonical()` drops the whole `run` block, so a value
+  that moves with every commit cannot make `check --check` spuriously dirty.
+
 ### Fixed
 
 - **You could not quote an acceptance criterion without writing one.**
