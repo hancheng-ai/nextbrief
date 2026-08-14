@@ -20,7 +20,7 @@
 # On every later release, bump `version` and re-derive the checksum from the
 # published asset -- the url is built from `version`, so one edit moves both:
 #
-#   V=0.2.1
+#   V=0.3.0rc1
 #   curl -fsSLO "https://github.com/hancheng-ai/nextbrief/releases/download/v$V/nextbrief-$V.tar.gz"
 #   shasum -a 256 "nextbrief-$V.tar.gz"      # paste over the sha256 below
 #   cd homebrew-tap
@@ -56,22 +56,31 @@ class Nextbrief < Formula
   # filename, and `version`. They are spelled out rather than interpolated
   # because Homebrew audits the stanza order (url, version, sha256), which leaves
   # nothing to interpolate from at the point the url is written.
-  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.2.1/nextbrief-0.2.1.tar.gz"
-  # Declared rather than inferred from the filename: `0.2.1` is exactly the
+  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.3.0rc1/nextbrief-0.3.0rc1.tar.gz"
+  # Declared rather than inferred from the filename: `0.3.0rc1` is exactly the
   # kind of string Homebrew's parser is entitled to read as `0.1.0-rc1`, and the
   # test block compares `version` against what the binary prints.
-  version "0.2.1"
+  version "0.3.0rc1"
   # The markers are the repository-wide "do not sweep this" fence, defined in
   # scripts/bump-version.sh and spelled the same in every file it edits -- an
   # HTML comment inside a Ruby one because the fence is a contract with that
   # script, not with a markup language. It has to be here, and it is the whole
   # reason this line can be trusted: `sha256-of:` names a *past* release, and
-  # the sweep is an unbounded replace of the previous version string. Bump 0.2.1
-  # to 0.3.0 with this line reading `sha256-of: 0.2.1` and the sweep rewrites it
-  # to `0.3.0` while the digest below stays 0.2.1's -- the comment then agrees
-  # with `version`, the test two paragraphs down stops looking, and the README
-  # goes on advertising a `brew install` that fails its checksum. That is this
-  # exact defect, restored to being invisible, one release after it was fixed.
+  # the sweep is an unbounded replace of the previous version string. Unfenced,
+  # a bump rewrites this line from the old version to the new one while the
+  # digest below still belongs to the old -- the comment then agrees with
+  # `version`, the test two paragraphs down stops looking, and the README goes
+  # on advertising a `brew install` that fails its checksum. That is this exact
+  # defect, restored to being invisible, one release after it was fixed.
+  #
+  # Deliberately written with no version numbers in it. This paragraph used to
+  # carry a worked example -- real versions, in prose, outside the fence -- and
+  # the first release cut after it was written rewrote both ends of it into
+  # "bump X to X, and the digest stays X's", which states nothing and explains
+  # less. Even this sentence had to lose its version number. Prose about the
+  # sweep is not exempt from the sweep: the fence protects the one line that has
+  # to be right, and everything around it has to protect itself by having
+  # nothing version-shaped left to match.
   # <!-- bump-version:skip:begin -->
   # sha256-of: 0.2.1
   # <!-- bump-version:skip:end -->
@@ -82,7 +91,9 @@ class Nextbrief < Formula
   # that does not exist until the tag is pushed and the release job has built
   # it. So the two drift apart on every bump and come back together in a second
   # commit -- which was skipped four releases running, leaving this stanza
+  # <!-- bump-version:skip:begin -->
   # pointing at a `0.2.1rc*` tarball with the 0.1.0rc14 digest. Nothing said so:
+  # <!-- bump-version:skip:end -->
   # the only check on this line asserted that it was sixty-four hex characters,
   # which a four-release-old digest is.
   #
@@ -91,7 +102,7 @@ class Nextbrief < Formula
   # release's own SHA256SUMS and opens a pull request setting both lines. What
   # it does by hand, if it ever has to be done by hand:
   #
-  #   V=0.2.1
+  #   V=0.3.0rc1
   #   gh release view "v$V" --json assets \
   #     --jq '.assets[]|select(.name|endswith(".tar.gz")).digest|sub("^sha256:";"")'
   #
