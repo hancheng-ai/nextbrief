@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-14
+
+Everything `0.3.0rc1` carried, plus exactly one change, listed below. This
+section is deliberately not the "no code changes since the candidate" line the
+last two releases could honestly print — the candidate found something, and
+saying so is the point of having cut one.
+
+The importable package is byte-identical to the candidate's: the fix is in
+`scripts/`, which ships in neither the wheel nor the sdist, with its tests and
+these notes the only other difference. What the candidate bought was the first
+end-to-end run of a release pipeline that this release had itself changed —
+`ci(release)` put the mutation harness in the gate, and `scripts/watch-red.py`
+grew to be run that way, so the workflow publishing 0.3.0 was new code in 0.3.0
+and had never executed on a runner. It routed to TestPyPI and skipped PyPI as
+designed, the gate ran 129 guards green on a runner for the first time, and the
+formula digest job — observed exactly once before, when it did all its work
+correctly and then failed to open its pull request — opened it.
+
+And it surfaced the defect below, on its own tag push, by printing a number a
+person happened to read.
+
 ### Fixed
 
 - **Pushing a release tag made the leak scan read the whole history.** git hands
@@ -2174,7 +2195,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.3.0rc1...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.3.0
 [0.3.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.3.0rc1
 [0.2.1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.1
 [0.2.1rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.1rc1
