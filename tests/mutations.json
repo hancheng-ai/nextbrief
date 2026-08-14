@@ -1137,6 +1137,15 @@
       "select": "test_declining_every_criterion_still_records_them_as_outstanding",
       "expect": "#1 (agent) the exporter writes one file per crate",
       "note": "`asked` defaults to False, so an unwired call site is not an error -- it is silently the old behaviour, with every unit test on `_closing_drafts` still green because they pass the argument themselves. This repo's dominant defect shape is a guard that exists and was never put on the path, and a keyword argument with a safe default is the purest form of it."
+    },
+    {
+      "label": "a tag push rescans the history it was already pushed with",
+      "file": "scripts/leak-shapes.py",
+      "old": "                have_remotes = run([\"git\", \"rev-list\", \"-1\", \"--remotes\"])\n                if (out.returncode == 0\n                        and have_remotes.returncode == 0\n                        and have_remotes.stdout.strip()):\n                    return []\n                out = run([\"git\", \"rev-list\", new])",
+      "new": "                out = run([\"git\", \"rev-list\", new])",
+      "select": "test_a_tag_at_a_published_commit_scans_nothing",
+      "expect": "rescanned published history",
+      "note": "An empty `rev-list --not --remotes` has two opposite causes and this collapses them: nothing was ever published (scan everything, right) and everything was published already (scan nothing, right). A new TAG reaches the hook with the same all-zero left side a new branch does, so `git push origin v1.2.3` takes the wrong branch and scans a release's whole ancestry -- 209 commits on v0.3.0rc1, for a push carrying one tag object. A finding there is in commits nobody can rewrite, which leaves --no-verify as the only way to cut the release. Note where the guard is not: `out.returncode != 0` must keep falling through, because a git failure is \"could not check\" and returning [] for it would report a clean scan of nothing."
     }
   ]
 }
