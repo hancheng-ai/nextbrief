@@ -137,6 +137,67 @@ class ACriterionTheDesignMovedPastIsNotHandedOverAsWork(TempCase):
         self.assertIn("- [ ] #1 it works", prompt)
 
 
+class ProseAboutCriteriaIsNotHandedToAnAgent(TempCase):
+    """★ The most expensive of the three readers NA-0051 touched. ★
+
+    `ac_lines` claims in its docstring to be the one parser, and names `launch`
+    as a reason it lives in `items` at all: "the session prompt quotes the
+    criteria at an agent, and a criterion that was set aside must not arrive as
+    part of the definition of done". It then scanned the whole body for `- [`
+    itself, which is the second copy that docstring says must not exist.
+
+    So a sentence in NOTES *showing what a criterion looks like* arrived under
+    "**Done when**" -- not a miscount in a report somebody skims, but an
+    instruction handed to an agent. `future_work` mints a task somebody may yet
+    read and reject; this one opens the session that starts on it.
+    """
+
+    DECOY = "\n".join([
+        "<!-- SECTION:NOTES:BEGIN -->",
+        "A criterion is written like this:",
+        "",
+        "    - [ ] #9 (you) decide the posture: advice or enforcement",
+        "<!-- SECTION:NOTES:END -->",
+    ])
+
+    def setUp(self):
+        super().setUp()
+        self.ws_dir = self.workspace(with_git=False)
+
+    def _prompt(self, item_id, body):
+        path = write_backlog_item(self.ws_dir, item_id, body=body)
+        return build_context(resolve_workspace(str(self.ws_dir)), path).prompt
+
+    def _section(self, prompt, heading):
+        return prompt.split(heading, 1)[1].split("\n\n", 1)[0]
+
+    def test_it_does_not_arrive_under_done_when(self):
+        prompt = self._prompt("NA-0006", "\n".join([
+            "<!-- AC:BEGIN -->",
+            "- [ ] #1 the exporter writes one file per crate",
+            "<!-- AC:END -->", self.DECOY]))
+        done = self._section(prompt, "**Done when**:")
+        # The real criterion did arrive, so the absence below is the parser's
+        # doing and not an empty section.
+        self.assertIn("- [ ] #1 the exporter writes one file per crate", done)
+        self.assertNotIn("decide the posture", prompt)
+
+    def test_it_does_not_arrive_under_no_longer_applies_either(self):
+        """A phantom `[~]` in prose would otherwise mint the opposite mistake:
+        a heading telling an agent not to do something nobody proposed."""
+        prompt = self._prompt("NA-0007", "\n".join([
+            "<!-- AC:BEGIN -->",
+            "- [ ] #1 the exporter writes one file per crate",
+            "<!-- AC:END -->",
+            "<!-- SECTION:NOTES:BEGIN -->",
+            "A withdrawn criterion is written like this:",
+            "",
+            "    - [~] #9 the legacy sidecar keeps working",
+            "<!-- SECTION:NOTES:END -->"]))
+        self.assertNotIn("No longer applies", prompt)
+        self.assertNotIn("legacy sidecar", prompt)
+
+
 class Failures(TempCase):
     def setUp(self):
         super().setUp()

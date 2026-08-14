@@ -1204,6 +1204,250 @@ class TheThirdMarkIsReadByEveryReader(unittest.TestCase):
                          "#2 the legacy sidecar keeps working")
 
 
+class ACriterionIsWhatIsBetweenTheMarkers(unittest.TestCase):
+    """You must be able to quote a criterion without writing one.
+
+    Observed three times on 2026-08-12, the third while the bug report was being
+    typed: a line of NOTES showing *what a criterion looks like* was counted as a
+    criterion. `nb show NA-0046` went from `共 6 条` to `共 7 条`, and the phantom
+    carried `(you)`.
+
+    A wrong number would be cheap. This is not one. Per `_unticked_acs`, an
+    unticked criterion is what `done` drafts as `future_work`, and `followup`
+    mints a `future_work` entry into a real backlog item -- so a sentence about
+    criteria becomes a task somebody is asked to do. NA-0031 spent an entire
+    item closing that door; the entrance this time is prose.
+
+    The markers were already in the file -- `_item_text` has written them since
+    items had bodies. The edge existed and no reader knew about it.
+    """
+
+    BODY = "\n".join([
+        "<!-- SECTION:NEXT_ACTION:BEGIN -->",
+        "write the red test first",
+        "<!-- SECTION:NEXT_ACTION:END -->",
+        "",
+        "<!-- AC:BEGIN -->",
+        "- [x] #1 (agent) the scan stops at the markers",
+        "- [ ] #2 (agent) indentation is not an exemption",
+        "<!-- AC:END -->",
+        "",
+        "<!-- SECTION:NOTES:BEGIN -->",
+        "A criterion is written like this:",
+        "",
+        "    - [ ] #9 (you) decide the posture: advice or enforcement",
+        "",
+        "...and the four spaces above make that a code block.",
+        "<!-- SECTION:NOTES:END -->",
+    ])
+
+    def test_prose_quoting_a_criterion_does_not_become_one(self):
+        """The bug, at the parser. Two criteria are declared; two are read."""
+        self.assertEqual([t for _i, _m, t in items.ac_lines(self.BODY)],
+                         ["#1 (agent) the scan stops at the markers",
+                          "#2 (agent) indentation is not an exemption"])
+
+    def test_the_decoy_is_indented_inside_a_code_block(self):
+        """★ Guarding the guard. ★
+
+        `ac_lines` did `line.strip()` before looking, so indentation offered no
+        protection at all and a fenced or indented block was no safer than a bare
+        line. A decoy at column zero would pass against a fix that merely skipped
+        indented lines -- which is not the fix, and would break every criterion
+        anyone has ever nested under a bullet.
+
+        So this asserts the fixture itself: the decoy is indented, and it is
+        still shaped exactly like a criterion once stripped.
+        """
+        decoy = [ln for ln in self.BODY.splitlines() if "#9" in ln][0]
+        self.assertTrue(decoy.startswith("    "), "the decoy must be indented")
+        self.assertEqual(decoy.strip(), "- [ ] #9 (you) decide the posture: "
+                                        "advice or enforcement")
+        # Indented criteria inside the block are still criteria: the fix is a
+        # scan RANGE, not an indentation rule.
+        nested = "\n".join(["<!-- AC:BEGIN -->", "  - [ ] #1 nested under a bullet",
+                            "<!-- AC:END -->"])
+        self.assertEqual([t for _i, _m, t in items.ac_lines(nested)],
+                         ["#1 nested under a bullet"])
+
+    def test_the_phantom_is_not_counted_in_the_denominator(self):
+        """`AC 1/2`, not `AC 1/3`. The item reads as done as it actually is."""
+        self.assertEqual(items.ac_progress(self.BODY), (1, 0, 2))
+
+    def test_the_line_indexes_stay_relative_to_the_whole_body(self):
+        """★ The trap in this fix. ★
+
+        `_apply_marks` writes a mark at `body.splitlines()[i]`. Parsing the span
+        as its own string and letting `enumerate` restart would return indexes
+        offset by however long the preamble is, and ticking `#1` would rewrite a
+        line in NEXT_ACTION or in the frontmatter instead -- silently, since
+        `_apply_marks` only splices characters 3..5 of whatever it lands on.
+        """
+        lines = self.BODY.splitlines()
+        for i, mark, _text in items.ac_lines(self.BODY):
+            self.assertEqual(lines[i].strip()[3], mark, "index %d is not that line" % i)
+
+    def test_a_criterion_before_the_block_is_not_read_either(self):
+        """The range has two ends. A checkbox above `AC:BEGIN` -- a template
+        left in NEXT_ACTION, a checklist in a heading -- is outside it too."""
+        body = "\n".join(["- [ ] #0 left over from a template",
+                          "<!-- AC:BEGIN -->", "- [ ] #1 the real one",
+                          "<!-- AC:END -->"])
+        self.assertEqual([t for _i, _m, t in items.ac_lines(body)], ["#1 the real one"])
+
+    def test_the_markers_are_recognised_by_the_whole_line_not_a_substring(self):
+        """A `find()` would land in the frontmatter.
+
+        Real items in this workspace name the markers *inline* -- NA-0051's own
+        `what_agent_can_do:` field quotes both of them in one sentence, and the
+        prose of three more items does the same. Substring search would open the
+        span at that mention and read the rest of the frontmatter as criteria.
+        """
+        body = "\n".join([
+            "---",
+            "what_agent_can_do: make `<!-- AC:BEGIN -->` and `<!-- AC:END -->` the range",
+            "- [ ] #0 a frontmatter line shaped like a box",
+            "---",
+            "<!-- AC:BEGIN -->",
+            "- [ ] #1 the real one",
+            "<!-- AC:END -->",
+        ])
+        self.assertEqual([t for _i, _m, t in items.ac_lines(body)], ["#1 the real one"])
+
+    def test_an_indented_marker_does_not_open_the_span(self):
+        """The markers are quoted in prose in this repo as often as criteria are.
+        An indented `<!-- AC:BEGIN -->` is somebody showing you the marker."""
+        body = "\n".join(["    <!-- AC:BEGIN -->",
+                          "    - [ ] #9 the shape of a criterion",
+                          "    <!-- AC:END -->",
+                          "<!-- AC:BEGIN -->", "- [ ] #1 the real one",
+                          "<!-- AC:END -->"])
+        self.assertEqual([t for _i, _m, t in items.ac_lines(body)], ["#1 the real one"])
+
+
+class WhenTheMarkersAreMissing(unittest.TestCase):
+    """★ The chosen degradation: scan the whole body, exactly as before. ★
+
+    This is a decision, not a leftover. The alternative -- report zero -- was
+    rejected, and the reason is the one written at the top of `ac_lines`: a
+    reader that does not recognise a criterion fails by **subtraction**, and
+    subtraction has no symptom. `AC 2/5` becoming `AC 0/0` does not read as a
+    broken parser. It reads as an item that never promised anything.
+
+    Measured before choosing, on 2026-08-12:
+
+    * 51 of 51 items in the live workspace carry the pair, and 3 of 3 in
+      `examples/workspace/backlog/` -- so nothing `nextbrief new` writes ever
+      reaches this path, and the narrowing above is free;
+    * but `helpers.write_backlog_item` writes its default body **without** them,
+      and four of the eight test modules build marker-less bodies by hand. A
+      body somebody typed is the normal shape for anything the engine did not
+      mint, and an item older than the markers has no way to grow them.
+
+    `_needs_you` settled the identical question in the same file and got the
+    same answer: "every criterion written before the marker existed is
+    unmarked", and reading that absence as a claim "would empty the tick
+    selector for the entire existing backlog in one move". Rule 6 of
+    CONTRIBUTING points the same way -- fail open.
+
+    So the fallback is today's behaviour verbatim, which makes this change one
+    that can only ever narrow. Nothing that is counted today stops being
+    counted. The honest cost: a marker-less item is still open to the phantom
+    above, and the only fix for that is markers -- which `new` already writes.
+    """
+
+    def test_a_body_with_no_markers_is_read_whole(self):
+        body = "\n".join(["## Acceptance", "", "- [ ] It is done",
+                          "- [x] #2 and this one was"])
+        self.assertEqual(items.ac_progress(body), (1, 0, 2))
+
+    def test_a_begin_with_no_end_falls_back_rather_than_running_to_the_bottom(self):
+        """Half a pair is a malformed file, and the rule stays one sentence:
+        the range applies when both ends are there. Running `AC:BEGIN` to EOF
+        would make an unclosed marker silently swallow NOTES -- the very bug
+        this item is about, arriving through the fix for it."""
+        body = "\n".join(["- [ ] #0 above", "<!-- AC:BEGIN -->", "- [ ] #1 inside"])
+        self.assertEqual([t for _i, _m, t in items.ac_lines(body)],
+                         ["#0 above", "#1 inside"])
+
+    def test_an_end_before_a_begin_falls_back_too(self):
+        body = "\n".join(["<!-- AC:END -->", "- [ ] #0 stray", "<!-- AC:BEGIN -->"])
+        self.assertEqual([t for _i, _m, t in items.ac_lines(body)], ["#0 stray"])
+
+    def test_an_empty_block_reports_zero_rather_than_falling_back(self):
+        """A well-formed pair is an answer even when it is empty. Falling back
+        here would resurrect every checkbox in NOTES on exactly the items whose
+        criteria have all been dropped."""
+        body = "\n".join(["<!-- AC:BEGIN -->", "<!-- AC:END -->",
+                          "<!-- SECTION:NOTES:BEGIN -->", "- [ ] #9 (you) a quote",
+                          "<!-- SECTION:NOTES:END -->"])
+        self.assertEqual(items.ac_lines(body), [])
+
+
+class APhantomCriterionMustNotMintATask(TempCase):
+    """★ Where a counting bug stops being a counting bug. ★
+
+    `_unticked_acs` says it in its own docstring: the unticked list is what
+    `done` drafts as `future_work`, and `followup` turns a `future_work` entry
+    into a real backlog item carrying `discovered_from` -- "a minted task
+    travels". So a sentence in NOTES *about* criteria could be drafted as
+    outstanding work, accepted in one keystroke, and minted into a task nobody
+    ever meant to create. NA-0031 spent a whole item shutting that door on
+    dropped criteria. This is the same door with prose at it.
+
+    Asserted at all three depths, because the seam is the point and the two
+    ends fail differently: the parser can be right while the draft is wrong.
+    """
+
+    NOTES = "\n".join([
+        "<!-- SECTION:NOTES:BEGIN -->",
+        "The shape to write is:",
+        "",
+        "    - [ ] #9 (you) decide the posture: advice or enforcement",
+        "",
+        "<!-- SECTION:NOTES:END -->",
+    ])
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        # Half-ticked on purpose: `_closing_drafts` only offers follow-ups when
+        # some criteria ARE ticked, so this is the one shape where the phantom
+        # could actually reach the draft.
+        self.body = _acceptance((True, "larkspur"), (False, "robots")) + "\n" + self.NOTES
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def test_the_phantom_is_not_in_the_unticked_list(self):
+        self.assertEqual(cli._unticked_acs(self.body), ["#2 robots"])
+
+    def test_the_phantom_is_not_drafted_as_future_work(self):
+        """The seam itself, driven the way `done` drives it."""
+        path = write_backlog_item(self.ws, "NA-0005", body=self.body)
+        fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        _summary, future, scope = cli._closing_drafts(
+            Workspace(root=self.ws, out=self.ws, source="test"), fm, body, None)
+        self.assertEqual(future, ["#2 robots"])
+        # The trigger really fired: without this, a draft list that is empty for
+        # some unrelated reason would pass the assertion above.
+        self.assertIn("AC 1/2", scope)
+
+    def test_followup_mints_one_item_and_it_is_not_the_prose(self):
+        """All the way to the file on disk. `followup --all` is the command
+        that turns a draft into somebody's next morning."""
+        write_backlog_item(self.ws, "NA-0005", body=self.body)
+        for text in cli._unticked_acs(self.body):
+            self.assertEqual(self._run("done", "NA-0005", "--future-work", text)[0], 0)
+        code, out, err = self._run("followup", "NA-0005", "--all")
+        self.assertEqual(code, 0, err)
+        minted = sorted(p.name for p in self.ws.glob("backlog/*.md")
+                        if not p.name.startswith("NA-0005"))
+        self.assertEqual(len(minted), 1, "minted %r from one real criterion" % (minted,))
+        self.assertNotIn("posture", minted[0])
+        self.assertNotIn("posture", out)
+
+
 class DroppingACriterionTheDesignMovedPast(TempCase):
     """`-` in the tick selector: this one no longer applies.
 
