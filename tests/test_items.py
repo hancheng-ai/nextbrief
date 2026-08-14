@@ -761,22 +761,42 @@ class DraftsAreDerivedNotInvented(TempCase):
         super().setUp()
         self.ws = self.workspace(with_git=False)
 
-    def _drafts(self, item_id, **fields):
+    def _drafts(self, item_id, asked=False, **fields):
         path = write_backlog_item(self.ws, item_id, **fields)
         fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         ws = Workspace(root=self.ws, out=self.ws, source="test")
-        return cli._closing_drafts(ws, fm, body, None)
+        return cli._closing_drafts(ws, fm, body, None, asked=asked)
 
-    def test_nothing_ticked_offers_no_follow_ups_at_all(self):
+    def test_nothing_ticked_on_a_run_that_never_asked_offers_nothing(self):
         """The NA-0017 shape: six criteria, none ticked, all six in fact shipped.
 
         Drafting the unticked ones here would have minted six backlog items for
         finished work -- the engine cannot tell "not done" from "not ticked",
-        and at 0/n the tick habit is what failed, not the work.
+        and on a run where nobody was asked, 0/n is the absence of an answer
+        rather than an answer. This is the half of the rule that did not change.
         """
         _summary, future, scope = self._drafts(
             "NA-0017", body=_acceptance(*[(False, "criterion %d" % i) for i in range(1, 7)]))
         self.assertEqual(future, [])
+        self.assertIn("AC 0/6", scope)
+
+    def test_nothing_ticked_on_a_run_that_asked_offers_all_of_them(self):
+        """★ The other half, and why the pair has to be read together. ★
+
+        `_ask_ticks` now puts every open criterion in front of somebody, the
+        agent's included. So 0/n on a run that asked is a person looking at each
+        one and declining to tick it -- which is evidence that they are
+        outstanding, where the same number on an unasked run was evidence of
+        nothing at all.
+
+        The distinction is the run, not the file: these two tests hand
+        `_closing_drafts` byte-identical bodies and differ only in whether
+        anybody was asked.
+        """
+        _summary, future, scope = self._drafts(
+            "NA-0018", asked=True,
+            body=_acceptance(*[(False, "criterion %d" % i) for i in range(1, 7)]))
+        self.assertEqual(future, ["#%d criterion %d" % (i, i) for i in range(1, 7)])
         self.assertIn("AC 0/6", scope)
 
     def test_everything_ticked_offers_no_follow_ups_either(self):
@@ -1741,41 +1761,66 @@ class WhoCanSayThisIsDone(TempCase):
 
     # -- what the selector offers --------------------------------------------
 
-    def test_only_the_ones_marked_for_you_are_asked_about(self):
-        """The numbered fallback is what a captured stdout drives, so the list it
-        prints is the list. One entry, and it is the `(you)` one."""
-        _code, out, _err = self._typed(["", "", ""], "done", "NA-0005")
+    def test_yours_are_asked_first_and_the_rest_get_their_own_list(self):
+        """The numbered fallback is what a captured stdout drives, so the lists
+        it prints are the lists. `(you)` first -- that is the question this
+        person came to answer -- and then the ones nothing settled, in a list of
+        their own that numbers from 1 again."""
+        _code, out, _err = self._typed(["", "", "", ""], "done", "NA-0005")
         self.assertIn("1. #2 (you) the sample export reads right to you", out)
-        self.assertNotIn("the exporter writes one file per crate", out)
-        self.assertNotIn("the migration guide names the new flag", out)
+        self.assertIn("1. #1 (agent) the exporter writes one file per crate", out)
+        self.assertIn("2. #3 (agent) the migration guide names the new flag", out)
 
-    def test_the_ones_held_back_are_counted_out_loud(self):
+    def test_the_ones_nothing_settled_are_counted_out_loud(self):
         """Never silently. A list shorter than the file, with nothing saying so,
         is indistinguishable from an item that only ever had one criterion."""
-        _code, out, _err = self._typed(["", "", ""], "done", "NA-0005")
+        _code, out, _err = self._typed(["", "", "", ""], "done", "NA-0005")
         self.assertIn("2 still open and the agent's to verify", out)
-        self.assertIn("--all-criteria", out)
+        self.assertIn("Nothing settled them", out)
 
     def test_numbering_follows_the_list_that_was_shown(self):
         """`1` means the first row on screen, not the first criterion in the
         file. Getting this wrong ticks a criterion nobody was asked about, which
         is the same falsehood as ticking one yourself."""
-        code, _out, err = self._typed(["1", "", ""], "done", "NA-0005")
+        code, _out, err = self._typed(["1", "", "", ""], "done", "NA-0005")
         self.assertEqual(code, 0, err)
         self.assertEqual(self._criteria(), [
             "- [ ] #1 (agent) the exporter writes one file per crate",
             "- [x] #2 (you) the sample export reads right to you",
             "- [ ] #3 (agent) the migration guide names the new flag"])
 
-    def test_an_item_that_is_all_the_agents_asks_nothing_but_still_reports(self):
+    def test_the_second_list_numbers_from_one_all_over_again(self):
+        """★ The trap in showing two lists. ★
+
+        Each list is numbered from 1, so the same keystroke means a different
+        criterion depending on which one is on screen. `1` in the second list is
+        `#1`, and an implementation that carried the offset over would tick the
+        `(you)` criterion the person had just declined to tick.
+        """
+        code, _out, err = self._typed(["", "1", "", ""], "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._criteria(), [
+            "- [x] #1 (agent) the exporter writes one file per crate",
+            "- [ ] #2 (you) the sample export reads right to you",
+            "- [ ] #3 (agent) the migration guide names the new flag"])
+
+    def test_an_item_that_is_all_the_agents_is_still_asked_about(self):
+        """★ The shape that closed NA-0050 wrong. ★
+
+        Every criterion the agent's, so the selector offered nothing at all and
+        the close became a no-op over the whole promise. It closed 1/3 while its
+        own commit message recorded that the other two had landed. The count was
+        printed, and printing a count nobody can act on without re-running the
+        command is what "held back" turned out to mean in practice.
+        """
         write_backlog_item(
             self.ws, "NA-0009", title="Ship the exporter",
             body=_acceptance((False, "(agent) ruff is clean"),
                              (False, "(agent) the suite is green")))
         git_commit_all(self.ws)
-        _code, out, _err = self._typed(["", ""], "done", "NA-0009")
+        _code, out, _err = self._typed(["", "", ""], "done", "NA-0009")
         self.assertIn("2 still open and the agent's to verify", out)
-        self.assertNotIn("ruff is clean", out)
+        self.assertIn("ruff is clean", out)
 
     # -- the escape hatch, which is what dropping one needs -------------------
 
@@ -1808,17 +1853,37 @@ class WhoCanSayThisIsDone(TempCase):
         left open is outstanding work, and the follow-up draft is where
         outstanding work has always gone -- so the criteria that stop occupying a
         person's attention do not stop being tracked."""
-        code, _out, err = self._typed(["1", "", cli.ACCEPT_DRAFT, ""],
+        code, _out, err = self._typed(["1", "", "", cli.ACCEPT_DRAFT, ""],
                                       "done", "NA-0005")
         self.assertEqual(code, 0, err)
         recorded = [e.text for e in items.parse_closing(self._text()).future_work]
         self.assertEqual(recorded, ["#1 (agent) the exporter writes one file per crate",
                                     "#3 (agent) the migration guide names the new flag"])
 
+    def test_declining_every_criterion_still_records_them_as_outstanding(self):
+        """★ That the `asked` flag is actually wired, through the real command. ★
+
+        `_closing_drafts` taking an `asked` argument and `done` passing the right
+        value are two different claims, and the unit test for the first cannot
+        see the second: a `done` that never passed it would leave this at the old
+        behaviour with every unit test still green.
+
+        Declining all three -- Enter through both lists -- is the shape that used
+        to record nothing anywhere. The criteria are now offered as follow-ups,
+        because a person looked at each one and did not tick it.
+        """
+        code, _out, err = self._typed(["", "", "", cli.ACCEPT_DRAFT, ""],
+                                      "done", "NA-0005")
+        self.assertEqual(code, 0, err)
+        recorded = [e.text for e in items.parse_closing(self._text()).future_work]
+        self.assertEqual(recorded, ["#1 (agent) the exporter writes one file per crate",
+                                    "#2 (you) the sample export reads right to you",
+                                    "#3 (agent) the migration guide names the new flag"])
+
     def test_the_header_still_counts_every_criterion(self):
         """The denominator is the item's promise, and it does not shrink because
         some of the promise is not this person's to check."""
-        _code, out, _err = self._typed(["1", "", ""], "done", "NA-0005")
+        _code, out, _err = self._typed(["1", "", "", ""], "done", "NA-0005")
         self.assertIn("0/3", out)
 
 

@@ -34,7 +34,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import __version__, resources
+from . import build_version, resources
 from .annotate import (
     ANNOTATIONS_NAME,
     QUESTIONS,
@@ -785,6 +785,35 @@ def _claim_has_commits(where: str, branch: str, since: str) -> Optional[bool]:
     return bool(out.strip()) if rc == 0 else False
 
 
+def _trunk_of(where: str) -> Optional[str]:
+    """The branch this repository treats as its trunk, or ``None``.
+
+    ``origin/HEAD`` first, because that is the repository saying so rather than
+    this code guessing. It is unset more often than not -- of the nine
+    repositories this was measured against, five had no remote HEAD -- so the
+    two names git itself reaches for are the fallback, and anything else is
+    ``None``.
+
+    ``None`` means the trunk could not be identified, and the caller stays quiet
+    on it. That is the same narrowing as every other one in
+    :func:`_abandoned_claims`: this warning is only worth as much as the evidence
+    under it, and a guess about which branch is shared is not evidence.
+    """
+    root = Path(where)
+    rc, out, _ = _git(root, "symbolic-ref", "--short", "-q",
+                      "refs/remotes/origin/HEAD")
+    if rc == 0 and out.strip():
+        # ``origin/main`` -> ``main``; split once, so a branch whose own name
+        # has slashes in it survives.
+        _, _, name = out.strip().partition("/")
+        return name or None
+    for name in ("main", "master"):
+        if _git(root, "rev-parse", "--verify", "-q",
+                "refs/heads/%s" % name)[0] == 0:
+            return name
+    return None
+
+
 def _abandoned_claims(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
     """Items somebody started, on a branch that has nothing on it.
 
@@ -798,12 +827,40 @@ def _abandoned_claims(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
     that always rings:
 
     * a claim younger than ``CLAIM_QUIET_DAYS`` is quiet -- you are working;
+    * a claim made on the repository's trunk is quiet, because the question this
+      asks cannot be answered there -- see below;
     * a claim whose branch has any commit since the claim date is quiet, even if
       the item is nowhere near done, because something is happening and this
       warning has nothing to add to it;
     * a claim this cannot check -- no branch recorded, no git, a directory that
-      has gone -- is quiet, because a warning fired on absent evidence teaches
-      the reader that the warning does not mean anything.
+      has gone, a trunk that cannot be identified -- is quiet, because a warning
+      fired on absent evidence teaches the reader that the warning does not mean
+      anything.
+
+    ★ Why the trunk is out of scope (NA-0050). ★ The question here is "has this
+    branch had a commit", and on a shared branch somebody else answers it for
+    you. Replaying pm's 53 items against the real history of the repositories
+    they were worked in -- claiming each on the day its work started -- put
+    **92% of claims on the trunk**, and **51% of all claims were silenced by
+    commits that never touched the item**. In the three repositories actually
+    being worked at the time that rose to 61%. The old criterion was not
+    conservative there; it was reading someone else's traffic as this item's
+    progress, and its answer was decided by whether the *repository* was busy
+    rather than by whether the *item* was.
+
+    Restricting it to branches somebody made on purpose is what the same replay
+    prefers: warnings drop from 18 to 4 over that fortnight, ten of the
+    eighteen having been fired at items that were already finished, and the one
+    real abandonment on record -- NA-0045, whose session went idle on
+    ``fix/duplicate-ids`` -- is still caught.
+
+    The honest cost, and it is the whole cost: starting an item on the trunk is
+    the most common way to start one, and this now says nothing about those at
+    all. It said nothing useful about them before either; what changes is that
+    the silence is now a rule rather than an accident, and cannot be mistaken
+    for a clean bill of health. Narrowing it to the item's own commits was the
+    other candidate and the same replay rejected it: no such convention exists
+    yet outside pm's own bookkeeping, so it would have fired on 88% of claims.
 
     A warning rather than an error, and it does not touch the exit code. It is
     telling you where to go and look, which is a thing only a person can act on;
@@ -821,6 +878,9 @@ def _abandoned_claims(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
         where, branch = claim.get("where"), claim.get("branch")
         age = claim_age_days(claim, today)
         if not where or not branch or age is None or age < CLAIM_QUIET_DAYS:
+            continue
+        trunk = _trunk_of(str(where))
+        if trunk is None or str(branch) == trunk:
             continue
         if _claim_has_commits(str(where), str(branch), str(claim.get("at"))) is False:
             found.append((str(fm.get("id") or ""), claim, age))
@@ -1626,34 +1686,73 @@ def _ask_ticks(body: str, cat: Optional[Catalog],
 
     ★ And only the ones only a person can answer. ★
 
-    Criteria marked `(agent)` are held back, because the thing being protected
-    here is not keystrokes -- it is the question "which of these actually need
-    me", which was being asked and answered from scratch on every close. Held
-    back is not hidden: the count is printed, and what stays open still drafts as
-    follow-up work exactly as before. `--all-criteria` puts them back on the
-    list, which is what the day you need to DROP one looks like -- an item whose
-    criteria are all the agent's would otherwise have no way to record that its
-    design moved, and that is the state this whole third mark exists for.
+    Criteria marked `(agent)` are asked SECOND, in a list of their own, because
+    the thing being protected here is not keystrokes -- it is the question
+    "which of these actually need me", which was being asked and answered from
+    scratch on every close. Ordering answers it; withholding them did not.
+
+    They were withheld once, and the count was printed with `--all-criteria`
+    named beside it. That flag is the only way to reach them, and reaching for
+    it means abandoning the close and typing the command again -- so the advice
+    arrived at the one moment it was most expensive to take, and the measurement
+    says nobody took it: 41 of 72 marks on items closed since were already in
+    the file, hand-edited during the work, and NA-0050 closed 1/3 with its own
+    commit message recording that the other two had landed.
+
+    `--all-criteria` still exists and now means one list instead of two.
     """
     open_rows = [(i, text) for i, mark, text in _ac_lines(body) if mark == AC_OPEN]
-    rows = open_rows if include_agent else [r for r in open_rows if _needs_you(r[1])]
-    held_back = len(open_rows) - len(rows)
-    if not rows and not held_back:
+    if not open_rows:
         return [], []
+    yours = [r for r in open_rows if _needs_you(r[1])]
+    theirs = [r for r in open_rows if not _needs_you(r[1])]
+    # Two lists, asked in one run. Holding the agent's criteria back was right
+    # and stays: the question being protected is "which of these actually need
+    # me", not keystrokes. What was wrong is where the escape hatch lived. The
+    # held-back count named `--all-criteria`, which you can only act on by
+    # abandoning the close and running it again -- advice delivered at the one
+    # moment it is most expensive to take, so nobody took it. Measured on the
+    # live backlog: of the criteria settled on items closed since the selector
+    # shipped, 41 of 72 marks were already in the file, hand-edited during the
+    # work; and NA-0050 closed 1/3 with its own commit message recording that
+    # the other two had landed.
+    #
+    # So the second list is shown here instead of being described. Enter still
+    # leaves them open -- nothing is forced, and a close is never blocked on a
+    # criterion only the agent can judge -- but answering one costs a keypress
+    # rather than a re-run.
+    groups = ([(open_rows, False)] if include_agent
+              else [g for g in ((yours, False), (theirs, True)) if g[0]])
     print()
-    if held_back:
-        # Said out loud, always. A list that is shorter than the file without
-        # saying why is this repo's characteristic bug: it does not read as
-        # something missing, it reads as an item that was always this small.
-        # Worded so the count never has to agree with a noun: `t()` has no plural
-        # mechanism, and "dropped 1 criteria" already shipped once.
-        print("  " + tr(cat, "cli.done.agent_criteria",
-                        "{n} still open and the agent's to verify, so not asked "
-                        "here. They still draft as follow-ups; --all-criteria "
-                        "puts them back on this list.",
-                        n=held_back))
-    if not rows:
-        return [], []
+    picked: List[int] = []
+    dropped: List[int] = []
+    for rows, unsettled in groups:
+        if unsettled:
+            # Said out loud, always. A list shorter than the file with nothing
+            # saying why is this repo's characteristic bug: it does not read as
+            # something missing, it reads as an item that was always this small.
+            # Worded so the count never has to agree with a noun: `t()` has no
+            # plural mechanism, and "dropped 1 criteria" already shipped once.
+            print("  " + tr(cat, "cli.done.unsettled_criteria",
+                            "{n} still open and the agent's to verify. Nothing "
+                            "settled them, so they are asked here too -- Enter "
+                            "leaves them open and they draft as follow-ups.",
+                            n=len(rows)))
+        got, gone = _ask_one_list(rows, cat)
+        picked.extend(got)
+        dropped.extend(gone)
+    return sorted(set(picked)), sorted(set(dropped))
+
+
+def _ask_one_list(rows: List[Tuple[int, str]],
+                  cat: Optional[Catalog]) -> Tuple[List[int], List[int]]:
+    """One list of criteria, asked once. ``(ticked, dropped)`` line indexes.
+
+    Split out of ``_ask_ticks`` so the second list is asked by the same code as
+    the first: a second copy would be the subtraction failure this file keeps
+    finding, with the held-back criteria answered by a selector that drifts from
+    the one everybody sees.
+    """
     # The selector first, the numbers as the fallback. Both exist because the
     # terminal is not always one that can do the first, and a `done` that cannot
     # ask is a `done` that goes back to being unanswerable. That applies to
@@ -1708,7 +1807,8 @@ def _ask_ticks(body: str, cat: Optional[Catalog],
 
 def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
                     cat: Optional[Catalog],
-                    dropped: Sequence[str] = ()) -> Tuple[str, List[str], str]:
+                    dropped: Sequence[str] = (),
+                    asked: bool = False) -> Tuple[str, List[str], str]:
     """``(summary draft, follow-up drafts, scope line)``, from facts on disk.
 
     No model, no network, nothing that can be slow or cost money: ``done`` has to
@@ -1834,7 +1934,24 @@ def _closing_drafts(ws: Workspace, fm: Dict[str, Any], body: str,
                 scope, tr(cat, "cli.close.scope_delivered", "delivered: {paths}",
                           paths=_named(delivered))) if p)
 
-    future = _unticked_acs(body) if 0 < ticked < total else []
+    # Nothing ticked used to mean nothing at all, and that was right while it was
+    # ambiguous. The NA-0017 shape is six criteria, none ticked, all six shipped:
+    # drafting them would have minted six backlog items for finished work,
+    # because the engine cannot tell "not done" from "not ticked", and at 0/n it
+    # was the tick habit that failed rather than the work.
+    #
+    # What changed is not the reading, it is what 0/n can mean. `_ask_ticks` now
+    # puts every open criterion in front of somebody -- the agent's second, in a
+    # list of their own -- so 0/n on a run that asked is a person looking at each
+    # one and declining it, which is evidence. On a run that did NOT ask (no tty,
+    # or answers already given as flags) nobody was shown anything, 0/n is still
+    # the absence of an answer, and inventing follow-ups from it would be the
+    # original mistake with a new coat of paint.
+    #
+    # Hence `asked`, and not `sys.stdin.isatty()` read a second time here: the
+    # question is whether THIS run asked, which is a fact the caller holds and
+    # this function cannot re-derive without getting it subtly wrong.
+    future = _unticked_acs(body) if (ticked or asked) and ticked < total else []
     return summary, future, scope
 
 
@@ -2043,7 +2160,8 @@ def cmd_done(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) ->
             fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except OSError:
             return "", [], ""
-        return _closing_drafts(ws, fm or {}, body or "", cat, dropped_now)
+        return _closing_drafts(ws, fm or {}, body or "", cat, dropped_now,
+                               asked=asking)
 
     try:
         closing = _ask_closing(args, cat, drafts)
@@ -3901,7 +4019,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=DESCRIPTION,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--version", action="version", version="nextbrief %s" % __version__)
+    # The composed build string, not the bare release constant: an editable
+    # install and the wheel on PATH print the same three digits otherwise, and
+    # the documented way to tell them apart was to grep both installs for a
+    # function name.
+    ap.add_argument("--version", action="version", version="nextbrief %s" % build_version())
     # SUPPRESS, because argparse would otherwise print its own list of the same
     # twenty subcommands underneath the hand-written one in the description --
     # the same information twice, in two different orders and two different
@@ -3964,7 +4086,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--future-work", dest="future_work", metavar="TEXT", action="append",
                    help="something this turned up that does not belong to it; repeatable")
     p.add_argument("--all-criteria", dest="all_criteria", action="store_true",
-                   help="also ask about criteria marked (agent), which are held back by default")
+                   help="ask about every criterion in one list, rather than yours first and the rest after")
 
     p = add("defer", "park an item until a date")
     p.add_argument("item_id", metavar="<id>")

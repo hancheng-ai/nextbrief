@@ -143,7 +143,7 @@
   "cli.do.project": "项目：{project}",
   "cli.do.prompt_header": "会话开场消息",
   "cli.do.suggested": "这件事在哪儿做？",
-  "cli.done.agent_criteria": "还有 {n} 条没做、且由 agent 判定，所以这里不问你。它们照样会被草拟成后续工作；加 --all-criteria 可以把它们放回这张单子。",
+  "cli.done.unsettled_criteria": "还有 {n} 条没做、且由 agent 判定。没有任何东西替它们结算，所以这里也一并问你——回车就留着不动，它们会被草拟成后续工作。",
   "cli.done.ask_future": "这次顺带发现、但不属于这条的活？一行一条，空行回车结束。",
   "cli.done.ask_summary": "实际做了什么？一行就够——尤其是条目里没写到的那部分。直接回车跳过。",
   "cli.done.ask_ticks": "哪些已经做完了？像 1 3 这样写序号，{drop}N 丢掉某一条，{all} 表示全部，直接回车表示都没有。",

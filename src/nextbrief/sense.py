@@ -62,7 +62,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import __version__, transcripts
+from . import build_version, transcripts
 from .annotate import ASKED_VERSION, apply_annotations, load_annotations
 from .discovery import discover
 from .frontmatter import parse_frontmatter
@@ -2409,7 +2409,13 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "lateness_minutes": lateness,
             "late": (lateness is not None and lateness > cfg["schedule"]["late_warn_minutes"]),
             "generator": "nextbrief.sense",
-            "generator_version": __version__,
+            # The build, not just the release: a snapshot that cannot say which
+            # code produced it is the artifact you have to reason about when an
+            # install has quietly stopped being the source its owner was
+            # reading. `canonical()` drops the whole `run` block, so a suffix
+            # that moves with every commit cannot make `--check` spuriously
+            # dirty.
+            "generator_version": build_version(),
             # The wording the answers in this snapshot were given to.
             "asked_version": ASKED_VERSION,
             # Proportions that collapse when a sensor breaks for part of its

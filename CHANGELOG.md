@@ -132,7 +132,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow step leaves no trace either, and a release that asks one fewer
   question still comes back green.
 
+### Changed
+
+- **`--version` now says which build it is, not just which release.** An editable
+  install from a checkout, the wheel on `PATH`, and the source tree all printed
+  the same three digits, so the documented way to tell two installs apart was to
+  run `grep -c claim_exclusively` against both of them. An install that has
+  quietly stopped being the code its owner is reading is not a hypothetical: it
+  went unnoticed here for nine days, and every artifact produced in that window
+  was stamped with a version that could not distinguish them.
+
+  A checkout now reports a PEP 440 local version — `0.2.1+dev.g1a2b3c4`, and
+  `.dirty` when the tree has uncommitted changes. A released wheel and the
+  zipapp report the plain version, unchanged.
+
+  The discriminator is **whether this is the tree or the package**, not whether
+  it matches a release. Answering the second question — clean, and exactly at
+  the tag — would print the plain version for a checkout one commit ahead, and
+  one commit ahead is the entire case this exists to catch. A zipapp is settled
+  before any path walking, on the package directory not being a directory at
+  all, so a `.pyz` sitting in the root of its own checkout still reports plain.
+  The walk upward stops after two levels, which is as far as a src-layout root
+  can be and short of the point where it would find the `.git` of whatever else
+  the machine keeps under version control.
+
+  `__version__` is untouched and stays the plain release version; the suffix is
+  computed at runtime for display only, so `bump-version.sh`, the three files
+  that carry a version, and the release workflow's byte-for-byte tag comparison
+  all work exactly as before. The probe returns the local *segment* rather than
+  a whole version string, which leaves `build_version` as the one reader of
+  `__version__` anywhere in the package: a constant rewritten by a regex, that
+  three files then have to agree about, is a constant several readers can be
+  several kinds of wrong about. That is now a test rather than an intention, and
+  it counts `ast.Load` rather than grepping — a grep for a symbol also counts the
+  definition, the `__all__` entry and every docstring that names it, so it could
+  be satisfied by rewording prose and broken by adding a comment. Every failure
+  — no git, no checkout, an unborn HEAD, a subprocess error, a timeout — returns
+  an empty segment and says nothing.
+
+  **PyPI rejects local version identifiers, which makes this a latch rather than
+  a label:** a build carrying `+dev.g...` physically cannot be uploaded.
+
+- **`snapshot.json` records the build that produced it.** `run.generator_version`
+  carries the same string as `--version`, for the same reason: the question you
+  ask of a stale artifact is which code wrote it, and the release number alone
+  could not answer that. `canonical()` drops the whole `run` block, so a value
+  that moves with every commit cannot make `check --check` spuriously dirty.
+
 ### Fixed
+
+- **An item could close over criteria nobody had judged, and the only way to
+  reach them was to abandon the close.** `done` asked about the `(you)`
+  criteria and printed a count of the agent's, naming `--all-criteria` as the
+  way to see them — a flag you can only act on by quitting and typing the
+  command again, which is advice delivered at the one moment it is most
+  expensive to take. Measured on the live backlog: of the criteria settled on
+  items closed since the selector shipped, **41 of 72 marks were already in the
+  file**, hand-edited during the work rather than written by `done`; and an item
+  whose criteria were *all* the agent's was asked nothing at all. NA-0050 closed
+  **1/3** while its own commit message recorded that the other two had landed.
+
+  `done` now asks about the agent's criteria too, second, in a list of their own
+  with the count and the reason above it. Enter still leaves them open and they
+  still draft as follow-up work, so a close is never blocked on a criterion only
+  the agent can judge — but answering one costs a keypress instead of a re-run.
+  Holding them back was right and is unchanged in spirit: ordering protects the
+  question "which of these actually need me" without also making them
+  unreachable. `--all-criteria` still exists and now means one list rather than
+  two. Three mutations, each watched red.
+
+- **An item that closed with nothing ticked recorded its criteria nowhere.**
+  Follow-ups were drafted only when at least one criterion was ticked, and that
+  was the right reading while `0/n` was ambiguous: the NA-0017 shape is six
+  criteria, none ticked, all six in fact shipped, so drafting them would have
+  minted six backlog items for finished work — and a minted task travels, which
+  costs more than a wrong record sitting still.
+
+  The fix above moved that premise rather than the reading. Every open criterion
+  is now put in front of somebody, so `0/n` **on a run that asked** is a person
+  looking at each one and declining it, which is evidence that they are
+  outstanding. On a run that did not ask — no tty, or answers already given as
+  flags — nobody was shown anything, `0/n` is still the absence of an answer, and
+  nothing is drafted. The distinction is the run, not the file: two closes over
+  byte-identical bodies now differ, correctly, on whether anybody was asked.
+  Three mutations, each watched red, one of them for the call site itself —
+  `asked` defaults to safe, so a `done` that forgot to pass it would be silently
+  the old behaviour with every unit test still green.
 
 - **You could not quote an acceptance criterion without writing one.**
   `items.ac_lines` scanned the *whole* item body for checkbox lines rather than

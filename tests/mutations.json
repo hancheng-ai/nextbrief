@@ -1029,6 +1029,114 @@
       "select": "test_it_does_not_arrive_under_no_longer_applies_either",
       "expect": "legacy sidecar",
       "note": "The opposite mistake and the same door: a heading telling an agent not to work on something nobody ever proposed, minted out of a line of NOTES."
+    },
+    {
+      "label": "a zipapp claims to be the checkout it was built in",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    if not os.path.isdir(here):\n        return \"\"",
+      "new": "    if False:\n        return \"\"",
+      "select": "test_a_path_through_an_archive_is_not_a_directory",
+      "expect": "+dev.g",
+      "note": "Inside an archive `__file__` is a path *through* a file, so the package directory is not a directory. Drop that and a .pyz sitting in the root of its own checkout reports a commit -- and the zipapp is the one artifact that has no business claiming one."
+    },
+    {
+      "label": "the version walk climbs out of its own project",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    for _ in range(2):",
+      "new": "    for _ in range(6):",
+      "select": "test_the_walk_stops_before_it_finds_an_unrelated_repository",
+      "expect": "+dev.g",
+      "note": "Two levels is as far as a src-layout root can be. Climb further and a venv inside a home directory that is itself a repository stamps this build with a commit from someone's dotfiles."
+    },
+    {
+      "label": "a modified tree reports itself as clean",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    return \"+dev.g%s%s\" % (sha, \".dirty\" if dirty else \"\")",
+      "new": "    return \"+dev.g%s%s\" % (sha, \"\")",
+      "select": "test_an_uncommitted_change_is_said_out_loud",
+      "expect": "a modified tree reported itself as",
+      "note": "The whole point of the segment is to name the code that is running. A dirty tree wearing a clean commit sends the reader to a diff that does not match what is on disk."
+    },
+    {
+      "label": "an unanswerable dirty check is assumed clean",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    if dirty is None:\n        return \"\"",
+      "new": "    if dirty is None:\n        dirty = \"\"",
+      "select": "test_a_dirtiness_it_could_not_determine_is_not_reported_as_clean",
+      "expect": "+dev.g",
+      "note": "Not knowing and knowing-it-is-clean are different answers. This mutation is why the obvious test (git off PATH) was not enough: rev-parse fails first and never reaches the branch, so the guard was green for the wrong reason until a git that answers one question and fails the other was put on PATH."
+    },
+    {
+      "label": "the version probe shells out on every call",
+      "file": "src/nextbrief/__init__.py",
+      "old": "    if _BUILD_VERSION is None:\n        _BUILD_VERSION = __version__ + _local_version()",
+      "new": "    if True:\n        _BUILD_VERSION = __version__ + _local_version()",
+      "select": "test_the_probe_runs_at_most_once",
+      "expect": "the probe ran",
+      "note": "--version is on the argument parser, which is built on every invocation, and sense asks again on every run. Without the cache both pay for two git subprocesses each time."
+    },
+    {
+      "label": "the release constant grows a second reader",
+      "file": "src/nextbrief/sense.py",
+      "old": "            \"generator_version\": build_version(),",
+      "new": "            \"generator_version\": __version__,",
+      "select": "test_exactly_one_thing_reads_it",
+      "expect": "should have exactly one reader",
+      "note": "The criterion this replaced was a grep, and a grep counts the definition, the __all__ entry and every docstring that names the symbol -- so it could be satisfied by rewording prose and broken by adding a comment. Counting ast.Load instead makes the rule the one worth having: who reads this value. The mutation is the exact regression it guards, a second module composing the version for itself, which is how the constant came to live in three files before."
+    },
+    {
+      "label": "the criteria nothing settled go back to being withheld",
+      "file": "src/nextbrief/cli.py",
+      "old": "              else [g for g in ((yours, False), (theirs, True)) if g[0]])",
+      "new": "              else [g for g in ((yours, False),) if g[0]])",
+      "select": "test_yours_are_asked_first_and_the_rest_get_their_own_list",
+      "expect": "1. #1 (agent) the exporter writes one file per crate",
+      "note": "The exact state that closed NA-0050 at 1/3 while its own commit message recorded that the other two had landed. Withheld, they are named in a count that can only be acted on by abandoning the close and running it again with a flag -- so the second list simply stops existing and nothing says the close went past a promise nobody judged."
+    },
+    {
+      "label": "the agent's criteria are asked before the ones that are yours",
+      "file": "src/nextbrief/cli.py",
+      "old": "              else [g for g in ((yours, False), (theirs, True)) if g[0]])",
+      "new": "              else [g for g in ((theirs, True), (yours, False)) if g[0]])",
+      "select": "test_numbering_follows_the_list_that_was_shown",
+      "expect": "the exporter writes one file per crate",
+      "note": "Order is what replaced withholding, so order is now load-bearing rather than cosmetic. The question being protected was never keystrokes -- it is 'which of these actually need me', and putting the agent's list first hands that question back on every close."
+    },
+    {
+      "label": "the second list is shown without saying why it is there",
+      "file": "src/nextbrief/cli.py",
+      "old": "    for rows, unsettled in groups:\n        if unsettled:",
+      "new": "    for rows, unsettled in groups:\n        if False:",
+      "select": "test_the_ones_nothing_settled_are_counted_out_loud",
+      "expect": "2 still open and the agent's to verify",
+      "note": "Unlabelled, the second list reads as more of your own criteria rather than as work nobody has judged -- which is the reading that gets it ticked on trust. The count and the reason are the whole difference between asking and pressuring."
+    },
+    {
+      "label": "a close that asked and got no ticks records nothing",
+      "file": "src/nextbrief/cli.py",
+      "old": "    future = _unticked_acs(body) if (ticked or asked) and ticked < total else []",
+      "new": "    future = _unticked_acs(body) if 0 < ticked and ticked < total else []",
+      "select": "test_nothing_ticked_on_a_run_that_asked_offers_all_of_them",
+      "expect": "#1 criterion 1",
+      "note": "The state before NA-0050's fix moved the premise: 0/n drafted nothing because it could not be distinguished from nobody-was-asked. Now that every open criterion is put in front of somebody, declining all of them is an answer, and dropping it on the floor loses the whole promise at exactly the close that judged it."
+    },
+    {
+      "label": "follow-ups are drafted from criteria nobody was shown",
+      "file": "src/nextbrief/cli.py",
+      "old": "    future = _unticked_acs(body) if (ticked or asked) and ticked < total else []",
+      "new": "    future = _unticked_acs(body) if ticked < total else []",
+      "select": "test_nothing_ticked_on_a_run_that_never_asked_offers_nothing",
+      "expect": "criterion 1",
+      "note": "The opposite mistake, and the more expensive one -- NA-0017 exactly: six criteria, none ticked, all six in fact shipped, so a scripted close would mint six backlog items for finished work. A minted task travels, which is why it costs more than a wrong record sitting still. `asked` is the whole distinction and this is the mutation that proves it is read."
+    },
+    {
+      "label": "done stops telling the drafts whether it asked",
+      "file": "src/nextbrief/cli.py",
+      "old": "        return _closing_drafts(ws, fm or {}, body or \"\", cat, dropped_now,\n                               asked=asking)",
+      "new": "        return _closing_drafts(ws, fm or {}, body or \"\", cat, dropped_now)",
+      "select": "test_declining_every_criterion_still_records_them_as_outstanding",
+      "expect": "#1 (agent) the exporter writes one file per crate",
+      "note": "`asked` defaults to False, so an unwired call site is not an error -- it is silently the old behaviour, with every unit test on `_closing_drafts` still green because they pass the argument themselves. This repo's dominant defect shape is a guard that exists and was never put on the path, and a keyword argument with a safe default is the purest form of it."
     }
   ]
 }

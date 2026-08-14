@@ -145,16 +145,54 @@ def git(cwd, *args, **kwargs):
     )
 
 
+# What `git init` leaves behind, written rather than spawned for. Four
+# `git config` calls and one `symbolic-ref` are five processes to produce six
+# lines of INI and one line of text, and `git_init` is the single most-called
+# fixture in the suite.
+#
+# The suite spawned 13,560 git processes, ~11 per test, and a Windows runner
+# pays roughly ten times what Linux does for each one: the identical suite takes
+# 40s on ubuntu-latest and 7m29s on windows-latest, which is the whole of CI's
+# wall clock because the matrix runs in parallel. Measured end to end, this is
+# 3,480 processes that never start -- 26% of every git spawn in the suite, and
+# 291s down to 197s locally.
+#
+# Counted by hooking `subprocess.run` AND `Popen` around the whole suite, not by
+# patching this function: several modules do `from helpers import git_init`, so
+# they hold the original and a patched module attribute sees about half the
+# calls. That first attempt predicted half the saving actually measured.
+#
+# The identity has to be in the repository rather than only in `git()`'s
+# environment, because the engine commits too -- `done`, `drop` and `defer` all
+# write and commit -- and those git processes are spawned by the code under test,
+# which knows nothing about this file's environment. A runner with no global
+# `user.email` would fail them.
+_GIT_CONFIG = """\
+[user]
+\tname = %s
+\temail = %s
+[commit]
+\tgpgsign = false
+[core]
+\tautocrlf = false
+""" % (GIT_NAME, GIT_EMAIL)
+
+
 def git_init(root) -> None:
     """A repository that owes nothing to the machine's global git config."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     git(root, "init", "-q")
-    git(root, "symbolic-ref", "HEAD", "refs/heads/main")
-    git(root, "config", "user.name", GIT_NAME)
-    git(root, "config", "user.email", GIT_EMAIL)
-    git(root, "config", "commit.gpgsign", "false")
-    git(root, "config", "core.autocrlf", "false")
+    dot = root / ".git"
+    # Appended, never replaced: `init` writes `repositoryformatversion` and
+    # friends into `[core]`, and on Windows `ignorecase` and `symlinks` too.
+    # Losing those is not a slower fixture, it is a different repository.
+    with open(str(dot / "config"), "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(_GIT_CONFIG)
+    # Exactly what `symbolic-ref HEAD refs/heads/main` writes, and safe only
+    # because this repository has no commits yet: there is no ref to move off.
+    with open(str(dot / "HEAD"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("ref: refs/heads/main\n")
 
 
 def git_commit_all(root, message="fixture", when=GIT_DATE) -> None:
