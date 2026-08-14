@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CI tests Python 3.14, because that is what a machine picks by default now.**
+  The matrix ran 3.9, 3.11 and 3.13 — floor, middle, top — and stopped one
+  release behind the interpreter people actually get. Found by looking at the
+  install that runs this project's own nightly pass: `pipx` had chosen 3.14.6,
+  so the engine producing a brief every night was running on a version the
+  matrix had never seen. Nothing was broken by it, and nothing would have said
+  if it were. An untested interpreter in production is an untested code path
+  wearing a version number, and the only difference is that nothing in the
+  repository points at it.
+
+  Verified before adding rather than after: the full suite passes on 3.14.6
+  locally, 1234 tests, so this documents a fact rather than opening a question.
+  Three more jobs, eleven in the matrix. `3.14` joins the classifiers in
+  `pyproject.toml`, which had already claimed 3.10 and 3.12 without testing
+  them — the matrix stays a sample, and the reasoning for sampling is now
+  written where the sample is chosen, so it can be argued with instead of
+  rediscovered.
+
 ## [0.3.0] - 2026-08-14
 
 Everything `0.3.0rc1` carried, plus exactly one change, listed below. This
