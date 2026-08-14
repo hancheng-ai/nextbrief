@@ -25,7 +25,21 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.9", "3.11", "3.13"]
+        # Floor, middle, and the two newest. 3.14 is here because it is what a
+        # machine picks up by default now, not because anything was written for
+        # it: `pipx install nextbrief` on this project's own author's laptop
+        # chose 3.14.6, so the interpreter running the nightly pass was one the
+        # matrix had never seen. An untested interpreter running in production
+        # is the same defect as an untested code path; the only difference is
+        # that nothing in the repository points at it.
+        #
+        # Sampled rather than exhaustive: 3.10 and 3.12 are declared supported
+        # in pyproject's classifiers and are not tested here, on the argument
+        # that a pure-stdlib package which passes on the floor and on both ends
+        # of the current range is not going to fail only in the middle. That is
+        # an argument, not a proof, and it is written down so it can be argued
+        # with rather than discovered.
+        python: ["3.9", "3.11", "3.13", "3.14"]
         exclude:
           # No arm64 CPython 3.9 exists in the setup-python manifest and
           # macos-latest is arm64. Rather than pin a retired x86 image to get
