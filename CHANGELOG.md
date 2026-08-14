@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pushing a release tag made the leak scan read the whole history.** git hands
+  a pre-push hook an all-zero left side for *any* new ref, tags included, so
+  `git push origin v1.2.3` arrives spelled exactly like a brand-new branch.
+  `scripts/leak-shapes.py` answered that by listing what the remote has not seen
+  — right — and then treated an empty answer as "no remote knows this repo" and
+  fell back to every reachable commit. Empty has two causes and they are
+  opposites: no remote-tracking ref exists at all (nothing was ever published,
+  so scanning everything is right), or remote-tracking refs exist and already
+  exclude everything (the push adds no objects, so scanning anything is wrong).
+  The second is what a tag at an already-pushed commit looks like, and it is the
+  ordinary case once a repo has a remote. `git rev-list -1 --remotes` now asks
+  which one it is.
+
+  Seen on the v0.3.0rc1 tag push: `leak-shapes: 209 commit(s)` for a push
+  carrying one tag object and no commits. It found nothing that day, which is
+  the only reason this was a nuisance rather than an incident — a finding in
+  history that old is in commits nobody can rewrite now, and the way out of it
+  is `--no-verify`, on precisely the push where bypassing the fence is most
+  expensive. A gate that has to be stepped over to cut a release gets stepped
+  over for other things too.
+
+  The guard is deliberately not on the error path: a failed `git rev-list` still
+  falls through to the full scan, because "could not check" must never be
+  answered with an empty list, which would read as a clean scan of nothing. Two
+  tests hold the halves apart — a tag at a published commit scans nothing, a
+  feature branch with a remote still scans what it adds — and the mutation that
+  reverts the distinction is in the manifest, watched red.
+
 ## [0.3.0rc1] - 2026-08-14
 
 ### Added

@@ -61,6 +61,23 @@ class LeakShapesCase(TempCase):
         return subprocess.run(argv, cwd=str(self.repo), capture_output=True,
                               text=True)
 
+    def publish(self) -> None:
+        """Push to a bare repo, so a remote-tracking ref exists.
+
+        `--remotes` reads refs/remotes/*, and whether anything is there at all
+        is the whole difference between "never published" and "published and
+        unchanged" -- two states that produce the same empty rev-list.
+        """
+        remote = self.tmp / "remote.git"
+        if not remote.exists():
+            git(self.tmp, "init", "--bare", "-q", "remote.git")
+            git(self.repo, "remote", "add", "origin", str(remote))
+        git(self.repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        self.assertTrue(
+            git(self.repo, "rev-list", "-1", "--remotes").stdout.strip(),
+            "the push left no remote-tracking ref behind, so this test would be"
+            " exercising the never-published case instead of the one it names")
+
 
 @requires_git
 class WhatItRejects(LeakShapesCase):
@@ -113,6 +130,25 @@ class WhatItRejects(LeakShapesCase):
         self.assertEqual(got.returncode, 1, got.stdout + got.stderr)
         self.assertIn("absolute macOS home path", got.stdout)
 
+    def test_a_new_branch_with_a_remote_still_scans_what_the_push_adds(self):
+        """The other half of the same distinction, and the dangerous half.
+
+        Remote-tracking refs existing is not on its own a reason to scan
+        nothing: here they exist *and* leave a commit over, which is an
+        ordinary feature-branch push. Reporting an empty list for that would be
+        a clean scan of nothing at all -- the confusion this scope is arranged
+        against, and the more expensive way to get it wrong.
+        """
+        self.commit("start.md", "Nothing private here.\n")
+        self.publish()
+        self.commit("doc.md", "See %s.\n" % HOME_PATH_BAIT)
+        head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        got = self.scan("--range", "%s..%s" % (ZEROS, head))
+        self.assertEqual(got.returncode, 1, got.stdout + got.stderr)
+        self.assertIn("absolute macOS home path", got.stdout)
+        # Only the commit the push adds, not the one already on the remote.
+        self.assertIn("1 commit(s)", got.stdout)
+
 
 @requires_git
 class WhatItAccepts(LeakShapesCase):
@@ -153,6 +189,31 @@ class WhatItSaysWhenItCannotCheck(LeakShapesCase):
         head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
         got = self.scan("--range", "%s..%s" % (head, head))
         self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
+        self.assertIn("nothing new to scan", got.stdout)
+
+    def test_a_tag_at_a_published_commit_scans_nothing(self):
+        """`git push origin v1.2.3` carries a tag object and no commits.
+
+        git hands a pre-push hook an all-zero left side for every new ref, tags
+        included, so a release tag arrives spelled exactly like a brand-new
+        branch. What tells them apart is whether a remote-tracking ref exists
+        at all: here one does and it already excludes everything, which means
+        the push adds no objects and there is nothing to scan.
+
+        Scanning the whole history instead reports a release's entire ancestry
+        -- commits published long ago, which cannot be rewritten now -- leaving
+        --no-verify as the only way to cut the release. Reproduced 2026-08-14
+        on the v0.3.0rc1 tag push: 209 commits for a push carrying one tag.
+        """
+        self.commit("doc.md", "See %s.\n" % HOME_PATH_BAIT)
+        self.publish()
+        git(self.repo, "tag", "-a", "v1.2.3", "-m", "release")
+        tag = git(self.repo, "rev-parse", "refs/tags/v1.2.3").stdout.strip()
+        got = self.scan("--range", "%s..%s" % (ZEROS, tag))
+        self.assertEqual(
+            got.returncode, 0,
+            "a tag push carrying no new commits rescanned published history:\n"
+            + got.stdout + got.stderr)
         self.assertIn("nothing new to scan", got.stdout)
 
     def test_outside_a_git_repository_it_errors_rather_than_passing(self):

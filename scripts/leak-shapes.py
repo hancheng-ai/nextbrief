@@ -90,6 +90,32 @@ def commits_for(scope: str, rng: str | None) -> list[str]:
             # to pass with --no-verify.
             out = run(["git", "rev-list", new, "--not", "--remotes"])
             if out.returncode != 0 or not out.stdout.strip():
+                # Empty has two causes and they are opposites.
+                #
+                # No remote-tracking ref exists at all -> nothing here has ever
+                # been published, so every commit is new and the fallback below
+                # is right.
+                #
+                # Remote-tracking refs DO exist and still exclude everything ->
+                # this push adds no objects. That is what pushing a TAG at an
+                # already-pushed commit looks like, and it is the common case
+                # once a repo has a remote. Scanning the whole history there
+                # reports a release's entire ancestry, and a finding in commits
+                # nobody can rewrite now leaves --no-verify as the only way to
+                # cut the release -- on precisely the push where bypassing this
+                # is most expensive.
+                #
+                # Seen 2026-08-14 pushing v0.3.0rc1: `209 commit(s)`, the whole
+                # history, for a push carrying one tag object and no commits.
+                #
+                # `out.returncode != 0` must NOT reach the empty case: a git
+                # failure means "could not check", and returning [] for it
+                # would report a clean scan of nothing.
+                have_remotes = run(["git", "rev-list", "-1", "--remotes"])
+                if (out.returncode == 0
+                        and have_remotes.returncode == 0
+                        and have_remotes.stdout.strip()):
+                    return []
                 out = run(["git", "rev-list", new])
         else:
             out = run(["git", "rev-list", "%s..%s" % (old, new)])
