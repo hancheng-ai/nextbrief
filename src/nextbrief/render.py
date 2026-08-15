@@ -60,7 +60,8 @@ __all__ = [
     "main", "classify", "render_brief", "declared_impact",
     "evidence_phrase",
     "check_evidence", "gate_maps", "gated_text", "md_cell", "non_goal_flag",
-    "enforce_write_permissions", "should_notify", "write_day_log", "append_jsonl",
+    "enforce_write_permissions", "apply_new_item_cap",
+    "should_notify", "write_day_log", "append_jsonl",
     "read_prev_run",
 ]
 
@@ -95,6 +96,11 @@ GIT_TIMEOUT = 10
 CAP_DEFAULTS = {
     "max_next_actions": 3, "max_waiting_for": 5, "max_agent_queue": 3,
     "max_decision_pending": 3, "per_project_line_chars": 140,
+    # Absent until 0.3.1, which is how the key shipped in the template for two
+    # releases while no line of code read it. A default here is not decoration:
+    # `caps_of` merges the config over these, so a cap with no entry silently
+    # becomes a KeyError for anyone whose config predates it.
+    "max_new_items_per_run": 5,
     # 60 was set against a smaller portfolio and had stopped being a ceiling:
     # measured on a twelve-project workspace the brief wants 72 lines, so the
     # gate fired every single morning. A cap that always fires is not bounding
@@ -111,7 +117,15 @@ CAP_DEFAULTS = {
     # head about this document is how long it can ever get.
     "brief_max_lines": 100,
 }
-LIMIT_DEFAULTS = {"max_open_items_total": 40, "max_open_per_project": 5}
+# `max_open_per_project` was here too, and was read by nothing but this literal
+# -- which is why the existing template guard called it "read by something": a
+# key in a defaults dict is a string constant, not a consumer. It is gone rather
+# than implemented. A per-project ceiling on *open* items can only be enforced by
+# hiding open work from the page, and "no signal" is the one conclusion this
+# engine must never reach by accident; refusing creation is not something a
+# renderer can do (see `apply_new_item_cap`). Inventing a meaning for a number
+# nobody had implemented would have been the worse of the two repairs.
+LIMIT_DEFAULTS = {"max_open_items_total": 40}
 def caps_of(cfg) -> Dict[str, Any]:
     merged = dict(CAP_DEFAULTS)
     merged.update((cfg or {}).get("caps") or {})
@@ -238,12 +252,25 @@ class WriteGate(NamedTuple):
     ``unchecked`` is the same argument one level down: a run in which the gate
     ran but could find no baseline for some entries is not a clean run for those
     entries, and saying "0 reverted" without saying "n unchecked" reads as one.
+
+    ``created`` is a strict subset of what ``unchecked`` counts, and the two are
+    deliberately not the same number. ``unchecked`` means "nothing was compared
+    for this entry", which covers both *no copy in HEAD at all* and *the HEAD
+    copy has unparsable frontmatter*. Only the first of those is an item that did
+    not exist before this working tree, and ``caps.max_new_items_per_run``
+    bounds exactly that. Folding a corrupt baseline into the new-item count would
+    let a damaged committed file push a genuinely new item off the page, which is
+    a bug that would surface as "my new item vanished" and point nowhere.
     """
 
     state: str          # "ran" | "no_repo" | "no_commits"
     reverted: int
     detail: str         # developer-facing; why it could not run
     unchecked: int = 0  # entries with no baseline in HEAD, by name or by id
+    # `_file` names with no copy in HEAD under this name or this id -- i.e. items
+    # this working tree created. A tuple rather than a list because a NamedTuple
+    # that reports a mutable field invites a caller to edit the gate's findings.
+    created: tuple = ()
 
 
 def _baseline_by_id(git, ws: Workspace, prefix: str) -> Dict[str, str]:
@@ -317,6 +344,7 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
 
     reverted = 0
     unchecked = 0
+    created: List[str] = []
     by_id: Optional[Dict[str, str]] = None
     for it in items:
         rel = "%s%s/%s" % (prefix, ws.backlog.name, it["_file"])
@@ -329,6 +357,7 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
             old_text = by_id.get(str(it.get("id"))) or ""
             if not old_text:
                 unchecked += 1
+                created.append(it["_file"])
                 rejected.append({"kind": "no_baseline", "gate": "write_permissions",
                                  "file": it["_file"], "id": it.get("id"),
                                  "why": "no copy in HEAD under this name or this id; "
@@ -421,7 +450,116 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
                     remove_fields(ws, it["_path"], drop_keys)
             except OSError:
                 pass
-    return WriteGate("ran", reverted, "", unchecked)
+    return WriteGate("ran", reverted, "", unchecked, tuple(created))
+
+
+# ---------------------------------------------------------------------------
+# Gate 4, creation half: how many brand-new backlog entries may reach the page.
+# ---------------------------------------------------------------------------
+
+def apply_new_item_cap(ws: Workspace, items, cfg, gate: WriteGate, today: dt.date,
+                       stamp, rejected: List[dict], writing: bool = True):
+    """Hold back the new backlog entries that overflow ``caps.max_new_items_per_run``.
+
+    ★ This closes a cap that only the model could see. ★
+
+    Measured 2026-08-16 against 0.3.0: ``caps.max_new_items_per_run`` had **zero**
+    references in ``src`` or ``tests`` (control: the sibling ``max_next_actions``
+    had nine), while ``sense`` copied the whole ``caps`` block into
+    ``digest.json`` and handed it to the model. So the number was read, shipped
+    to the model, and enforced by nobody -- which is precisely the thing the
+    three lines above it in ``templates/config.example.jsonc`` promise it is not:
+    "Caps are enforced by the renderer, not by asking the model politely." A run
+    with the cap set to 0 and twelve new entries put all twelve on disk, two on
+    the page, and never created ``log/deferred.jsonl`` at all.
+
+    **What the renderer can and cannot enforce.** By the time this stage runs the
+    files already exist -- creation happened upstream, in whatever wrote the
+    working tree. A renderer cannot un-create a file, and deleting backlog
+    entries would break this module's own contract ("writes only derived files;
+    decides nothing"). What it *can* do is refuse to render them and record where
+    they went, which is exactly gate 4's existing remit -- "how much reaches the
+    page" -- rather than a new power. The config comment was corrected to say
+    that instead of "never straight into backlog", because the old wording
+    promised something no renderer can deliver.
+
+    **"New" means "not in HEAD", and that is a deliberate choice, not a
+    shortcut.** The write-permission gate already treats ``git HEAD`` as the
+    record of what the human has accepted; ``nextbrief done`` commits
+    immediately for that reason. Reusing the same baseline here means the cap
+    bounds *unaccepted* entries: an agent may put five new items in front of you
+    per morning, and the way you raise the ceiling is to commit the ones you
+    want. The honest cost is that an overflow entry nobody commits is held back
+    on **every** run, not just the one that created it -- the key is named
+    "per run" but its input is "per uncommitted". That is loud rather than
+    silent: the count reaches the reminders block and the day log through the
+    same ``notes["deferred"]`` counter gate 4's section caps use, and every held
+    entry gets a row in ``log/deferred.jsonl`` naming the file.
+
+    **Survivors are chosen by filename, not by priority.** A new entry has no
+    baseline, so gate 3 accepts its frontmatter whole -- including ``priority``.
+    Ranking by priority would therefore let the agent that wrote the twelve
+    entries choose which five of its own the reader sees. Filename order is
+    neutral, is already the order ``load_backlog`` produces, and keeps the run
+    byte-identical on a re-render.
+
+    ``limits.max_open_items_total`` is enforced through the same allowance
+    because it is the same quantity seen from the other end. BRIEF.md has been
+    printing "the backlog is at its hard ceiling of N, nothing new may be
+    created today" since the banner was written while nothing on disk or on the
+    page moved; the ceiling now actually bounds what a run may add, and the
+    tighter of the two numbers wins.
+
+    Returns ``(kept_items, deferred_count)``.
+    """
+    if gate.state != "ran":
+        # No baseline knowledge means no way to tell a new entry from an old one,
+        # and holding back items on a guess is worse than not holding them back.
+        # Fail-open, and say so where the other disabled-gate notes go.
+        if gate.state != "no_commits":
+            rejected.append({"kind": "gate_disabled", "gate": "new_item_cap",
+                             "why": "the write-permission gate did not run (%s), so no "
+                                    "entry can be told apart from its baseline" % gate.detail})
+        return items, 0
+
+    caps = caps_of(cfg)
+    limits = limits_of(cfg)
+    new_files = set(gate.created)
+    # `is_live` rather than a status test, and `today` from the snapshot rather
+    # than the clock, for the same reason `classify` does it: a page that counts
+    # one item by the wall clock and the rest by the snapshot is not reproducible.
+    established_open = sum(1 for it in items
+                           if it["_file"] not in new_files and is_live(it, today))
+    headroom = limits["max_open_items_total"] - established_open
+    allowance = max(0, min(caps["max_new_items_per_run"], headroom))
+
+    newcomers = [it for it in items if it["_file"] in new_files]
+    if len(newcomers) <= allowance:
+        return items, 0
+
+    overflow = newcomers[allowance:]
+    why = ("over limits.max_open_items_total"
+           if headroom < caps["max_new_items_per_run"] else
+           "over caps.max_new_items_per_run")
+    for extra in overflow:
+        # Only on a run that is actually writing, and for the reason recorded at
+        # the section caps below: `--check` and `--dry-run` promise to touch
+        # nothing, and this append sits far above the place they return from.
+        if writing:
+            append_jsonl(ws, ws.log / "deferred.jsonl",
+                         # The file itself is the record; this row is a pointer to
+                         # it. Copying the body in would put backlog prose into a
+                         # log, and `_path` is an absolute path on one machine.
+                         {"at": stamp, "section": "backlog_new",
+                          "item": {"id": extra.get("id"), "file": extra["_file"],
+                                   "title": extra.get("title")},
+                          "why": why})
+        rejected.append({"kind": "over_new_item_cap", "gate": "caps",
+                         "file": extra["_file"], "id": extra.get("id"),
+                         "why": why + "; the file is untouched on disk and reaches "
+                                      "the page once it is committed"})
+    held = {id(x) for x in overflow}
+    return [it for it in items if id(it) not in held], len(overflow)
 
 
 # ---------------------------------------------------------------------------
@@ -2282,6 +2420,17 @@ def main(argv=None) -> int:
     notes["reverted_fields"] = gate.reverted
     notes["write_gate"] = gate.state
     notes["write_gate_detail"] = gate.detail
+    # ---- gate 4, creation half ----
+    #
+    # Applied here, to `backlog`, rather than inside `render_brief`: `classify`
+    # and both renderings read this one list, so filtering it once is what stops
+    # BRIEF.md and BRIEF.html from ever disagreeing about how many items there
+    # are. The whole feature is this call plus `apply_new_item_cap` -- deleting
+    # the two restores 0.3.0's behaviour exactly.
+    backlog, held_back = apply_new_item_cap(
+        ws, backlog, cfg, gate, _as_of_date(snap), stamp, rejected, writing)
+    if held_back:
+        notes["deferred"] = notes.get("deferred", 0) + held_back
 
     # ---- gates 1 + 2 ----
     index = dict(snap.get("evidence_index") or {})

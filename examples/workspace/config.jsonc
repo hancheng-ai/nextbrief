@@ -56,15 +56,14 @@
     "max_next_actions": 3,        // across the WHOLE portfolio. Six projects x 5 items is how these systems die
     "max_waiting_for": 5,
     "max_agent_queue": 3,
-    "max_new_items_per_run": 5,
+    "max_new_items_per_run": 5,   // "new" = not in git HEAD; overflow waits in log/deferred.jsonl
     "max_decision_pending": 3,
     "per_project_line_chars": 140,
     "brief_max_lines": 100
   },
 
   "limits": {
-    "max_open_items_total": 40,
-    "max_open_per_project": 5
+    "max_open_items_total": 40
   },
 
   "decay": {

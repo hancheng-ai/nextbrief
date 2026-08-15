@@ -869,10 +869,16 @@ class WriteGateDegradation(GateCase):
         code, out, err = self.render()
         self.assertEqual(code, 0, err)
 
-        disabled = [r for r in self.rejected() if r["kind"] == "gate_disabled"]
+        # Scoped by gate, not counted: gate 4's new-item cap reads this gate's
+        # findings, so it degrades with it and files its own notice. Asserting on
+        # the total would make this test fail every time another gate learns to
+        # report itself, which is the behaviour it is here to encourage.
+        disabled = [r for r in self.rejected()
+                    if r["kind"] == "gate_disabled" and r["gate"] == "write_permissions"]
         self.assertEqual(len(disabled), 1)
-        self.assertEqual(disabled[0]["gate"], "write_permissions")
         self.assertIn("git", disabled[0]["why"])
+        self.assertEqual([r["gate"] for r in self.rejected() if r["kind"] == "gate_disabled"],
+                         ["write_permissions", "new_item_cap"])
 
         record = self.runs()[-1]
         self.assertEqual(record["write_gate"], "no_repo")
@@ -890,7 +896,8 @@ class WriteGateDegradation(GateCase):
     def test_a_workspace_outside_any_repository_is_also_recorded(self):
         code, _, err = self.render()
         self.assertEqual(code, 0, err)
-        disabled = [r for r in self.rejected() if r["kind"] == "gate_disabled"]
+        disabled = [r for r in self.rejected()
+                    if r["kind"] == "gate_disabled" and r["gate"] == "write_permissions"]
         self.assertEqual(len(disabled), 1)
         self.assertEqual(self.runs()[-1]["write_gate_detail"], "no-repo")
         self.assertIn("not inside a git repository", self.brief())
@@ -962,6 +969,163 @@ class CapsGate(GateCase):
         self.assertLessEqual(len(brief.splitlines()), 12)
         self.assertIn("line ceiling", brief)
         self.assertGreater(self.runs()[-1]["truncated_lines"], 0)
+
+
+@requires_git
+class TheNewItemCapIsEnforcedByTheRendererToo(GateCase):
+    """★ A cap only the model could see. ★
+
+    Measured 2026-08-16 against 0.3.0: `caps.max_new_items_per_run` had zero
+    references in `src` or `tests` -- control: sibling `max_next_actions` had
+    nine -- while `sense` copied the whole `caps` block into `digest.json` and
+    shipped it to the model, and the template promised "overflow goes to
+    log/deferred.jsonl". Set to 0 with twelve new entries and no HEAD baseline,
+    a real `render` left all twelve on the page's counts and never created
+    `log/deferred.jsonl` at all. Positive control on the same workspace:
+    `max_next_actions: 0` wrote a deferred row immediately, so the defer
+    machinery was alive and only this path was unwired.
+
+    Every test here drives `render.main`. The gate lives in the main flow rather
+    than in a keyword argument, and a unit test that called the helper directly
+    would still pass with the call site deleted -- which is the failure mode this
+    class exists to make impossible.
+    """
+
+    CAP = 2
+
+    def setUp(self):
+        super().setUp()
+        write_snapshot(self.ws, make_snapshot())
+        write_backlog_item(self.ws, "NA-0001", title="Committed and open",
+                           status="open", priority=2)
+        git_init(self.ws)
+        git_commit_all(self.ws, "workspace baseline")
+        self._configure(caps={"max_new_items_per_run": self.CAP})
+
+    def _configure(self, caps=None, limits=None):
+        # Read through the engine's own loader rather than by slicing the comment
+        # off the front: this is called twice in one test, and the second call
+        # would otherwise be parsing a file the first one rewrote.
+        from nextbrief.jsonc import load_jsonc
+
+        path = self.ws / "config.jsonc"
+        config = load_jsonc(str(path))
+        config["caps"].update(caps or {})
+        if limits is not None:
+            config["limits"] = limits
+        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return config
+
+    def _new_items(self, n, first=2):
+        for i in range(first, first + n):
+            write_backlog_item(self.ws, "NA-%04d" % i, title="Brand new %d" % i,
+                               status="open", priority=2)
+
+    def _held(self):
+        return [r for r in self.deferred() if r.get("section") == "backlog_new"]
+
+    def test_new_entries_past_the_cap_do_not_reach_the_page(self):
+        # The reader-facing half: the backlog count in the header is what a
+        # person actually sees, and it counted all six before this landed.
+        self._new_items(6)
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        # One committed entry plus the cap.
+        self.assertIn("%d in the backlog" % (1 + self.CAP), self.brief())
+        self.assertEqual(self.runs()[-1]["open_items"], 1 + self.CAP)
+
+    def test_the_overflow_is_recorded_rather_than_lost(self):
+        # A gate that silently drops something is half a gate. The file stays on
+        # disk untouched and the row names it, so nothing here is unrecoverable.
+        self._new_items(6)
+        self.assertEqual(self.render()[0], 0)
+        held = self._held()
+        self.assertEqual([r["item"]["id"] for r in held],
+                         ["NA-0004", "NA-0005", "NA-0006", "NA-0007"])
+        self.assertEqual({r["why"] for r in held}, {"over caps.max_new_items_per_run"})
+        self.assertEqual({r["at"] for r in held}, {"2026-03-16T12:00:00"})
+        for i in range(2, 8):
+            self.assertTrue((self.ws / "backlog" / ("NA-%04d.md" % i)).exists(),
+                            "the renderer deleted a backlog file; it may only decline "
+                            "to render one")
+        # And the count reaches the reader through the same counter the section
+        # caps use, so "deferred" means one thing on the page.
+        self.assertEqual(self.runs()[-1]["deferred"], 4)
+        self.assertIn("Deferred past the caps: 4", self.brief())
+
+    def test_committing_an_entry_is_how_it_is_accepted(self):
+        # "New" means "not in HEAD" -- the write-permission gate's own baseline.
+        # This is the mechanism by which the cap is a daily budget rather than a
+        # permanent ceiling, so it is tested rather than merely documented.
+        self._new_items(6)
+        git_commit_all(self.ws, "human: accept the new entries")
+        self.assertEqual(self.render()[0], 0)
+        self.assertIn("7 in the backlog", self.brief())
+        self.assertEqual(self._held(), [])
+
+    def test_a_run_under_the_cap_defers_nothing(self):
+        # The control. Without it a "0 deferred" assertion above could not tell
+        # "the cap held" from "the cap fires on everything".
+        self._new_items(self.CAP)
+        self.assertEqual(self.render()[0], 0)
+        self.assertIn("%d in the backlog" % (1 + self.CAP), self.brief())
+        self.assertEqual(self._held(), [])
+        self.assertFalse((self.ws / "log" / "deferred.jsonl").exists())
+
+    def test_survivors_are_chosen_by_filename_not_by_the_priority_they_gave_themselves(self):
+        """An agent must not get to pick which of its own entries you see.
+
+        A new entry has no baseline, so gate 3 accepts its frontmatter whole --
+        `priority` included. Ranking the newcomers by priority would hand the
+        writer of the twelve entries the choice of which two survive, which is
+        the write-permission gate's own rule leaking out through a cap.
+        """
+        write_backlog_item(self.ws, "NA-0002", title="Brand new 2", status="open", priority=3)
+        write_backlog_item(self.ws, "NA-0003", title="Brand new 3", status="open", priority=3)
+        write_backlog_item(self.ws, "NA-0009", title="Self-promoted", status="open", priority=1)
+        self.assertEqual(self.render()[0], 0)
+        self.assertEqual([r["item"]["id"] for r in self._held()], ["NA-0009"])
+
+    def test_the_hard_ceiling_now_moves_something(self):
+        """BRIEF.md printed "nothing new may be created today" while nothing moved.
+
+        `limits.max_open_items_total` had exactly one reader -- the banner. The
+        sentence was false in the only sense a reader could check: the items were
+        created, they were on the page, and the count went up.
+        """
+        self._configure(caps={"max_new_items_per_run": 99},
+                        limits={"max_open_items_total": 1})
+        self._new_items(3)
+        self.assertEqual(self.render()[0], 0)
+        brief = self.brief()
+        self.assertIn("hard ceiling of 1", brief)
+        self.assertIn("1 in the backlog", brief)
+        self.assertEqual([r["why"] for r in self._held()],
+                         ["over limits.max_open_items_total"] * 3)
+
+    def test_a_dry_run_holds_entries_back_without_writing_the_log(self):
+        # `--dry-run` promises to touch nothing, and this append sits far above
+        # where it returns -- the same defect the section caps had to fix once.
+        self._new_items(6)
+        code, out, err = self.render("--dry-run")
+        self.assertEqual(code, 0, err)
+        self.assertFalse((self.ws / "log" / "deferred.jsonl").exists())
+
+    def test_without_a_git_baseline_the_cap_declines_to_guess(self):
+        """Fail-open, loudly. Every entry looks new to a gate that cannot run, so
+        enforcing the cap there would hide a whole backlog on the first render in
+        a workspace nobody has committed yet."""
+        bare = self.workspace("nogit", with_git=False)
+        write_snapshot(bare, make_snapshot())
+        for i in range(1, 8):
+            write_backlog_item(bare, "NA-%04d" % i, title="Item %d" % i,
+                               status="open", priority=2)
+        code, _, err = capture(render.main, ["--workspace", str(bare), "--no-notify"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("7 in the backlog", (bare / "BRIEF.md").read_text(encoding="utf-8"))
+        disabled = [r for r in read_jsonl(bare / "log" / "rejected.jsonl")
+                    if r.get("gate") == "new_item_cap"]
+        self.assertEqual(len(disabled), 1, "a gate that could not run must say so")
 
 
 if __name__ == "__main__":
