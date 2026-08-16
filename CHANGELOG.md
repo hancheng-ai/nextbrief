@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc1] - 2026-08-16
+
 ### Added
 
 - **CI tests Python 3.14, because that is what a machine picks by default now.**
@@ -2282,7 +2284,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0rc1...HEAD
+[0.4.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc1
 [0.3.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.3.0
 [0.3.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.3.0rc1
 [0.2.1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.2.1

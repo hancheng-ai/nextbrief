@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nextbrief"
-version = "0.3.0"
+version = "0.4.0rc1"
 description = "A daily brief across every project you own — where each claim is checked against evidence before it is allowed to print."
 readme = "README.md"
 requires-python = ">=3.9"
