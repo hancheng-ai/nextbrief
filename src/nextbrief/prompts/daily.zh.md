@@ -13,7 +13,18 @@
 ## 步骤（不得跳过、不得改序）
 
 1. **Read** `{workspace_root}/state/digest.json` —— **就这一个文件，你需要的全在里面**：每个项目的事实、
-   合法引用句柄、非目标、deadline、未决决策、陈旧文档，加上全部 backlog 条目的摘要与上限配置。
+   合法引用句柄、非目标、deadline、未决决策、陈旧文档，加上**你还能动的**那些 backlog 条目的摘要与上限配置。
+   `digest.backlog[]` 里只有**还活着**的条目（open / in_progress / waiting / deferred）。已结项的不在里面，
+   它们移到了 `digest.closed`，其中每一条都只有 `id` / `project` / `title` / `status` / `updated_date`，
+   再无其他。已结项的条目没有任何判断留给你——你被要求做的唯一一个判断是 `proposed_status`，
+   而结项本身已经回答了它——所以它保住名字，丢掉全部决策字段。**两半的形状故意不一样**：
+   - `closed.done`：带 `total`、`shown`，以及最新 `shown` 条的 `recent`。用它写一句「最近完成了什么」；
+     **即使 `shown` 更小，`total` 才是真实条数。**
+   - `closed.dropped`：一个普通列表，而且**是完整的——永不截断，多老都在**。它们不是「做完了」，
+     是**「能做，但决定不做」**。**不要把它们重新提一遍。** 如果你的推理走到了这个列表上的某一条，
+     该输出的不是提案，而是一句话：点名是哪一条，以及你认为有什么**新事实**足以重开它。
+   `closed.total` 是两半之和。
+   还活着的条目也带 `updated_date`：那是这条 item 自己最后动的日期，和它所属项目最后动的日期不是一回事。
 2. **定向**读取至多 **3 份**项目状态文档（`stale_docs` 里的，或今天最紧的那个项目的）。
 3. **Write** `{workspace_root}/state/brief.json`（schema 见下）。
 4. 结束。**不要**自己跑渲染——调用方会跑。

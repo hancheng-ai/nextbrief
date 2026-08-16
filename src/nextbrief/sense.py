@@ -64,11 +64,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import build_version, transcripts
 from .annotate import ASKED_VERSION, apply_annotations, load_annotations
-from .discovery import discover
+from .discovery import checkout_kind, discover
 from .frontmatter import parse_frontmatter
 from .fs import write_text
 from .inventory import INVENTORY_NAME, inventory_document
-from .items import AC_OPEN, AC_YOU, ac_lines, ac_owner, ac_progress
+from .items import AC_OPEN, AC_YOU, TERMINAL_STATUSES, ac_lines, ac_owner, ac_progress
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 
@@ -95,6 +95,16 @@ DEFAULT_SESSIONS_DIR = "~/.claude/projects"
 # Non-goal tables are looked up by heading text, which is language-specific;
 # registries written in another language set ``non_goals_heading`` explicitly.
 DEFAULT_NON_GOALS_HEADING = "Non-goals"
+
+# How many `done` items reach the digest, newest first. Fixed rather than
+# configurable: it buys the reader one line of the brief ("what got finished
+# lately"), and a knob would invite tuning a number whose only job is to stay
+# small. The count it was capped from ships beside it, so a run that closed
+# thirty things still says thirty.
+#
+# `dropped` is deliberately NOT subject to this -- see `build_digest`. A dropped
+# item is a decision rather than an event, and this cap has no way to know that.
+DIGEST_CLOSED_SHOWN = 12
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -593,6 +603,42 @@ def find_private_paths(base, private: GlobSet) -> List[str]:
     return sorted(out)
 
 
+def count_under(base, rel_base: str, pfilter: PathFilter,
+                private: Optional[GlobSet] = None) -> int:
+    """How many files the main walk would have counted here, had it descended.
+
+    Returns an integer and nothing else -- no names, the same shape as
+    ``count_private``, so a pruned tree can be reported as a size without any
+    path inside it entering the snapshot.
+
+    It repeats the main walk's filtering rather than counting everything, because
+    the number is read as "this many files were left out of your count". A raw
+    count would overstate that by whatever ``node_modules`` the nested checkout
+    happens to carry, and an overstated exclusion is as misleading as a hidden one.
+    """
+    n = 0
+    for dirpath, dirnames, filenames in os.walk(str(base), topdown=True):
+        sub = os.path.relpath(dirpath, str(base))
+        rel_dir = rel_base if sub == "." else rel_base + "/" + sub.replace(os.sep, "/")
+        kept = []
+        for d in sorted(dirnames):
+            if pfilter.prune_dir(rel_dir, d):
+                continue
+            rel = rel_dir + "/" + d
+            if private and private.covers_dir(rel):
+                continue
+            kept.append(d)
+        dirnames[:] = kept
+        for fn in filenames:
+            if fn == ".git" and pfilter.prune_dir(rel_dir, fn):
+                continue
+            rel = rel_dir + "/" + fn
+            if pfilter.match_file(rel) or (private and private.matches(rel)):
+                continue
+            n += 1
+    return n
+
+
 def walk_project(root, pfilter: PathFilter, as_of: dt.date,
                  windows: Sequence[int],
                  private: Optional[GlobSet] = None) -> Optional[Dict[str, Any]]:
@@ -602,12 +648,31 @@ def walk_project(root, pfilter: PathFilter, as_of: dt.date,
     absent, which the caller reports as a missing path rather than as zero
     activity. The private file count is deliberately *not* computed here: this
     walk has already pruned the private directories, which is the point.
+
+    **A nested git checkout is pruned and counted, never walked into.** Its files
+    are a second copy of a tree somebody else owns, and materialising that copy --
+    ``git worktree add``, ``clone``, a submodule update -- writes every file at
+    once, so the whole subtree lands inside today's window on the day it appeared.
+    Measured 2026-08-15: 575 of the 595 files one project reported as changed in
+    seven days were a single agent worktree created three days earlier, and three
+    of its eight ``top_changed_paths`` pointed inside it. A checkout is not work;
+    the commits in it are, and git counts those separately.
+
+    The rule is "is this directory a checkout", not a list of names to skip. A
+    name list would have to grow every time a tool invents a new location for one,
+    and this portfolio has already watched that particular list go from one entry
+    to two to four.
+
+    Pruning is reported rather than silent -- see ``nested_checkouts`` in the
+    return value. An undeclared nested repository does drop out of every count
+    this way, and a disappearance nobody can see is the next defect, not a fix.
     """
     counts = dict.fromkeys(windows, 0)
     active_days = set()
     newest_mtime = None
     total_files = 0
     per_file: List[Tuple[float, str]] = []   # only feeds top_changed_paths
+    nested: List[Dict[str, Any]] = []
 
     cutoffs = {w: (as_of - dt.timedelta(days=w)) for w in windows}
     max_w = max(windows)
@@ -629,9 +694,27 @@ def walk_project(root, pfilter: PathFilter, as_of: dt.date,
             rel = (rel_dir + "/" + d).strip("/") if rel_dir else d
             if private and private.covers_dir(rel):
                 continue
+            # Checked after the two exclusions above, not before: a checkout
+            # inside a private or already-ignored tree must stay unnamed, and
+            # reporting it here would put its path in the snapshot by a side door.
+            kind = checkout_kind(os.path.join(dirpath, d))
+            if kind is not None:
+                nested.append({"rel": rel, "kind": kind,
+                               "files": count_under(os.path.join(dirpath, d), rel,
+                                                    pfilter, private)})
+                continue
             kept.append(d)
         dirnames[:] = kept
         for fn in sorted(filenames):
+            # A glob like `**/.git/**` prunes git's bookkeeping when it is a
+            # directory. A linked checkout keeps the same bookkeeping in a
+            # one-line pointer FILE, which no prune rule can reach -- so without
+            # this, a project whose root is a worktree counts one phantom file
+            # that the identical project as an ordinary clone does not. Asked of
+            # the filter rather than hardcoded, so a workspace that chose to
+            # count `.git` keeps counting it.
+            if fn == ".git" and pfilter.prune_dir(rel_dir, fn):
+                continue
             rel = (rel_dir + "/" + fn).strip("/") if rel_dir else fn
             if pfilter.match_file(rel):
                 continue
@@ -667,6 +750,9 @@ def walk_project(root, pfilter: PathFilter, as_of: dt.date,
         "newest_file_path": newest_mtime[1] if newest_mtime else None,
         "newest_file_date": newest_mtime[2].isoformat() if newest_mtime else None,
         "top_changed_paths": [rel for _, rel in per_file[:8]],
+        # What was pruned for being somebody else's checkout, and how big it was.
+        # Sorted so two runs over an unchanged tree produce an identical snapshot.
+        "nested_checkouts": sorted(nested, key=lambda c: c["rel"]),
     }
 
 
@@ -806,11 +892,82 @@ def repo_private(root, top, private_globs: Sequence[str]) -> Optional[GlobSet]:
     return None
 
 
+def worktree_list(top: str,
+                  cache: Optional[Dict[str, List[Dict[str, str]]]] = None
+                  ) -> List[Dict[str, str]]:
+    """Every checkout of the repository at ``top``, primary first, as git reports it.
+
+    One subprocess per repository, memoized: several registered projects can
+    share one repository, and this is asked once per project otherwise. The
+    porcelain form is parsed rather than the human one because the human one is
+    explicitly not a stable interface.
+    """
+    if cache is not None and top in cache:
+        return cache[top]
+    out: List[Dict[str, str]] = []
+    ok, text = run_cmd(git_args(top, "worktree", "list", "--porcelain"))
+    if ok:
+        cur: Dict[str, str] = {}
+        for line in text.splitlines() + [""]:
+            if not line.strip():
+                if cur.get("path"):
+                    out.append(cur)
+                cur = {}
+                continue
+            key, _, value = line.partition(" ")
+            if key in ("worktree", "HEAD", "branch"):
+                cur["path" if key == "worktree" else key.lower()] = value.strip()
+        if cur.get("path"):
+            out.append(cur)
+    if cache is not None:
+        cache[top] = out
+    return out
+
+
+def worktree_heads(top: str,
+                   cache: Optional[Dict[str, List[Dict[str, str]]]] = None) -> List[str]:
+    """The commit each checkout points at, deduplicated and ordered.
+
+    Sorted so the command built from it is identical between two runs over an
+    unchanged repository -- git's own ordering is the worktree registration
+    order, which is history rather than state.
+    """
+    return sorted({wt["head"] for wt in worktree_list(top, cache) if wt.get("head")})
+
+
+def worktree_summary(top: str, root,
+                     cache: Optional[Dict[str, List[Dict[str, str]]]] = None
+                     ) -> List[Dict[str, Any]]:
+    """The linked checkouts, for the snapshot. ``[]`` when there is only the one.
+
+    Paths are relative to the portfolio root where they sit under it, so the
+    snapshot does not fill up with one machine's home directory.
+    """
+    listing = worktree_list(top, cache)
+    if len(listing) < 2:
+        return []
+    out = []
+    for wt in listing:
+        path = wt.get("path") or ""
+        try:
+            rel = os.path.relpath(path, str(root)).replace(os.sep, "/")
+        except ValueError:
+            rel = path
+        out.append({
+            "path": path if rel.startswith("..") else rel,
+            "branch": (wt.get("branch") or "").replace("refs/heads/", "") or None,
+            "head": wt.get("head"),
+            "primary": wt is listing[0],
+        })
+    return sorted(out, key=lambda w: w["path"])
+
+
 def git_facts(root, paths: Sequence[str], as_of: dt.date,
               exclude_subpaths: Optional[Sequence[str]] = None,
               toplevel_cache: Optional[Dict[str, Optional[str]]] = None,
               problems: Optional[List[Dict[str, Any]]] = None,
-              label: Optional[str] = None):
+              label: Optional[str] = None,
+              worktree_cache: Optional[Dict[str, List[Dict[str, str]]]] = None):
     """Resolve the toplevel per registered path and group by what git actually says.
 
     Never assume "project root == repository root". Repositories nest, and one
@@ -922,12 +1079,34 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
         # dates (rebases, imports, cherry-picks) can legitimately give a
         # different count for `--since=7d` than for a 7-day filter over the
         # 90-day list. Risk to byte-identical output: medium, so it stays.
+        # Counted across every checkout of this repository, deduplicated by sha.
+        #
+        # A linked worktree holds a branch, and work committed on it is this
+        # repository's work. Three readings were available and only one of them
+        # is a fact: summing the checkouts counts shared history once per
+        # checkout (369 + 350 = 719 here, for a repository with 375 commits);
+        # reading only the primary checkout silently drops whatever is not yet
+        # merged (six real commits, in the run this was written for); the union
+        # is neither. `rev-list` already returns each commit once however many
+        # tips reach it, so the dedup is git's, not ours.
+        #
+        # `branch` and `last_commit` above deliberately stay on the primary
+        # checkout: those describe where this working tree is, which is not the
+        # same question as how much work the repository has seen.
+        heads = worktree_heads(top, worktree_cache)
+        revs = heads if len(heads) > 1 else ["HEAD"]
         commits = {}
         for w in (7, 30, 90):
             since = (as_of - dt.timedelta(days=w)).isoformat()
             ok, out = run_cmd(
-                git_args(top, "rev-list", "--count", "--since=" + since, "HEAD") + sep
+                git_args(top, "rev-list", "--count", "--since=" + since, *revs) + sep
             )
+            if not ok and revs != ["HEAD"]:
+                # One unresolvable tip fails the whole command, and a repository
+                # reporting None is worse than one reporting its primary checkout.
+                ok, out = run_cmd(
+                    git_args(top, "rev-list", "--count", "--since=" + since, "HEAD") + sep
+                )
             commits[str(w)] = int(out.strip()) if ok and out.strip().isdigit() else None
 
         ok, out = run_cmd(git_args(top, "status", "--porcelain") + sep)
@@ -947,6 +1126,12 @@ def git_facts(root, paths: Sequence[str], as_of: dt.date,
             "uncommitted": dirty,
             "has_remote": has_remote,
             "recent_shas": recent_shas,
+            # Which checkouts the counts above were taken across. Empty for the
+            # ordinary single-checkout repository, so nothing changes shape for
+            # anyone who does not use worktrees; present when they do, because a
+            # number that quietly grew a second source is the sort of thing a
+            # reader has to be able to see rather than infer.
+            "worktrees": worktree_summary(top, root, worktree_cache),
         })
     return repos
 
@@ -1795,6 +1980,8 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         })
 
     toplevel_cache: Dict[str, Optional[str]] = {}
+    # One `git worktree list` per repository, not per project sharing it.
+    worktree_cache: Dict[str, List[Dict[str, str]]] = {}
     scc_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
     with timer.phase("sessions"):
@@ -1898,6 +2085,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             "distinct_active_days_30d": 0, "newest_file_mtime": None,
             "newest_file_path": None, "newest_file_date": None,
             "top_changed_paths": [], "missing_paths": [],
+            "nested_checkouts": [],
         }
         active_days_union = set()
         newest = None
@@ -1932,7 +2120,15 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 fs_agg["top_changed_paths"].extend(
                     ["/".join(x for x in (rel, p) if x) for p in f["top_changed_paths"]]
                 )
+                # Rebased onto the declared path the same way the changed paths
+                # are, so a project with two declared paths cannot report two
+                # checkouts under the same-looking relative name.
+                fs_agg["nested_checkouts"].extend(
+                    dict(c, rel="/".join(x for x in (rel, c["rel"]) if x))
+                    for c in f["nested_checkouts"]
+                )
         fs_agg["distinct_active_days_30d"] = len(active_days_union)
+        fs_agg["nested_checkouts"].sort(key=lambda c: c["rel"])
         if newest:
             fs_agg["newest_file_mtime"], fs_agg["newest_file_path"], fs_agg["newest_file_date"] = newest
         fs_agg["top_changed_paths"] = sorted(set(fs_agg["top_changed_paths"]))[:8]
@@ -2007,6 +2203,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
             with timer.phase("git_facts"):
                 repos = git_facts(root, paths, as_of, exclude_subpaths=excludes,
                                   toplevel_cache=toplevel_cache,
+                                  worktree_cache=worktree_cache,
                                   problems=parse_failed, label=pid)
             if repos:
                 git_out = repos
@@ -2494,6 +2691,11 @@ def load_backlog_summary(ws: Workspace) -> List[Dict[str, Any]]:
             "human_confirmed": fm.get("human_confirmed"),
             "source_doc": src.get("doc") if isinstance(src, dict) else None,
             "estimate_min": fm.get("estimate_min"),
+            # Carried for `build_digest`, which orders closed items by when they
+            # closed. Sorting them by id instead would read as recency and not be
+            # it: ids are minted in creation order, and the item closed today is
+            # regularly an old one. NA-0001 closed three weeks after NA-0050 did.
+            "updated_date": str(fm.get("updated_date")) if fm.get("updated_date") else None,
             # ★ The evidence for the field below it. ★
             #
             # `proposed_status: done` is the one judgement about the backlog that
@@ -2618,6 +2820,68 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
             "cite": sorted({c for c in cite if c}),
         })
 
+    # Closed items are the only term in this file that grows without bound: every
+    # night can add one and nothing ever takes one away. They are also the only
+    # items stage 2 has no judgement to make about -- the single call it is asked
+    # for is whether to propose `done`, and closing the item settled that question
+    # already. So what is cut here is the SHAPE, not the count. Identity survives,
+    # because "what got finished lately" is worth a sentence in the brief; every
+    # decision input goes, because there is no decision left for it to feed.
+    #
+    # Measured on this engine's own workspace, 23 closed items: 18.2 KB in full
+    # form against 3.9 KB compact, which is 21-24% of the whole digest. Cost here
+    # is turns x context on every round of every night, so this is the same trade
+    # `load_backlog_summary` was written to make, one level further in.
+    #
+    # A recency window was written first and then thrown away, because measuring
+    # it refuted it: this backlog closes in bursts, so a 14-day window kept 22 of
+    # the 23 and saved nothing. Age was the intuitive axis and the wrong one.
+    #
+    # ONLY `done` IS CAPPED, AND THE ASYMMETRY IS THE POINT. The first version of
+    # this queued both terminal statuses together and truncated to the newest
+    # twelve, which is correct for one of them and a silent deletion for the
+    # other. `done` is an event -- "not actionable, the artefact exists" -- and it
+    # expires. `dropped` is a DECISION: we could do this and chose not to, which
+    # is a standing constraint on every future proposal and never expires. A cap
+    # cannot tell them apart, and the durable kind is the rarer kind, so it sorts
+    # to the bottom and goes first.
+    #
+    # Measured on the workspace this was written for: 1 `dropped` in 23 closed,
+    # ranked 19th by `updated_date` -- seven places outside the window. It was a
+    # refusal the workspace's own agent rules quote verbatim as binding, and the
+    # nightly pass would have stopped being able to see it. Rarity is what makes
+    # keeping them whole affordable, so it is also the reason not to cap them.
+    entries = load_backlog_summary(ws)
+    active = [e for e in entries if e.get("status") not in TERMINAL_STATUSES]
+
+    def by_recency(seq):
+        return sorted(seq, key=lambda e: (e.get("updated_date") or "", e.get("id") or ""),
+                      reverse=True)
+
+    def name_only(e):
+        return {"id": e.get("id"), "project": e.get("project"),
+                "title": e.get("title"), "status": e.get("status"),
+                "updated_date": e.get("updated_date")}
+
+    dropped = by_recency(e for e in entries if e.get("status") == "dropped")
+    done = by_recency(e for e in entries if e.get("status") == "done")
+    closed_block = {
+        "total": len(dropped) + len(done),
+        # A bare list where `done` carries a cap triple, so the shape itself says
+        # which guarantee applies to which. Folding them into one capped list
+        # would leave a reader unable to tell a dropped item that is absent from
+        # one that fell off the end -- the exact ambiguity that caused this bug.
+        "dropped": [name_only(e) for e in dropped],
+        "done": {
+            # `total` and `shown` travel with the list because a cap nobody can
+            # see reads as "that was all of them" -- the same reason the renderer
+            # prints the line count it truncated instead of just truncating.
+            "total": len(done),
+            "shown": min(len(done), DIGEST_CLOSED_SHOWN),
+            "recent": [name_only(e) for e in done[:DIGEST_CLOSED_SHOWN]],
+        },
+    }
+
     return {
         "_readme": ("The only input to stage 2. Each project's `cite` list is the set of "
                     "evidence sources that project may be cited with -- cite what you can "
@@ -2634,7 +2898,8 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         # can act on, so it is the only part that crosses this boundary.
         "attention": snap.get("attention"),
         "outcomes": snap.get("outcomes") or [],
-        "backlog": load_backlog_summary(ws),
+        "backlog": active,
+        "closed": closed_block,
         "watch": snap.get("watch"),
         "health": {
             "parse_failed": snap.get("parse_failed"),
