@@ -670,6 +670,79 @@ def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
 GATED_MAPS = ("delegated", "decision_notes")
 GATED_KEY = "_gated"
 
+# The four sections of evidence-bearing claims, gated in `main`.
+CLAIM_SECTIONS = ("next_actions", "project_lines", "agent_queue", "waiting_for")
+
+# ★ The Option A/B seam for NA-0056. Lists of model prose that carry no evidence
+#   by design and are rendered under an explicit "not checked" label -- see
+#   `brief.section.suggestions`. Emptying this tuple retracts the feature: the
+#   key stops being recognised, falls through to `count_unknown_keys` below, and
+#   is counted and logged on every run instead of rendered. That is the whole
+#   switch; nothing else needs to move.
+UNVERIFIED_LISTS = ("suggestions",)
+
+# Operator diagnostics. These reach `log/runs.jsonl`, never the brief -- the
+# same rule `should_notify` states about its English reasons.
+DIAGNOSTIC_FIELDS = ("cost_note",)
+
+# Keys the renderer deliberately does NOT render, and the reason it does not.
+# Deliberately not rendered is a different state from unrecognised, and merging
+# them would make the counter below mean "nobody has decided" in some rows and
+# "somebody decided no" in others -- which is exactly the ambiguity NA-0056 was.
+NOT_RENDERED = {
+    "new_backlog_items": "the renderer scans the backlog directory itself, so "
+                         "the manifest is redundant -- the items still reach the reader",
+}
+
+KNOWN_BRIEF_KEYS = frozenset(
+    CLAIM_SECTIONS + GATED_MAPS + UNVERIFIED_LISTS + DIAGNOSTIC_FIELDS
+) | frozenset(NOT_RENDERED)
+
+
+def count_unknown_keys(brief, rejected) -> int:
+    """Count every top-level key in ``brief.json`` that nothing here consumes.
+
+    ★ NA-0056, measured 2026-08-16. ``suggestions`` had **zero** references in
+    `src` or `tests` while `brief.schema.json` declared it and the daily prompt
+    asked for it twice. A sentinel injected into a workspace's `brief.json`
+    survived a real render with exit 0 and appeared in no output at all -- not
+    BRIEF.md, not BRIEF.html, not `log/rejected.jsonl`, not `log/runs.jsonl`.
+    The model spent output tokens on it every night and **both ends were blind
+    to the loss**, because the renderer reads the brief through two hardcoded
+    tuples and has no general traversal.
+
+    That is the part worth guarding, and it is not "a field was missing". The
+    evidence gate drops claims *loudly*: a dropped claim increments
+    `dropped_claims`, lands in `log/rejected.jsonl`, and raises a reminder. An
+    unrecognised key was dropped **silently**, so the one number a reader could
+    have checked -- "N claims dropped" -- stayed at zero while content vanished.
+    Discarding is not the bug; discarding without counting is.
+
+    So anything the registry above does not name is counted here and written to
+    `log/rejected.jsonl` beside the gate's own rejections. A key added to the
+    schema or the prompt but never wired into a renderer now costs its author a
+    visible number on the very first run, instead of a year of quiet waste.
+
+    Keys beginning with an underscore are skipped: they are this engine's own
+    scratch space (`_gated` is written by `gate_maps` a few lines above the
+    caller, `_fixture` marks the example workspace), never something a model was
+    asked to produce. Counting them would report the renderer's own bookkeeping
+    as model waste and put a permanent non-zero floor under a number whose only
+    value is that zero means zero.
+    """
+    if not isinstance(brief, dict):
+        return 0
+    unknown = 0
+    for key in sorted(brief):
+        if str(key).startswith("_") or key in KNOWN_BRIEF_KEYS:
+            continue
+        unknown += 1
+        rejected.append({
+            "kind": "unrecognised_field", "where": str(key),
+            "why": "no renderer consumes this top-level key; it was discarded",
+        })
+    return unknown
+
 
 def gate_maps(brief, index, cfg, rejected, cat=None) -> int:
     """Put ``delegated`` and ``decision_notes`` through the evidence gate.
@@ -908,6 +981,13 @@ def _age_days(value):
 # are allowed to disagree because they answer different questions: what do I read
 # first, and what can I afford to lose.
 KEEP = {
+    # Unverified model prose that cites no evidence: the cheapest thing in the
+    # document, and given a tier of its own BELOW the questions rather than
+    # sharing theirs -- the note on `questions` records what happens when two
+    # sections share a tier and position quietly becomes the tie-break. A
+    # proposal nobody checked is worth strictly less than a question addressed
+    # to the reader by name.
+    "suggestions": -2,
     # Enrichment. Useful, and none of it is a warning or a decision.
     # Its own tier, below everything, because the block that emits it says so:
     # "a question that waits a night costs nothing". Sharing tier 0 with the
@@ -1757,6 +1837,12 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     if notes.get("reverted_fields"):
         rem.append(cat.t("reminder.reverted_fields", count=notes["reverted_fields"],
                          path="log/rejected.jsonl"))
+    # Beside the dropped-claim counters on purpose. A key nobody consumes is the
+    # same class of loss as a claim that failed the gate -- output the model paid
+    # for that reaches nobody -- and it was the one such loss with no number.
+    if notes.get("unknown_fields"):
+        rem.append(cat.t("reminder.unknown_fields", count=notes["unknown_fields"],
+                         path="log/rejected.jsonl"))
     gate = notes.get("write_gate")
     if gate == "no_repo":
         key = ("reminder.write_gate_no_git" if notes.get("write_gate_detail") == "git-missing"
@@ -1854,6 +1940,28 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         section(L, marks, "reminders", cat.t("brief.section.reminders"))
         for r in rem[:8]:
             L.append("- " + r)
+        L.append("")
+
+    # ---- unverified proposals (NA-0056) ---------------------------------
+    #
+    # These cite no evidence *by design*, so this is labelling, not gating.
+    # Routing them through gate 1 would drop every one of them -- the gate's
+    # rule is "no resolvable source, no claim" -- and deleting the whole section
+    # every night is the behaviour this section exists to end.
+    #
+    # The label is therefore the entire safety property, and it is a caveat line
+    # inside the section rather than an adjective in the heading, because the
+    # heading is what survives being skimmed. `daily.en.md` forbids the model
+    # from writing a deadline into the registry itself; this is the outlet that
+    # prohibition assumes exists, so what arrives here is a proposal addressed to
+    # a person -- "consider adding date X" -- and must never be dressed up as
+    # something the engine checked.
+    props = notes.get("suggestions") or []
+    if props:
+        section(L, marks, "suggestions", cat.t("brief.section.suggestions"))
+        L.append("> " + cat.t("brief.suggestions.caveat"))
+        for s in props[:5]:
+            L.append("- " + str(s).strip())
         L.append("")
 
     # ---- the one thing only a person can answer -------------------------
@@ -2146,6 +2254,8 @@ def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catal
         out.append("- " + cat.t("log.dropped", count=notes["dropped_claims"]))
     if notes.get("reverted_fields"):
         out.append("- " + cat.t("log.reverted", count=notes["reverted_fields"]))
+    if notes.get("unknown_fields"):
+        out.append("- " + cat.t("log.unknown_fields", count=notes["unknown_fields"]))
     if notes.get("deferred"):
         out.append("- " + cat.t("log.deferred", count=notes["deferred"],
                                 path="log/deferred.jsonl"))
@@ -2457,7 +2567,7 @@ def main(argv=None) -> int:
         capmap = {"next_actions": caps["max_next_actions"],
                   "agent_queue": caps["max_agent_queue"],
                   "waiting_for": caps["max_waiting_for"]}
-        for key in ("next_actions", "project_lines", "agent_queue", "waiting_for"):
+        for key in CLAIM_SECTIONS:
             kept = []
             claims = brief.get(key) or []
             if not isinstance(claims, list):
@@ -2495,6 +2605,21 @@ def main(argv=None) -> int:
         # The maps keyed by project id go through the same gate. They used to be
         # the only model text in the brief that did not.
         dropped += gate_maps(brief, index, cfg, rejected, cat)
+        # ★ Computed once here, rendered by both writers out of `notes`, for the
+        #   reason `gate_maps` records: MD and HTML diverged once before, and the
+        #   fix was to stop letting each decide for itself.
+        notes["suggestions"] = [
+            s for key in UNVERIFIED_LISTS
+            for s in (brief.get(key) if isinstance(brief.get(key), list) else [])
+            if str(s).strip()
+        ]
+        for key in DIAGNOSTIC_FIELDS:
+            val = brief.get(key)
+            if isinstance(val, str) and val.strip():
+                notes.setdefault("diagnostics", {})[key] = val.strip()
+        # Counted last, so `_gated` already exists and the underscore rule that
+        # skips it is exercised on the real path rather than only in a test.
+        notes["unknown_fields"] = count_unknown_keys(brief, rejected)
     notes["dropped_claims"] = dropped
 
     # Conflicts the registry has already adjudicated -- stated once here so the
@@ -2634,6 +2759,16 @@ def main(argv=None) -> int:
         "projects": len(snap.get("projects") or []),
         "open_items": meta["open_items"],
         "dropped_claims": dropped,
+        # Top-level keys of brief.json that no renderer reads. Zero is the
+        # normal value and the only informative one: NA-0056 was a year of this
+        # number being conceptually non-zero with nowhere to appear.
+        "unknown_fields": notes.get("unknown_fields", 0),
+        # `cost_note` and anything else in DIAGNOSTIC_FIELDS. An ops diagnostic
+        # belongs in the run record, not in the brief -- `should_notify` states
+        # the same rule about its own English reasons. Rendering it into BRIEF.md
+        # would spend the reader's attention on a number that is addressed to
+        # whoever runs the thing, not to whoever reads it.
+        "diagnostics": notes.get("diagnostics") or {},
         "reverted_fields": notes.get("reverted_fields", 0),
         "write_gate": gate.state,
         "write_gate_detail": gate.detail,
@@ -2687,6 +2822,9 @@ def main(argv=None) -> int:
     if notes.get("reverted_fields"):
         print("  %d illegal field write(s) reverted -> log/rejected.jsonl"
               % notes["reverted_fields"])
+    if notes.get("unknown_fields"):
+        print("  %d unrecognised brief field(s) discarded -> log/rejected.jsonl"
+              % notes["unknown_fields"])
     if gate.state != "ran":
         print("  write-permission gate did not run (%s: %s)" % (gate.state, gate.detail),
               file=sys.stderr)

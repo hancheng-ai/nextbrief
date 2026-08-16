@@ -1146,6 +1146,33 @@
       "select": "test_a_tag_at_a_published_commit_scans_nothing",
       "expect": "rescanned published history",
       "note": "An empty `rev-list --not --remotes` has two opposite causes and this collapses them: nothing was ever published (scan everything, right) and everything was published already (scan nothing, right). A new TAG reaches the hook with the same all-zero left side a new branch does, so `git push origin v1.2.3` takes the wrong branch and scans a release's whole ancestry -- 209 commits on v0.3.0rc1, for a push carrying one tag object. A finding there is in commits nobody can rewrite, which leaves --no-verify as the only way to cut the release. Note where the guard is not: `out.returncode != 0` must keep falling through, because a git failure is \"could not check\" and returning [] for it would report a clean scan of nothing."
+    },
+    {
+      "label": "NA-0056 the unrecognised-key counter is never called",
+      "file": "src/nextbrief/render.py",
+      "old": "        notes[\"unknown_fields\"] = count_unknown_keys(brief, rejected)",
+      "new": "        pass",
+      "select": "test_an_unknown_top_level_key_lands_in_a_countable_bucket",
+      "expect": "an unrecognised top-level key was not counted",
+      "note": "The exact bug, restored, and deleted at the CALL SITE rather than inside the function -- making `count_unknown_keys` return 0 would be a mutation the guard could pass by accident. This is the state the renderer shipped in: `suggestions` had 0 references in src or tests, a sentinel injected into brief.json survived a real render with exit 0, and nothing counted the loss. Discarding was not the defect; discarding without a number was."
+    },
+    {
+      "label": "NA-0056 the proposals reach BRIEF.md but not BRIEF.html",
+      "file": "src/nextbrief/html.py",
+      "old": "    props = notes.get(\"suggestions\") or []\n    if props:",
+      "new": "    props = []\n    if props:",
+      "select": "test_a_suggestion_reaches_both_renderers",
+      "expect": "lost on the way to BRIEF.html",
+      "note": "The MD/HTML divergence the `gate_maps` docstring exists to record, re-created in the opposite direction. `decision_notes` once reached the reader through BRIEF.html alone; this drops the section from the HTML while the Markdown keeps it. Either both writers show a thing or neither does."
+    },
+    {
+      "label": "NA-0056 an unverified proposal is shown without its label",
+      "file": "src/nextbrief/render.py",
+      "old": "        L.append(\"> \" + cat.t(\"brief.suggestions.caveat\"))",
+      "new": "        pass",
+      "select": "test_both_renderers_mark_it_unverified",
+      "expect": "BRIEF.md shows the proposal without saying it is unchecked",
+      "note": "For this section the label IS the safety property. These lines cite no evidence by design, so an unlabelled proposal sitting above a footer stating that every claim passed the evidence gate makes that footer false -- the same failure, and the same footer, as the decision_notes incident."
     }
   ]
 }

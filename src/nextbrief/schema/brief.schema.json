@@ -47,7 +47,7 @@
     },
     "suggestions": {
       "type": "array",
-      "description": "Proposals addressed to the human, e.g. 'consider adding date X to registry.deadlines'. The agent must never add a deadline itself.",
+      "description": "Proposals addressed to the human, e.g. 'consider adding date X to registry.deadlines'. The agent must never add a deadline itself. Rendered into BRIEF.md and BRIEF.html under an explicit 'not checked' label -- these carry no evidence by design, so they are labelled rather than gated. Write them as proposals a person can act on, never as findings.",
       "items": { "type": "string" }
     },
     "new_backlog_items": {
@@ -55,7 +55,10 @@
       "description": "Ids of items created this run. At most 5 per run, and none at all once the 40-item hard ceiling is reached.",
       "items": { "type": "string" }
     },
-    "cost_note": { "type": "string" }
+    "cost_note": {
+      "type": "string",
+      "description": "An operator diagnostic, e.g. token spend for this run. Recorded under `diagnostics` in log/runs.jsonl and deliberately kept off the brief: it is addressed to whoever runs the engine, not to whoever reads it."
+    }
   },
   "$defs": {
     "evidence": {
