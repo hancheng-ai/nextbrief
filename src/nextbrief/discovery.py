@@ -47,6 +47,7 @@ it, so nothing loops.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -58,8 +59,10 @@ __all__ = [
     "DISCOVERED_STATUS",
     "DOC_PATTERNS",
     "SKIP_NAMES",
+    "checkout_kind",
     "claimed_segments",
     "discover",
+    "worktree_main_repo",
 ]
 
 # Directories that are never a project of yours. Kept deliberately short: this is
@@ -204,6 +207,60 @@ def _looks_versioned(directory: Path) -> bool:
     return False
 
 
+def checkout_kind(path) -> Optional[str]:
+    """Is this directory its own git checkout, and of which sort?
+
+    ``.git`` as a directory is an ordinary repository. ``.git`` as a *file* is a
+    one-line ``gitdir:`` pointer, which git writes for both linked worktrees and
+    submodules; the worktree form points into ``<repo>/.git/worktrees/<name>``,
+    and that substring is what separates the two. Anything else carrying the
+    pointer is reported as ``linked`` rather than guessed at.
+
+    Returns None for a plain directory, so callers can use it as a predicate.
+    """
+    marker = os.path.join(str(path), ".git")
+    if os.path.isdir(marker):
+        return "repo"
+    if not os.path.isfile(marker):
+        return None
+    return "worktree" if _gitdir_pointer(marker)[1] else "linked"
+
+
+def worktree_main_repo(path) -> Optional[Path]:
+    """The repository a linked worktree belongs to, or None if it is not one.
+
+    ``git worktree add`` writes ``gitdir: <repo>/.git/worktrees/<name>``, so the
+    owning repository is everything left of ``/.git/worktrees/``. Read off the
+    pointer rather than by running git, because this is asked once per candidate
+    directory during discovery and a subprocess per directory is the kind of cost
+    that turns a portfolio scan into a wait.
+    """
+    marker = os.path.join(str(path), ".git")
+    if not os.path.isfile(marker):
+        return None
+    gitdir, is_worktree = _gitdir_pointer(marker)
+    if not is_worktree:
+        return None
+    return Path(gitdir[:gitdir.index(_WORKTREE_SEGMENT)])
+
+
+_WORKTREE_SEGMENT = "/.git/worktrees/"
+
+
+def _gitdir_pointer(marker: str) -> Tuple[str, bool]:
+    """``(gitdir path, is it a worktree pointer)``. Unreadable reads as neither."""
+    try:
+        with open(marker, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return "", False
+    if "gitdir:" not in head:
+        return "", False
+    gitdir = head.split("gitdir:", 1)[1].strip().split("\n")[0]
+    gitdir = gitdir.replace(os.sep, "/")
+    return gitdir, _WORKTREE_SEGMENT in gitdir
+
+
 def _status_docs(directory: Path, rel: str) -> List[Dict[str, str]]:
     """The first document that looks like it states where the project stands.
 
@@ -254,6 +311,28 @@ def discover(root: Path, reg: Dict[str, Any], ws: Optional[Workspace] = None) ->
             continue
         if _holds_workspace(resolved, reserved):
             continue
+
+        # A linked worktree is a branch of a repository, not a project of its
+        # own. Adopting one counts the same commits twice -- measured on this
+        # portfolio, a worktree beside its repository reported 350 commits/30d
+        # next to the repository's 369, most of them the same commits, and the
+        # project count read 16 instead of 14. The owner's words were "I thought
+        # it should be a branch"; it already was one.
+        #
+        # ONLY WHEN THE REPOSITORY IS ALSO IN HERE. A worktree whose repository
+        # lives outside the root is the only copy of that work anywhere in the
+        # portfolio, and skipping it would hide the work rather than deduplicate
+        # it. This is the case that makes the rule "fold into what we already
+        # have" rather than "ignore worktrees", and a portfolio kept entirely in
+        # linked checkouts still gets discovered.
+        main_repo = worktree_main_repo(directory)
+        if main_repo is not None:
+            try:
+                inside = main_repo.resolve().parent == root.resolve()
+            except OSError:
+                inside = False
+            if inside:
+                continue
 
         # Names differing only in separator or case -- `my-app`, `my_app`,
         # `my.app` -- all slug to one id. The first attempt at this appended the

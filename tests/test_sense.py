@@ -22,7 +22,9 @@ from helpers import (
     TempCase,
     base_registry,
     capture,
+    git,
     git_commit_all,
+    git_init,
     requires_git,
     set_mtime,
     set_tree_mtime,
@@ -30,6 +32,7 @@ from helpers import (
 )
 
 from nextbrief import sense
+from nextbrief.discovery import discover
 from nextbrief.jsonc import load_jsonc
 from nextbrief.paths import resolve_workspace
 
@@ -299,6 +302,410 @@ class TheDigestCarriesTheCriteriaCounts(TempCase):
                        "reads right on a phone", "nobody has classified this one"):
             self.assertNotIn(phrase, digest,
                              "criterion text reached the model's input: %r" % phrase)
+
+
+class ClosedItemsLeaveTheDigestAsNamesOnly(TempCase):
+    """The digest's one unbounded term, held down.
+
+    Every night can close an item and no night ever un-closes one, so in full
+    form the closed items grow forever inside the file whose entire purpose is
+    to stay small. They are also the only entries stage 2 has no judgement to
+    make about: the single call it is asked for is ``proposed_status``, and an
+    item that is already closed has answered it.
+
+    So the cut is the shape, not the count -- the name survives, the decision
+    fields go. Measured on this engine's own workspace, 23 closed items cost
+    18.2KB in full form against 3.9KB compact.
+
+    A recency window was written before this and deleted after measuring it: the
+    workspace it was written for closes items in bursts, so a 14-day window kept
+    22 of 23 and saved nothing. That is why the cap here counts items rather than
+    days.
+
+    And the cap applies to ``done`` only. The first version of this queued both
+    terminal statuses together, which deletes the wrong one: ``done`` is an event
+    and expires, ``dropped`` is a decision that constrains every future proposal
+    and does not. Measured on the workspace this was written for, the single
+    ``dropped`` item in 23 ranked 19th and fell outside the window -- a refusal
+    that workspace's own agent rules quote as binding.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+
+    def _digest(self):
+        code, _out, err = capture(sense.main,
+                                  ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        return json.loads((self.ws / "state" / "digest.json").read_text(encoding="utf-8"))
+
+    def test_a_closed_item_is_not_in_the_actionable_list(self):
+        write_backlog_item(self.ws, "NA-0001", status="open")
+        write_backlog_item(self.ws, "NA-0002", status="done")
+        write_backlog_item(self.ws, "NA-0003", status="dropped")
+        digest = self._digest()
+        self.assertEqual([b["id"] for b in digest["backlog"]], ["NA-0001"],
+                         "a closed item is still occupying the list stage 2 acts on")
+
+    def test_the_closed_block_keeps_the_name_and_drops_the_decision_fields(self):
+        write_backlog_item(self.ws, "NA-0002", status="done")
+        entry = self._digest()["closed"]["done"]["recent"][0]
+        self.assertEqual(sorted(entry),
+                         ["id", "project", "status", "title", "updated_date"])
+        for gone in ("next_probe", "what_needs_human", "source_doc", "criteria_total",
+                     "estimate_min", "automation_tier", "blocked_by", "priority"):
+            self.assertNotIn(gone, entry,
+                             "%s survived into a closed entry, where no decision "
+                             "is left for it to feed" % gone)
+
+    def test_a_dropped_entry_is_named_the_same_way_a_done_one_is(self):
+        write_backlog_item(self.ws, "NA-0003", status="dropped")
+        entry = self._digest()["closed"]["dropped"][0]
+        self.assertEqual(sorted(entry),
+                         ["id", "project", "status", "title", "updated_date"])
+        self.assertEqual(entry["status"], "dropped",
+                         "the reader cannot tell a refusal from a completion "
+                         "without the status it was filed under")
+
+    def test_the_cap_reports_the_number_it_capped_from(self):
+        """A cap nobody can see reads as "that was all of them"."""
+        for n in range(sense.DIGEST_CLOSED_SHOWN + 3):
+            write_backlog_item(self.ws, "NA-%04d" % (n + 10), status="done",
+                               updated_date="2026-03-%02d" % (n + 1))
+        closed = self._digest()["closed"]
+        self.assertEqual(closed["total"], sense.DIGEST_CLOSED_SHOWN + 3)
+        self.assertEqual(closed["done"]["total"], sense.DIGEST_CLOSED_SHOWN + 3)
+        self.assertEqual(closed["done"]["shown"], sense.DIGEST_CLOSED_SHOWN)
+        self.assertEqual(len(closed["done"]["recent"]), sense.DIGEST_CLOSED_SHOWN)
+
+    def test_the_ones_kept_are_the_ones_closed_most_recently(self):
+        # Ordered by when the item last moved, not by id. Ids are minted in
+        # creation order, so sorting by id would read as recency and not be it --
+        # in the workspace this was written for, NA-0001 was closed three weeks
+        # after NA-0050 was.
+        write_backlog_item(self.ws, "NA-0001", status="done", updated_date="2026-03-14")
+        write_backlog_item(self.ws, "NA-0050", status="done", updated_date="2026-02-01")
+        recent = self._digest()["closed"]["done"]["recent"]
+        self.assertEqual([e["id"] for e in recent], ["NA-0001", "NA-0050"],
+                         "closed items came back in id order, which is not recency")
+
+    def test_every_dropped_item_survives_however_old_it_is(self):
+        """The one this class was reopened for.
+
+        `dropped` is the rare kind and the durable kind at once, so a recency cap
+        over the pooled list deletes it first and deletes it silently. The
+        fixture is the shape of the real failure: enough `done` to fill the cap
+        twice over, and the refusals older than all of them.
+        """
+        for n in range(sense.DIGEST_CLOSED_SHOWN * 2):
+            write_backlog_item(self.ws, "NA-%04d" % (n + 20), status="done",
+                               updated_date="2026-05-%02d" % (n + 1))
+        write_backlog_item(self.ws, "NA-0011", status="dropped",
+                           updated_date="2026-01-02")
+        write_backlog_item(self.ws, "NA-0012", status="dropped",
+                           updated_date="2026-01-01")
+
+        closed = self._digest()["closed"]
+        self.assertEqual([e["id"] for e in closed["dropped"]], ["NA-0011", "NA-0012"],
+                         "a refusal aged out of the digest -- which is the one "
+                         "thing a decision is not allowed to do")
+        self.assertEqual(closed["done"]["shown"], sense.DIGEST_CLOSED_SHOWN,
+                         "keeping the refusals must not relax the cap on `done`")
+        self.assertEqual(closed["total"], sense.DIGEST_CLOSED_SHOWN * 2 + 2)
+
+    def test_a_dropped_item_never_occupies_a_capped_slot(self):
+        """The mutation guard for the test above.
+
+        Pooling the two statuses back into one capped list passes
+        `test_every_dropped_item_survives...` for the wrong reason whenever the
+        refusals happen to be recent. Here they are the NEWEST entries, so a
+        pooled implementation puts them in `recent` and pushes a `done` out --
+        and the only visible symptom is a count.
+        """
+        for n in range(sense.DIGEST_CLOSED_SHOWN):
+            write_backlog_item(self.ws, "NA-%04d" % (n + 20), status="done",
+                               updated_date="2026-05-%02d" % (n + 1))
+        write_backlog_item(self.ws, "NA-0011", status="dropped",
+                           updated_date="2026-09-01")
+
+        closed = self._digest()["closed"]
+        self.assertEqual(closed["done"]["shown"], sense.DIGEST_CLOSED_SHOWN,
+                         "a dropped item took a slot the cap had reserved for "
+                         "`done`, so a completion fell off the end to make room")
+        self.assertNotIn("NA-0011", [e["id"] for e in closed["done"]["recent"]],
+                         "a refusal was filed under `done`")
+
+    def test_a_deferred_item_is_still_actionable_and_stays_in_the_list(self):
+        # `deferred` is a human parking something with a date on it, not an
+        # ending. Folding it in with the closed ones would hide a decision that
+        # is still owed from the one pass that is meant to surface it.
+        write_backlog_item(self.ws, "NA-0004", status="deferred")
+        digest = self._digest()
+        self.assertEqual([b["id"] for b in digest["backlog"]], ["NA-0004"])
+        self.assertEqual(digest["closed"]["total"], 0)
+        self.assertEqual(digest["closed"]["dropped"], [])
+
+
+class NestedCheckoutsArePrunedAndCounted(TempCase):
+    """A second copy of somebody's tree is not this project's week of work.
+
+    Materialising a checkout -- ``git worktree add``, ``clone``, a submodule
+    update -- writes every file at once, so an mtime-derived window swallows the
+    whole subtree on the day it appeared. Measured 2026-08-15 on the portfolio
+    this engine runs against: **540 of the 595 files** one project reported as
+    changed in seven days were a single agent worktree created three days
+    earlier, and three of its eight ``top_changed_paths`` pointed inside it. The
+    true figure was 55. Claude Code creates these directories by itself, so
+    nobody has to act for it to recur.
+
+    The rule is "is this directory a checkout", never a list of names to skip:
+    the list would need an entry per tool per location, and this portfolio has
+    already watched one such list grow from one site to two to four.
+    """
+
+    STEM = "only-in-the-checkout"     # appears nowhere else in the fixture
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+        self.orchard = self.ws / "projects" / "orchard"
+
+    def _snapshot(self):
+        code, _out, err = capture(sense.main,
+                                  ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        return (self.ws / "state" / "snapshot.json").read_text(encoding="utf-8")
+
+    def _orchard(self):
+        return {p["id"]: p for p in json.loads(self._snapshot())["projects"]}["orchard"]
+
+    def _plant(self, rel, marker=".git", content="gitdir: /elsewhere/.git/worktrees/wt\n",
+               extra=("a.py", "b.py")):
+        """A checkout at ``rel``, with ``marker`` as a file or a directory."""
+        base = self.orchard / rel
+        base.mkdir(parents=True, exist_ok=True)
+        if content is None:
+            (base / marker).mkdir(exist_ok=True)
+            (base / marker / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        else:
+            (base / marker).write_text(content, encoding="utf-8")
+        for name in extra:
+            (base / ("%s-%s" % (self.STEM, name))).write_text("x = 1\n", encoding="utf-8")
+        set_tree_mtime(base, RECENT_MTIME)
+        return base
+
+    def test_its_files_are_not_counted_as_the_projects_own(self):
+        before = self._orchard()["fs"]
+        self._plant(".claude/worktrees/wt")
+        after = self._orchard()["fs"]
+        self.assertEqual(after["total_files"], before["total_files"],
+                         "a checkout added files to the project's own count")
+        self.assertEqual(after["changed"], before["changed"],
+                         "a checkout registered as a week of activity")
+
+    def test_no_path_inside_one_reaches_the_snapshot(self):
+        self._plant(".claude/worktrees/wt")
+        # A substring search over the raw serialisation, the same way the privacy
+        # tests are written: a path leaking into a field nobody thought of is the
+        # failure worth catching, and a structured walk would miss it.
+        self.assertNotIn(self.STEM, self._snapshot())
+
+    def test_the_prune_is_reported_with_its_kind_and_size(self):
+        # Without this the fix is just a quieter defect: the files stop being
+        # counted and nothing says they were ever there.
+        self._plant(".claude/worktrees/wt")
+        nested = self._orchard()["fs"]["nested_checkouts"]
+        self.assertEqual(len(nested), 1, nested)
+        self.assertEqual(nested[0]["rel"], "orchard/.claude/worktrees/wt")
+        self.assertEqual(nested[0]["kind"], "worktree")
+        self.assertEqual(nested[0]["files"], 2, "the two planted files")
+
+    def test_a_dot_git_directory_is_a_repository_not_a_worktree(self):
+        self._plant("vendored", content=None)
+        nested = self._orchard()["fs"]["nested_checkouts"]
+        self.assertEqual([(n["rel"], n["kind"]) for n in nested],
+                         [("orchard/vendored", "repo")])
+
+    def test_a_pointer_that_is_not_a_worktree_is_labelled_honestly(self):
+        # Submodules carry the same one-line pointer; only the worktree form
+        # names `.git/worktrees/`. Guessing "worktree" for both would put a wrong
+        # word in the snapshot, and a wrong label is worse than a vague one.
+        self._plant("sub", content="gitdir: /elsewhere/.git/modules/sub\n")
+        self.assertEqual(self._orchard()["fs"]["nested_checkouts"][0]["kind"], "linked")
+
+    def test_the_reported_size_is_what_would_have_been_counted(self):
+        # Not a raw file count: the number is read as "this many were left out of
+        # your total", and an overstated exclusion misleads as badly as a hidden
+        # one. `**/__pycache__/**` is ignored for the project, so it is ignored
+        # inside the checkout too.
+        base = self._plant(".claude/worktrees/wt")
+        (base / "__pycache__").mkdir()
+        for n in range(5):
+            (base / "__pycache__" / ("m%d.pyc" % n)).write_text("", encoding="utf-8")
+        set_tree_mtime(base, RECENT_MTIME)
+        self.assertEqual(self._orchard()["fs"]["nested_checkouts"][0]["files"], 2)
+
+    def test_a_checkout_under_a_private_path_is_never_named(self):
+        # Privacy is checked first on purpose. Reporting the prune here would put
+        # a private directory's name into the snapshot through a side door -- the
+        # exact leak the never_read rule exists to prevent.
+        kiln = self.ws / "projects" / "kiln" / "fixtures" / "private" / "wt"
+        kiln.mkdir(parents=True, exist_ok=True)
+        (kiln / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n", encoding="utf-8")
+        (kiln / ("%s-c.py" % self.STEM)).write_text("x = 1\n", encoding="utf-8")
+        set_tree_mtime(kiln, RECENT_MTIME)
+
+        text = self._snapshot()
+        self.assertNotIn(self.STEM, text)
+        self.assertNotIn("fixtures/private/wt", text)
+        by_id = {p["id"]: p for p in json.loads(text)["projects"]}
+        self.assertEqual(by_id["kiln"]["fs"]["nested_checkouts"], [])
+
+    def test_the_walk_root_may_itself_be_a_checkout(self):
+        """The boundary the rule must not cross.
+
+        Every project of a portfolio kept in linked worktrees would otherwise
+        report zero files -- the fix erasing the thing it was meant to measure.
+        Asserted against `walk_project` directly, because routing it through a
+        full run would also exercise the git probes and stop testing the walk.
+        """
+        root = self.tmp / "root-is-a-worktree"
+        (root / "src").mkdir(parents=True)
+        (root / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n", encoding="utf-8")
+        (root / "src" / "main.py").write_text("x = 1\n", encoding="utf-8")
+        (root / "README.md").write_text("# hi\n", encoding="utf-8")
+        set_tree_mtime(root, RECENT_MTIME)
+
+        out = sense.walk_project(root, sense.PathFilter(["**/.git/**"]),
+                                 AS_OF_DATE, (7, 30))
+        self.assertEqual(out["total_files"], 2,
+                         "the project root was pruned as somebody else's checkout")
+        self.assertEqual(out["nested_checkouts"], [])
+
+    def test_checkout_kind_is_a_predicate_on_a_plain_directory(self):
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        self.assertIsNone(sense.checkout_kind(plain))
+
+
+@requires_git
+class WorktreesFoldIntoTheirRepository(TempCase):
+    """A linked worktree is a branch with a directory, not a second project.
+
+    Measured 2026-08-15 on the portfolio this engine runs against: a worktree
+    sitting beside its repository was adopted as its own project and reported
+    350 commits/30d next to the repository's 369 -- most of them the same
+    commits -- so portfolio activity read high and the project count read 16
+    instead of 14. The owner's words were "I thought it should be a branch". It
+    already was one; the engine could not see it.
+
+    Three readings of the commit count were available and only one is a fact:
+    summing the checkouts double-counts shared history (369 + 350 = 719 for a
+    repository holding 375 commits), reading the primary checkout alone drops
+    whatever has not been merged (six real commits here), and the sha union is
+    neither. The owner ruled for the union on 2026-08-15.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.projects = self.tmp / "portfolio"
+        self.projects.mkdir(parents=True, exist_ok=True)
+
+    def _repo(self, name="atlas"):
+        repo = self.projects / name
+        (repo).mkdir(parents=True, exist_ok=True)
+        (repo / "README.md").write_text("# %s\n" % name, encoding="utf-8")
+        git_init(repo)
+        git_commit_all(repo, "%s: first" % name)
+        return repo
+
+    def _worktree(self, repo, at, branch="side", commits=1):
+        """A linked worktree of ``repo`` at ``at``, ``commits`` ahead of main."""
+        git(repo, "worktree", "add", "-b", branch, str(at))
+        for n in range(commits):
+            (at / ("extra%d.txt" % n)).write_text("%d\n" % n, encoding="utf-8")
+            git_commit_all(at, "side: commit %d" % n)
+        return at
+
+    # -- D6: discovery ------------------------------------------------------
+
+    def test_a_worktree_beside_its_repository_is_not_a_second_project(self):
+        repo = self._repo()
+        self._worktree(repo, self.projects / "atlas-side")
+        found = {e["id"] for e in discover(self.projects, {"projects": []})}
+        self.assertEqual(found, {"atlas"},
+                         "the worktree was adopted as a project of its own, so "
+                         "its repository's commits are about to be counted twice")
+
+    def test_a_worktree_whose_repository_is_elsewhere_is_still_discovered(self):
+        """The boundary that makes this "fold", not "ignore".
+
+        If the repository is outside the portfolio, the worktree is the only copy
+        of that work anywhere in it. Skipping it would hide the work rather than
+        deduplicate it -- and a portfolio kept entirely in linked checkouts would
+        discover nothing at all.
+        """
+        outside = self._repo("offsite")
+        target = self.projects / "offsite-work"
+        # Move the repository out of the portfolio, leaving only the worktree.
+        moved = self.tmp / "elsewhere" / "offsite"
+        moved.parent.mkdir(parents=True, exist_ok=True)
+        git(outside, "worktree", "add", "-b", "side", str(target))
+        os.rename(str(outside), str(moved))
+        git(moved, "worktree", "repair", str(target))
+
+        found = {e["id"] for e in discover(self.projects, {"projects": []})}
+        self.assertIn("offsite-work", found,
+                      "a worktree whose repository is not in the portfolio is "
+                      "the only copy of that work, and it was dropped")
+
+    def test_a_declared_repository_still_wins_over_discovery(self):
+        # The skip must not swallow a directory somebody named by hand.
+        repo = self._repo()
+        self._worktree(repo, self.projects / "atlas-side")
+        reg = {"projects": [{"id": "declared-side", "paths": ["atlas-side"]}]}
+        self.assertEqual([e["id"] for e in discover(self.projects, reg)], ["atlas"])
+
+    # -- D5: counting -------------------------------------------------------
+
+    def _facts(self, repo, rel):
+        return sense.git_facts(self.projects, [rel], AS_OF_DATE)[0]
+
+    def test_the_count_is_the_union_not_the_primary_checkout(self):
+        repo = self._repo()
+        self._worktree(repo, self.projects / "atlas-side", commits=3)
+        facts = self._facts(repo, "atlas")
+
+        # 1 on main + 3 on the worktree's branch, none of them shared. Reading
+        # only the primary checkout gives 1, which is the reading that dropped
+        # six real commits on the portfolio this was written for.
+        self.assertEqual(facts["commits_since"]["30"], 4)
+
+        primary_only = git(repo, "rev-list", "--count", "--since=2026-02-14", "HEAD")
+        self.assertEqual(int(primary_only.stdout.strip()), 1,
+                         "fixture is wrong: the branch is not actually ahead")
+
+    def test_shared_history_is_counted_once_not_once_per_checkout(self):
+        # The failure this replaces: two checkouts of the same repository, each
+        # reporting the whole shared history, added together.
+        repo = self._repo()
+        self._worktree(repo, self.projects / "atlas-side", commits=0)
+        self.assertEqual(self._facts(repo, "atlas")["commits_since"]["30"], 1,
+                         "the one shared commit was counted once per checkout")
+
+    def test_the_checkouts_the_count_came_from_are_reported(self):
+        repo = self._repo()
+        self._worktree(repo, self.projects / "atlas-side")
+        wts = self._facts(repo, "atlas")["worktrees"]
+        self.assertEqual([w["path"] for w in wts], ["atlas", "atlas-side"])
+        self.assertEqual([w["branch"] for w in wts], ["main", "side"])
+        self.assertEqual([w["primary"] for w in wts], [True, False])
+
+    def test_an_ordinary_repository_reports_no_worktrees_at_all(self):
+        # Everyone who does not use worktrees keeps the shape they had.
+        repo = self._repo()
+        self.assertEqual(self._facts(repo, "atlas")["worktrees"], [])
 
 
 class ThePromptsNameTheDigestFieldsInBothLocales(TempCase):

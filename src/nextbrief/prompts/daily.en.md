@@ -14,7 +14,21 @@ Read the agent rules at the workspace root first (`{workspace_root}/CLAUDE.md` o
 
 1. **Read** `{workspace_root}/state/digest.json` -- **this one file, and everything you need is in it**: per-project facts,
    the legal citation handles, non-goals, deadlines, pending decisions, stale documents, plus a summary of every
-   backlog item and the cap configuration.
+   backlog item you can still act on and the cap configuration.
+   `digest.backlog[]` holds the items that are **still live** -- open, in progress, waiting, deferred. Closed ones are
+   not there: they moved to `digest.closed`, and every entry in it is `id` / `project` / `title` / `status` /
+   `updated_date` and nothing else. There is no judgement left to make about a closed item -- the one call you are
+   asked for is `proposed_status`, and closing it answered that -- so it keeps its name and loses every decision
+   field. The two halves are shaped differently on purpose:
+   - `closed.done` carries `total`, `shown`, and a `recent` list of the newest `shown` completions. Use it for a
+     sentence about what got finished lately. **`total` is the real number even when `shown` is smaller.**
+   - `closed.dropped` is a plain list and it is **complete -- never capped, however old**. These are not things that
+     got finished; they are things somebody could have done and decided not to. **Do not propose one back.** If your
+     reasoning arrives at something on this list, the useful output is not the proposal -- it is one sentence naming
+     the item and what new fact you think reopens it.
+   `closed.total` counts both halves.
+   Live entries carry `updated_date` too -- the day the item itself last moved, which is not the same thing as the
+   day its project last moved.
 2. Read **at most 3** project status documents, chosen deliberately (from `stale_docs`, or from whichever project is tightest today).
 3. **Write** `{workspace_root}/state/brief.json` (schema below).
 4. Stop. **Do not** run the renderer yourself -- your caller will.
