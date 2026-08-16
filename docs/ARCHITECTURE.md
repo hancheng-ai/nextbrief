@@ -211,6 +211,25 @@ A cap is also the only honest way to keep a daily document readable. The brief
 is *physically* unable to grow past its limits, regardless of how much the model
 produced.
 
+**Since 0.3.1 this gate also bounds new backlog entries**, which is a widening of
+its remit and is written down as one. Until then `caps.max_new_items_per_run` had
+zero readers in the whole package while `sense` shipped it to the model inside
+`digest.json` — a cap enforced by asking the model politely, three lines under
+the comment that says caps are not. `render.apply_new_item_cap` closes it: past
+the cap, a new entry keeps its file untouched, gets a row in `log/deferred.jsonl`
+and does not reach the page. `limits.max_open_items_total` is enforced through
+the same allowance, so the "nothing new may be created today" banner now
+describes something that happens.
+
+Two honest limits on that. First, this is still "how much reaches the page", not
+"how much may be created": by render time the file exists, and a renderer that
+deleted backlog entries would break this module's own contract. Second, "new"
+means "not in `git HEAD`" — the write-permission gate's baseline — so an overflow
+entry nobody commits is held back on every run, not only the one that wrote it.
+That is the intended shape (committing is how you accept an entry), but the key
+is named *per run* and its input is *per uncommitted*, and those differ until you
+commit.
+
 ### One dataset, two renderings
 
 `BRIEF.md` and `BRIEF.html` are rendered from the same gated data structure. The

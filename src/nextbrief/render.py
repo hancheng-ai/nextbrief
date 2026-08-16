@@ -60,7 +60,8 @@ __all__ = [
     "main", "classify", "render_brief", "declared_impact",
     "evidence_phrase",
     "check_evidence", "gate_maps", "gated_text", "md_cell", "non_goal_flag",
-    "enforce_write_permissions", "should_notify", "write_day_log", "append_jsonl",
+    "enforce_write_permissions", "apply_new_item_cap",
+    "should_notify", "write_day_log", "append_jsonl",
     "read_prev_run",
 ]
 
@@ -95,6 +96,11 @@ GIT_TIMEOUT = 10
 CAP_DEFAULTS = {
     "max_next_actions": 3, "max_waiting_for": 5, "max_agent_queue": 3,
     "max_decision_pending": 3, "per_project_line_chars": 140,
+    # Absent until 0.3.1, which is how the key shipped in the template for two
+    # releases while no line of code read it. A default here is not decoration:
+    # `caps_of` merges the config over these, so a cap with no entry silently
+    # becomes a KeyError for anyone whose config predates it.
+    "max_new_items_per_run": 5,
     # 60 was set against a smaller portfolio and had stopped being a ceiling:
     # measured on a twelve-project workspace the brief wants 72 lines, so the
     # gate fired every single morning. A cap that always fires is not bounding
@@ -111,7 +117,15 @@ CAP_DEFAULTS = {
     # head about this document is how long it can ever get.
     "brief_max_lines": 100,
 }
-LIMIT_DEFAULTS = {"max_open_items_total": 40, "max_open_per_project": 5}
+# `max_open_per_project` was here too, and was read by nothing but this literal
+# -- which is why the existing template guard called it "read by something": a
+# key in a defaults dict is a string constant, not a consumer. It is gone rather
+# than implemented. A per-project ceiling on *open* items can only be enforced by
+# hiding open work from the page, and "no signal" is the one conclusion this
+# engine must never reach by accident; refusing creation is not something a
+# renderer can do (see `apply_new_item_cap`). Inventing a meaning for a number
+# nobody had implemented would have been the worse of the two repairs.
+LIMIT_DEFAULTS = {"max_open_items_total": 40}
 def caps_of(cfg) -> Dict[str, Any]:
     merged = dict(CAP_DEFAULTS)
     merged.update((cfg or {}).get("caps") or {})
@@ -238,12 +252,25 @@ class WriteGate(NamedTuple):
     ``unchecked`` is the same argument one level down: a run in which the gate
     ran but could find no baseline for some entries is not a clean run for those
     entries, and saying "0 reverted" without saying "n unchecked" reads as one.
+
+    ``created`` is a strict subset of what ``unchecked`` counts, and the two are
+    deliberately not the same number. ``unchecked`` means "nothing was compared
+    for this entry", which covers both *no copy in HEAD at all* and *the HEAD
+    copy has unparsable frontmatter*. Only the first of those is an item that did
+    not exist before this working tree, and ``caps.max_new_items_per_run``
+    bounds exactly that. Folding a corrupt baseline into the new-item count would
+    let a damaged committed file push a genuinely new item off the page, which is
+    a bug that would surface as "my new item vanished" and point nowhere.
     """
 
     state: str          # "ran" | "no_repo" | "no_commits"
     reverted: int
     detail: str         # developer-facing; why it could not run
     unchecked: int = 0  # entries with no baseline in HEAD, by name or by id
+    # `_file` names with no copy in HEAD under this name or this id -- i.e. items
+    # this working tree created. A tuple rather than a list because a NamedTuple
+    # that reports a mutable field invites a caller to edit the gate's findings.
+    created: tuple = ()
 
 
 def _baseline_by_id(git, ws: Workspace, prefix: str) -> Dict[str, str]:
@@ -317,6 +344,7 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
 
     reverted = 0
     unchecked = 0
+    created: List[str] = []
     by_id: Optional[Dict[str, str]] = None
     for it in items:
         rel = "%s%s/%s" % (prefix, ws.backlog.name, it["_file"])
@@ -329,6 +357,7 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
             old_text = by_id.get(str(it.get("id"))) or ""
             if not old_text:
                 unchecked += 1
+                created.append(it["_file"])
                 rejected.append({"kind": "no_baseline", "gate": "write_permissions",
                                  "file": it["_file"], "id": it.get("id"),
                                  "why": "no copy in HEAD under this name or this id; "
@@ -421,7 +450,116 @@ def enforce_write_permissions(ws: Workspace, items, rejected, dry_run=False) -> 
                     remove_fields(ws, it["_path"], drop_keys)
             except OSError:
                 pass
-    return WriteGate("ran", reverted, "", unchecked)
+    return WriteGate("ran", reverted, "", unchecked, tuple(created))
+
+
+# ---------------------------------------------------------------------------
+# Gate 4, creation half: how many brand-new backlog entries may reach the page.
+# ---------------------------------------------------------------------------
+
+def apply_new_item_cap(ws: Workspace, items, cfg, gate: WriteGate, today: dt.date,
+                       stamp, rejected: List[dict], writing: bool = True):
+    """Hold back the new backlog entries that overflow ``caps.max_new_items_per_run``.
+
+    ★ This closes a cap that only the model could see. ★
+
+    Measured 2026-08-16 against 0.3.0: ``caps.max_new_items_per_run`` had **zero**
+    references in ``src`` or ``tests`` (control: the sibling ``max_next_actions``
+    had nine), while ``sense`` copied the whole ``caps`` block into
+    ``digest.json`` and handed it to the model. So the number was read, shipped
+    to the model, and enforced by nobody -- which is precisely the thing the
+    three lines above it in ``templates/config.example.jsonc`` promise it is not:
+    "Caps are enforced by the renderer, not by asking the model politely." A run
+    with the cap set to 0 and twelve new entries put all twelve on disk, two on
+    the page, and never created ``log/deferred.jsonl`` at all.
+
+    **What the renderer can and cannot enforce.** By the time this stage runs the
+    files already exist -- creation happened upstream, in whatever wrote the
+    working tree. A renderer cannot un-create a file, and deleting backlog
+    entries would break this module's own contract ("writes only derived files;
+    decides nothing"). What it *can* do is refuse to render them and record where
+    they went, which is exactly gate 4's existing remit -- "how much reaches the
+    page" -- rather than a new power. The config comment was corrected to say
+    that instead of "never straight into backlog", because the old wording
+    promised something no renderer can deliver.
+
+    **"New" means "not in HEAD", and that is a deliberate choice, not a
+    shortcut.** The write-permission gate already treats ``git HEAD`` as the
+    record of what the human has accepted; ``nextbrief done`` commits
+    immediately for that reason. Reusing the same baseline here means the cap
+    bounds *unaccepted* entries: an agent may put five new items in front of you
+    per morning, and the way you raise the ceiling is to commit the ones you
+    want. The honest cost is that an overflow entry nobody commits is held back
+    on **every** run, not just the one that created it -- the key is named
+    "per run" but its input is "per uncommitted". That is loud rather than
+    silent: the count reaches the reminders block and the day log through the
+    same ``notes["deferred"]`` counter gate 4's section caps use, and every held
+    entry gets a row in ``log/deferred.jsonl`` naming the file.
+
+    **Survivors are chosen by filename, not by priority.** A new entry has no
+    baseline, so gate 3 accepts its frontmatter whole -- including ``priority``.
+    Ranking by priority would therefore let the agent that wrote the twelve
+    entries choose which five of its own the reader sees. Filename order is
+    neutral, is already the order ``load_backlog`` produces, and keeps the run
+    byte-identical on a re-render.
+
+    ``limits.max_open_items_total`` is enforced through the same allowance
+    because it is the same quantity seen from the other end. BRIEF.md has been
+    printing "the backlog is at its hard ceiling of N, nothing new may be
+    created today" since the banner was written while nothing on disk or on the
+    page moved; the ceiling now actually bounds what a run may add, and the
+    tighter of the two numbers wins.
+
+    Returns ``(kept_items, deferred_count)``.
+    """
+    if gate.state != "ran":
+        # No baseline knowledge means no way to tell a new entry from an old one,
+        # and holding back items on a guess is worse than not holding them back.
+        # Fail-open, and say so where the other disabled-gate notes go.
+        if gate.state != "no_commits":
+            rejected.append({"kind": "gate_disabled", "gate": "new_item_cap",
+                             "why": "the write-permission gate did not run (%s), so no "
+                                    "entry can be told apart from its baseline" % gate.detail})
+        return items, 0
+
+    caps = caps_of(cfg)
+    limits = limits_of(cfg)
+    new_files = set(gate.created)
+    # `is_live` rather than a status test, and `today` from the snapshot rather
+    # than the clock, for the same reason `classify` does it: a page that counts
+    # one item by the wall clock and the rest by the snapshot is not reproducible.
+    established_open = sum(1 for it in items
+                           if it["_file"] not in new_files and is_live(it, today))
+    headroom = limits["max_open_items_total"] - established_open
+    allowance = max(0, min(caps["max_new_items_per_run"], headroom))
+
+    newcomers = [it for it in items if it["_file"] in new_files]
+    if len(newcomers) <= allowance:
+        return items, 0
+
+    overflow = newcomers[allowance:]
+    why = ("over limits.max_open_items_total"
+           if headroom < caps["max_new_items_per_run"] else
+           "over caps.max_new_items_per_run")
+    for extra in overflow:
+        # Only on a run that is actually writing, and for the reason recorded at
+        # the section caps below: `--check` and `--dry-run` promise to touch
+        # nothing, and this append sits far above the place they return from.
+        if writing:
+            append_jsonl(ws, ws.log / "deferred.jsonl",
+                         # The file itself is the record; this row is a pointer to
+                         # it. Copying the body in would put backlog prose into a
+                         # log, and `_path` is an absolute path on one machine.
+                         {"at": stamp, "section": "backlog_new",
+                          "item": {"id": extra.get("id"), "file": extra["_file"],
+                                   "title": extra.get("title")},
+                          "why": why})
+        rejected.append({"kind": "over_new_item_cap", "gate": "caps",
+                         "file": extra["_file"], "id": extra.get("id"),
+                         "why": why + "; the file is untouched on disk and reaches "
+                                      "the page once it is committed"})
+    held = {id(x) for x in overflow}
+    return [it for it in items if id(it) not in held], len(overflow)
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +669,79 @@ def check_evidence(claim, index, cfg, rejected, where, cat=None) -> bool:
 
 GATED_MAPS = ("delegated", "decision_notes")
 GATED_KEY = "_gated"
+
+# The four sections of evidence-bearing claims, gated in `main`.
+CLAIM_SECTIONS = ("next_actions", "project_lines", "agent_queue", "waiting_for")
+
+# ★ The Option A/B seam for NA-0056. Lists of model prose that carry no evidence
+#   by design and are rendered under an explicit "not checked" label -- see
+#   `brief.section.suggestions`. Emptying this tuple retracts the feature: the
+#   key stops being recognised, falls through to `count_unknown_keys` below, and
+#   is counted and logged on every run instead of rendered. That is the whole
+#   switch; nothing else needs to move.
+UNVERIFIED_LISTS = ("suggestions",)
+
+# Operator diagnostics. These reach `log/runs.jsonl`, never the brief -- the
+# same rule `should_notify` states about its English reasons.
+DIAGNOSTIC_FIELDS = ("cost_note",)
+
+# Keys the renderer deliberately does NOT render, and the reason it does not.
+# Deliberately not rendered is a different state from unrecognised, and merging
+# them would make the counter below mean "nobody has decided" in some rows and
+# "somebody decided no" in others -- which is exactly the ambiguity NA-0056 was.
+NOT_RENDERED = {
+    "new_backlog_items": "the renderer scans the backlog directory itself, so "
+                         "the manifest is redundant -- the items still reach the reader",
+}
+
+KNOWN_BRIEF_KEYS = frozenset(
+    CLAIM_SECTIONS + GATED_MAPS + UNVERIFIED_LISTS + DIAGNOSTIC_FIELDS
+) | frozenset(NOT_RENDERED)
+
+
+def count_unknown_keys(brief, rejected) -> int:
+    """Count every top-level key in ``brief.json`` that nothing here consumes.
+
+    ★ NA-0056, measured 2026-08-16. ``suggestions`` had **zero** references in
+    `src` or `tests` while `brief.schema.json` declared it and the daily prompt
+    asked for it twice. A sentinel injected into a workspace's `brief.json`
+    survived a real render with exit 0 and appeared in no output at all -- not
+    BRIEF.md, not BRIEF.html, not `log/rejected.jsonl`, not `log/runs.jsonl`.
+    The model spent output tokens on it every night and **both ends were blind
+    to the loss**, because the renderer reads the brief through two hardcoded
+    tuples and has no general traversal.
+
+    That is the part worth guarding, and it is not "a field was missing". The
+    evidence gate drops claims *loudly*: a dropped claim increments
+    `dropped_claims`, lands in `log/rejected.jsonl`, and raises a reminder. An
+    unrecognised key was dropped **silently**, so the one number a reader could
+    have checked -- "N claims dropped" -- stayed at zero while content vanished.
+    Discarding is not the bug; discarding without counting is.
+
+    So anything the registry above does not name is counted here and written to
+    `log/rejected.jsonl` beside the gate's own rejections. A key added to the
+    schema or the prompt but never wired into a renderer now costs its author a
+    visible number on the very first run, instead of a year of quiet waste.
+
+    Keys beginning with an underscore are skipped: they are this engine's own
+    scratch space (`_gated` is written by `gate_maps` a few lines above the
+    caller, `_fixture` marks the example workspace), never something a model was
+    asked to produce. Counting them would report the renderer's own bookkeeping
+    as model waste and put a permanent non-zero floor under a number whose only
+    value is that zero means zero.
+    """
+    if not isinstance(brief, dict):
+        return 0
+    unknown = 0
+    for key in sorted(brief):
+        if str(key).startswith("_") or key in KNOWN_BRIEF_KEYS:
+            continue
+        unknown += 1
+        rejected.append({
+            "kind": "unrecognised_field", "where": str(key),
+            "why": "no renderer consumes this top-level key; it was discarded",
+        })
+    return unknown
 
 
 def gate_maps(brief, index, cfg, rejected, cat=None) -> int:
@@ -770,6 +981,13 @@ def _age_days(value):
 # are allowed to disagree because they answer different questions: what do I read
 # first, and what can I afford to lose.
 KEEP = {
+    # Unverified model prose that cites no evidence: the cheapest thing in the
+    # document, and given a tier of its own BELOW the questions rather than
+    # sharing theirs -- the note on `questions` records what happens when two
+    # sections share a tier and position quietly becomes the tie-break. A
+    # proposal nobody checked is worth strictly less than a question addressed
+    # to the reader by name.
+    "suggestions": -2,
     # Enrichment. Useful, and none of it is a warning or a decision.
     # Its own tier, below everything, because the block that emits it says so:
     # "a question that waits a night costs nothing". Sharing tier 0 with the
@@ -1619,6 +1837,12 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
     if notes.get("reverted_fields"):
         rem.append(cat.t("reminder.reverted_fields", count=notes["reverted_fields"],
                          path="log/rejected.jsonl"))
+    # Beside the dropped-claim counters on purpose. A key nobody consumes is the
+    # same class of loss as a claim that failed the gate -- output the model paid
+    # for that reaches nobody -- and it was the one such loss with no number.
+    if notes.get("unknown_fields"):
+        rem.append(cat.t("reminder.unknown_fields", count=notes["unknown_fields"],
+                         path="log/rejected.jsonl"))
     gate = notes.get("write_gate")
     if gate == "no_repo":
         key = ("reminder.write_gate_no_git" if notes.get("write_gate_detail") == "git-missing"
@@ -1716,6 +1940,28 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         section(L, marks, "reminders", cat.t("brief.section.reminders"))
         for r in rem[:8]:
             L.append("- " + r)
+        L.append("")
+
+    # ---- unverified proposals (NA-0056) ---------------------------------
+    #
+    # These cite no evidence *by design*, so this is labelling, not gating.
+    # Routing them through gate 1 would drop every one of them -- the gate's
+    # rule is "no resolvable source, no claim" -- and deleting the whole section
+    # every night is the behaviour this section exists to end.
+    #
+    # The label is therefore the entire safety property, and it is a caveat line
+    # inside the section rather than an adjective in the heading, because the
+    # heading is what survives being skimmed. `daily.en.md` forbids the model
+    # from writing a deadline into the registry itself; this is the outlet that
+    # prohibition assumes exists, so what arrives here is a proposal addressed to
+    # a person -- "consider adding date X" -- and must never be dressed up as
+    # something the engine checked.
+    props = notes.get("suggestions") or []
+    if props:
+        section(L, marks, "suggestions", cat.t("brief.section.suggestions"))
+        L.append("> " + cat.t("brief.suggestions.caveat"))
+        for s in props[:5]:
+            L.append("- " + str(s).strip())
         L.append("")
 
     # ---- the one thing only a person can answer -------------------------
@@ -2008,6 +2254,8 @@ def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catal
         out.append("- " + cat.t("log.dropped", count=notes["dropped_claims"]))
     if notes.get("reverted_fields"):
         out.append("- " + cat.t("log.reverted", count=notes["reverted_fields"]))
+    if notes.get("unknown_fields"):
+        out.append("- " + cat.t("log.unknown_fields", count=notes["unknown_fields"]))
     if notes.get("deferred"):
         out.append("- " + cat.t("log.deferred", count=notes["deferred"],
                                 path="log/deferred.jsonl"))
@@ -2282,6 +2530,17 @@ def main(argv=None) -> int:
     notes["reverted_fields"] = gate.reverted
     notes["write_gate"] = gate.state
     notes["write_gate_detail"] = gate.detail
+    # ---- gate 4, creation half ----
+    #
+    # Applied here, to `backlog`, rather than inside `render_brief`: `classify`
+    # and both renderings read this one list, so filtering it once is what stops
+    # BRIEF.md and BRIEF.html from ever disagreeing about how many items there
+    # are. The whole feature is this call plus `apply_new_item_cap` -- deleting
+    # the two restores 0.3.0's behaviour exactly.
+    backlog, held_back = apply_new_item_cap(
+        ws, backlog, cfg, gate, _as_of_date(snap), stamp, rejected, writing)
+    if held_back:
+        notes["deferred"] = notes.get("deferred", 0) + held_back
 
     # ---- gates 1 + 2 ----
     index = dict(snap.get("evidence_index") or {})
@@ -2308,7 +2567,7 @@ def main(argv=None) -> int:
         capmap = {"next_actions": caps["max_next_actions"],
                   "agent_queue": caps["max_agent_queue"],
                   "waiting_for": caps["max_waiting_for"]}
-        for key in ("next_actions", "project_lines", "agent_queue", "waiting_for"):
+        for key in CLAIM_SECTIONS:
             kept = []
             claims = brief.get(key) or []
             if not isinstance(claims, list):
@@ -2346,6 +2605,21 @@ def main(argv=None) -> int:
         # The maps keyed by project id go through the same gate. They used to be
         # the only model text in the brief that did not.
         dropped += gate_maps(brief, index, cfg, rejected, cat)
+        # ★ Computed once here, rendered by both writers out of `notes`, for the
+        #   reason `gate_maps` records: MD and HTML diverged once before, and the
+        #   fix was to stop letting each decide for itself.
+        notes["suggestions"] = [
+            s for key in UNVERIFIED_LISTS
+            for s in (brief.get(key) if isinstance(brief.get(key), list) else [])
+            if str(s).strip()
+        ]
+        for key in DIAGNOSTIC_FIELDS:
+            val = brief.get(key)
+            if isinstance(val, str) and val.strip():
+                notes.setdefault("diagnostics", {})[key] = val.strip()
+        # Counted last, so `_gated` already exists and the underscore rule that
+        # skips it is exercised on the real path rather than only in a test.
+        notes["unknown_fields"] = count_unknown_keys(brief, rejected)
     notes["dropped_claims"] = dropped
 
     # Conflicts the registry has already adjudicated -- stated once here so the
@@ -2485,6 +2759,16 @@ def main(argv=None) -> int:
         "projects": len(snap.get("projects") or []),
         "open_items": meta["open_items"],
         "dropped_claims": dropped,
+        # Top-level keys of brief.json that no renderer reads. Zero is the
+        # normal value and the only informative one: NA-0056 was a year of this
+        # number being conceptually non-zero with nowhere to appear.
+        "unknown_fields": notes.get("unknown_fields", 0),
+        # `cost_note` and anything else in DIAGNOSTIC_FIELDS. An ops diagnostic
+        # belongs in the run record, not in the brief -- `should_notify` states
+        # the same rule about its own English reasons. Rendering it into BRIEF.md
+        # would spend the reader's attention on a number that is addressed to
+        # whoever runs the thing, not to whoever reads it.
+        "diagnostics": notes.get("diagnostics") or {},
         "reverted_fields": notes.get("reverted_fields", 0),
         "write_gate": gate.state,
         "write_gate_detail": gate.detail,
@@ -2538,6 +2822,9 @@ def main(argv=None) -> int:
     if notes.get("reverted_fields"):
         print("  %d illegal field write(s) reverted -> log/rejected.jsonl"
               % notes["reverted_fields"])
+    if notes.get("unknown_fields"):
+        print("  %d unrecognised brief field(s) discarded -> log/rejected.jsonl"
+              % notes["unknown_fields"])
     if gate.state != "ran":
         print("  write-permission gate did not run (%s: %s)" % (gate.state, gate.detail),
               file=sys.stderr)

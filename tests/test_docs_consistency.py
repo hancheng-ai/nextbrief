@@ -348,10 +348,13 @@ class ShippedConfigTemplate(unittest.TestCase):
     does the opposite of what its owner asked, and nothing else in the system
     would ever contradict the file.
 
-    Two keys are legitimately read by the prompt rather than by Python, and are
-    accepted here on that basis -- but note that a cap enforced only by asking
-    the model politely is not a cap. `docs/ARCHITECTURE.md` says so, and gate 4
-    exists because of it.
+    A key read by the prompt rather than by Python is accepted here on that
+    basis, and `automation.tiers` legitimately is one. But that acceptance was
+    also this test's own blind spot: `caps.max_new_items_per_run` used it to
+    survive two releases with no enforcement anywhere, three lines under the
+    comment saying caps are not enforced by asking the model politely.
+    `test_a_cap_may_not_be_enforced_by_the_prompt_alone` withdraws the hatch for
+    the one block where it cannot apply.
     """
 
     # Both of them. Phase 0 cleaned the template and this test only looked at the
@@ -419,6 +422,77 @@ class ShippedConfigTemplate(unittest.TestCase):
                 self.assertIn('"%s"' % reason, source,
                               "%s lists notify reason %r that should_notify "
                               "never tests" % (label, reason))
+
+    def test_a_cap_may_not_be_enforced_by_the_prompt_alone(self):
+        """★ The escape hatch above is what let a cap exist with no enforcement. ★
+
+        `test_every_key_it_ships_is_read_by_something` accepts a key that appears
+        in a prompt, and that acceptance is right for most of the config: some
+        numbers really are the model's brief. It is wrong for exactly one block.
+        `caps` is defined, in its own first comment, as the things "enforced by
+        the renderer, not by asking the model politely" -- so a key under `caps`
+        whose only reader is a prompt is not merely undocumented, it is the
+        counter-example to the sentence directly above it.
+
+        That is not hypothetical. Measured 2026-08-16 on 0.3.0:
+        `caps.max_new_items_per_run` had **zero** references anywhere in `src` or
+        `tests` (control: sibling `max_next_actions` had nine), while `sense`
+        copied the whole `caps` block into `digest.json` and handed it to the
+        model, and the template promised "overflow goes to log/deferred.jsonl".
+        A run with the cap at 0 and twelve new entries left all twelve on disk and
+        never created that file. The key survived the guard above for two releases
+        because it is mentioned in `prompts/daily.*.md`.
+
+        The second hole this closes is subtler and caught `max_open_per_project`:
+        the guard above counts *any* string constant, so a key that exists only
+        as an entry in a `*_DEFAULTS` literal reads as "something reads this". A
+        default is not a consumer. Here a key counts as enforced only if some
+        module actually *loads* it -- `x["key"]` or `x.get("key")` -- which is a
+        thing a dict literal cannot be mistaken for.
+        """
+        import ast
+
+        # Anything genuinely advisory goes here, with the reason, and the test
+        # below fails if an entry stops being advisory. An empty list is the
+        # honest state today and is meant to stay that way: the point of the
+        # allowlist is that adding to it is a visible act.
+        advisory = {}
+
+        loaded = set()
+        for path in sorted((REPO_ROOT / "src" / "nextbrief").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+                    if isinstance(node.slice.value, str):
+                        loaded.add(node.slice.value)
+                elif (isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "get"
+                      and node.args
+                      and isinstance(node.args[0], ast.Constant)
+                      and isinstance(node.args[0].value, str)):
+                    loaded.add(node.args[0].value)
+
+        for rel, label in self.CONFIGS:
+            for full, leaf in self._leaves(self._template(rel)):
+                block = full.split(".")[0]
+                if block not in ("caps", "limits"):
+                    continue
+                if leaf in advisory:
+                    self.assertNotIn(
+                        leaf, loaded,
+                        "%s lists %r as advisory but a module now loads it -- "
+                        "take it off the allowlist" % (label, full))
+                    continue
+                # `assertTrue` rather than `assertIn`: the haystack is every
+                # string key the package loads, and printing it buries the one
+                # sentence that says what to do about the failure.
+                self.assertTrue(
+                    leaf in loaded,
+                    "%s ships %r under %r, and nothing in src/nextbrief ever reads "
+                    "that key. `caps` promises the renderer enforces it; a number "
+                    "only the model can see is the one thing it promises not to be. "
+                    "Enforce it, delete it, or put it in this test's `advisory` map "
+                    "with the reason." % (label, full, block))
 
     def test_the_example_workspace_cannot_push_a_real_notification(self):
         """Its own comment promises this, and the key it used could not keep it.

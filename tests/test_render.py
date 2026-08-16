@@ -1199,3 +1199,126 @@ class TheBriefShowsTheCriteriaAndNothingShapedLikeThem(RenderCase):
                                      "* [ ] #1 the old aggregate still resolves",
                                      "<!-- AC:END -->"]))
         self.assertIn("the old aggregate still resolves", page)
+
+
+class UnrecognisedBriefFields(RenderCase):
+    """NA-0056: what happens to a top-level key in `brief.json` nothing reads.
+
+    The engine drops unverifiable claims *loudly* -- a counter, a line in
+    `log/rejected.jsonl`, a reminder on the page. Until this class existed it
+    dropped unrecognised keys *silently*: `render.py` reads the brief through two
+    hardcoded tuples and has no general traversal, so `suggestions` -- which the
+    daily prompt asks for twice, as the model's one sanctioned outlet for a
+    deadline it is forbidden to write itself -- was generated every night and
+    discarded without a single number anywhere moving off zero.
+
+    The lesson these tests hold is not "a field was missing". It is that
+    discarding must be counted, whatever the field is and whoever adds it next.
+    """
+
+    def _render_with(self, brief):
+        write_backlog_item(self.ws, "NA-0001", title="An open item")
+        write_brief_json(self.ws, brief)
+        code, out, err = self.render()
+        self.assertEqual(code, 0, err)
+        return out, err
+
+    def test_an_unknown_top_level_key_lands_in_a_countable_bucket(self):
+        """The regression guard. A key nobody wired up is counted, logged and
+        named -- so the next field added to the schema and forgotten costs its
+        author a visible number on the first run instead of a year of silence."""
+        self._render_with({"totally_made_up_key": ["some future field"]})
+
+        runs = read_jsonl(self.ws / "log" / "runs.jsonl")
+        self.assertEqual(runs[-1]["unknown_fields"], 1,
+                         "an unrecognised top-level key was not counted")
+
+        rejected = read_jsonl(self.ws / "log" / "rejected.jsonl")
+        unrecognised = [r for r in rejected if r.get("kind") == "unrecognised_field"]
+        self.assertEqual([r["where"] for r in unrecognised], ["totally_made_up_key"])
+
+        # Counted *and* said out loud. A number in a log nobody opens is the
+        # same silence in a smaller room.
+        self.assertIn("no renderer reads", (self.ws / "BRIEF.md").read_text(encoding="utf-8"))
+
+    def test_the_engines_own_scratch_keys_are_not_counted_as_waste(self):
+        """`_gated` is written by `gate_maps` on the way past, and the example
+        workspace carries `_fixture`. Counting either would put a permanent
+        non-zero floor under a number whose only value is that zero means zero.
+        """
+        self._render_with({"_fixture": True, "next_actions": []})
+        runs = read_jsonl(self.ws / "log" / "runs.jsonl")
+        self.assertEqual(runs[-1]["unknown_fields"], 0)
+
+    def test_a_recognised_key_is_not_counted(self):
+        """The positive control for the test above: the counter can reach 1 in
+        this same fixture, so a 0 there means "not counted", not "never ran"."""
+        self._render_with({"delegated": {}, "made_up": 1})
+        runs = read_jsonl(self.ws / "log" / "runs.jsonl")
+        self.assertEqual(runs[-1]["unknown_fields"], 1)
+        rejected = read_jsonl(self.ws / "log" / "rejected.jsonl")
+        self.assertEqual([r["where"] for r in rejected if r.get("kind") == "unrecognised_field"],
+                         ["made_up"])
+
+
+class UnverifiedProposals(RenderCase):
+    """NA-0056 option A: `suggestions` reaches the reader, labelled.
+
+    These carry no evidence by design -- the prompt forbids the engine from
+    editing the registry, so proposing here is the compensation -- which makes
+    the label the entire safety property. Both writers are asserted on together
+    because `decision_notes` once reached the reader through BRIEF.html alone,
+    three lines above a footer stating that every claim had passed the gate.
+    """
+
+    def _render_with_suggestion(self, text="consider adding 2026-09-01 to registry.deadlines"):
+        write_backlog_item(self.ws, "NA-0001", title="An open item")
+        write_brief_json(self.ws, {"suggestions": [text]})
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        return ((self.ws / "BRIEF.md").read_text(encoding="utf-8"),
+                (self.ws / "BRIEF.html").read_text(encoding="utf-8"))
+
+    def test_a_suggestion_reaches_both_renderers(self):
+        md, html = self._render_with_suggestion()
+        self.assertIn("consider adding 2026-09-01", md, "lost on the way to BRIEF.md")
+        self.assertIn("consider adding 2026-09-01", html, "lost on the way to BRIEF.html")
+
+    def test_both_renderers_mark_it_unverified(self):
+        """Not dressed as a checked claim. The words differ between the two
+        formats; the promise must not."""
+        md, html = self._render_with_suggestion()
+        for name, page in (("BRIEF.md", md), ("BRIEF.html", html)):
+            self.assertIn("nothing verified them", page,
+                          "%s shows the proposal without saying it is unchecked" % name)
+
+    def test_a_suggestion_is_not_counted_as_a_dropped_claim(self):
+        """It is labelled, not gated. Routing it through the evidence gate would
+        drop every one of them -- no source, no claim -- which is the behaviour
+        this section exists to end."""
+        self._render_with_suggestion()
+        runs = read_jsonl(self.ws / "log" / "runs.jsonl")
+        self.assertEqual(runs[-1]["dropped_claims"], 0)
+        self.assertEqual(runs[-1]["unknown_fields"], 0)
+
+
+class OperatorDiagnostics(RenderCase):
+    """NA-0056 option A, the low-risk half: `cost_note`.
+
+    An ops diagnostic addressed to whoever runs the engine, not to whoever reads
+    the brief -- the rule `should_notify` already states about its own English
+    reasons. So it goes to `log/runs.jsonl` and stays off the page.
+    """
+
+    def test_cost_note_reaches_the_run_record_and_not_the_brief(self):
+        write_backlog_item(self.ws, "NA-0001", title="An open item")
+        write_brief_json(self.ws, {"cost_note": "18,400 output tokens"})
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+
+        runs = read_jsonl(self.ws / "log" / "runs.jsonl")
+        self.assertEqual(runs[-1]["diagnostics"], {"cost_note": "18,400 output tokens"})
+        # Recognised, so not waste; and off the page, so not clutter.
+        self.assertEqual(runs[-1]["unknown_fields"], 0)
+        self.assertNotIn("18,400 output tokens",
+                         (self.ws / "BRIEF.md").read_text(encoding="utf-8"))

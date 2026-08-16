@@ -112,7 +112,13 @@
     "max_next_actions": 3,        // across the WHOLE portfolio, not per project. N projects x 5 items is how these systems die
     "max_waiting_for": 5,
     "max_agent_queue": 3,
-    "max_new_items_per_run": 5,   // overflow goes to log/deferred.jsonl, never straight into backlog
+    // New entries this run may put in front of you. "New" means "not in git HEAD":
+    // the same baseline the write-permission gate uses, so committing the ones you
+    // want is how you accept them and raise the ceiling. Overflow keeps its file on
+    // disk untouched, gets a row in log/deferred.jsonl, and stays off the page until
+    // it is committed. It does not say "never created" -- by the time the renderer
+    // runs the file already exists, and no renderer can un-create it.
+    "max_new_items_per_run": 5,
     "max_decision_pending": 3,
 
     // How many "only you can answer this" questions the brief may carry.
@@ -128,8 +134,15 @@
   },
 
   "limits": {
-    "max_open_items_total": 40,   // hard ceiling. At the ceiling, no new items may be created that day, and the brief says so
-    "max_open_per_project": 5
+    // Hard ceiling on open items. At the ceiling a run adds nothing: the same
+    // machinery that enforces caps.max_new_items_per_run holds every new entry
+    // back, the brief says so in a banner, and the files wait on disk for you to
+    // prune or commit. Whichever of the two numbers is tighter wins.
+    "max_open_items_total": 40
+    // There was a `max_open_per_project: 5` here, read by nobody, and it is gone
+    // rather than implemented. Enforcing it would mean hiding open work from the
+    // page, and a project that looks quiet because its items were suppressed is
+    // the one lie this engine must never tell.
   },
 
   "decay": {

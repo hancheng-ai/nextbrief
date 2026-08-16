@@ -144,6 +144,10 @@ button.copied{border-color:var(--ok);color:var(--ok)}
 @media(min-width:700px){.grid2{grid-template-columns:1fr 1fr}}
 ul.plain{margin:0;padding-left:19px}
 ul.plain li{margin:5px 0}
+/* The unverified-proposals caveat. Dimmed like the footer but kept at body size
+   -- it is the one line on the page that changes how the lines under it should
+   be read, so it must not be the one line a reader's eye skips. */
+.caveat{margin:0 0 9px;color:var(--dim)}
 .foot{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
   color:var(--dim);font-size:12px;line-height:1.7}
 .toggle{position:fixed;top:14px;right:14px;z-index:9}
@@ -556,6 +560,24 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
         A("<h2>%s</h2><div class=card><ul class=plain>" % e(cat.t("brief.section.reminders")))
         for r in rem[:8]:
             A("<li>%s</li>" % md_inline(r))
+        A("</ul></div>")
+
+    # ---------- unverified proposals (NA-0056) ----------
+    #
+    # Same list object the Markdown used, not a second read of `brief` -- the
+    # divergence `gate_maps` records happened precisely because the two writers
+    # each decided for themselves, and `decision_notes` reached the reader
+    # through this file alone, three lines above a footer promising that
+    # everything had passed the gate. The caveat is rendered here for the same
+    # reason it is rendered there: this section sits above that same footer, and
+    # these lines are the one thing on the page the footer is not true of.
+    props = notes.get("suggestions") or []
+    if props:
+        A("<h2>%s</h2><div class=card><p class=caveat>%s</p><ul class=plain>"
+          % (e(cat.t("brief.section.suggestions")),
+             md_inline(cat.t("brief.suggestions.caveat"))))
+        for s in props[:5]:
+            A("<li>%s</li>" % md_inline(str(s).strip()))
         A("</ul></div>")
 
     A("<div class=foot>%s<br>%s</div>"
