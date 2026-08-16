@@ -27,6 +27,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written where the sample is chosen, so it can be argued with instead of
   rediscovered.
 
+### Fixed
+
+- **A cap only the model could see.** `caps.max_new_items_per_run` had **zero**
+  references in `src` or `tests` — the sibling `max_next_actions` had nine, which
+  is what makes that a measurement rather than an impression. `sense` copied the
+  whole `caps` block into `digest.json`, so the number reached the model and was
+  enforced by nobody. Three lines above it, the config template promised the
+  opposite in as many words: *"Caps are enforced by the renderer, not by asking
+  the model politely."* Set it to 0, write twelve new entries, run the renderer:
+  all twelve survived, two reached the page, and `log/deferred.jsonl` was never
+  created. The defer machinery was alive the whole time — setting
+  `max_next_actions` to 0 on the same workspace wrote a deferred row immediately
+  — so this one path had simply never been wired.
+
+  One thing the fix deliberately does not do: honour the template's literal
+  *"never straight into backlog"*. By the time the renderer runs the files exist,
+  and deleting backlog entries would break its own contract — it writes derived
+  files and decides nothing. So the cap is enforced where the renderer actually
+  has authority, over what reaches the page, and the template now says that
+  instead of promising something no renderer can deliver.
+  `limits.max_open_items_total` is enforced through the same allowance; it had
+  been printing *"the backlog is at its hard ceiling of N"* while nothing moved.
+  `limits.max_open_per_project` was read by nobody and is gone, with a comment
+  recording why rather than a silent deletion.
+
+- **A field the model wrote every night and nothing ever read.**
+  `suggestions` had zero consumers (control: `decision_notes` had fourteen).
+  `render` reads brief keys from a hardcoded list, so an unrecognised top-level
+  key was neither rendered nor recorded — a sentinel injected into `brief.json`
+  reached BRIEF.md, BRIEF.html, `rejected.jsonl` and `runs.jsonl` in none of
+  them. This mattered more than a missing field because the prompt *forbids* the
+  model from harvesting deadlines out of prose and offers `suggestions` as its
+  one sanctioned outlet: the work happened nightly and was discarded rather than
+  gated, so the "claims dropped" counter never fired and neither end could see
+  the loss. Suggestions now render as explicitly-unverified proposals — labelled,
+  not gated, because they cite no evidence by design and the evidence gate would
+  simply drop them all. That caveat is the entire safety property.
+
+  The part that outlives the field: an explicit key registry replaces the
+  anonymous tuple, separating claim sections, gated maps, unverified lists,
+  operator diagnostics, and *deliberately not rendered* — and any top-level key
+  no renderer consumes is now counted into `rejected.jsonl`. Merging "nobody
+  decided this" with "somebody decided against it" would make one counter mean
+  two things, which is the defect it exists to catch.
+
+- **A worktree was counted as its own project.** A linked `git worktree` was
+  discovered separately from its repository, so the same commits were counted
+  twice and portfolio activity read high. Measured on a real portfolio: sum 719,
+  primary-checkout-only 369, sha union **375** — the sum double-counts and
+  reading only the primary checkout hides six genuinely unmerged commits, so the
+  union is the honest figure. A worktree whose main repository lies outside the
+  scanned root is *not* folded, because there it is the only copy present and
+  skipping it would hide work rather than deduplicate it. `branch` and
+  `last_commit` still read the primary checkout: where a tree is parked and how
+  much a repository did are different questions. A repository with no linked
+  worktrees produces byte-identical output.
+
+- **A recency cap over a mixed set.** Closed items were compacted to the twelve
+  most recently updated. That is correct for `done`, which is an event and
+  expires, and wrong for `dropped`, which is a decision and does not. There was
+  exactly one dropped item in twenty-three and it ranked nineteenth — seven
+  places outside the window — so the single recorded refusal was about to stop
+  being visible to the agent that would then be free to propose the very thing
+  already refused. `closed.dropped` is now complete and never capped however old,
+  and the prompts say that arriving back at one calls for naming the new fact
+  that reopens it, not for re-proposing it.
+
 ## [0.3.0] - 2026-08-14
 
 Everything `0.3.0rc1` carried, plus exactly one change, listed below. This
