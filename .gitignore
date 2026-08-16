@@ -54,5 +54,18 @@ Icon?
 # pattern does not match.
 .claude/
 
+# Generated codebase knowledge graph (understand-anything). Unlike `.claude/`
+# above this carries no absolute paths -- every filePath in it is repo-relative
+# -- so it is ignored for staleness rather than for privacy: it is derived
+# entirely from the tree, runs to ~1MB, and `meta.json` pins it to one commit
+# hash. Committed, it would go quietly wrong on the next commit that touched a
+# tracked file, and nothing in `git status` would say so. Regenerate with
+# `/understand` instead. Anchored for the reason given above: the tool creates
+# it at the repo root only, and a bare pattern would match at every depth. The
+# second line is the tool's legacy directory name, kept so an older plugin
+# version cannot leave an unignored copy behind.
+/.ua/
+/.understand-anything/
+
 # Icon build scratch
 packaging/icon/__pycache__/
