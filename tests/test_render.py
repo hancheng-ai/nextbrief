@@ -8,6 +8,7 @@ makes the next run's snapshot differ from this one's for no reason at all.
 
 from __future__ import annotations
 
+import html as html_mod
 import json
 import os
 import re
@@ -27,7 +28,7 @@ from helpers import (
     write_snapshot,
 )
 
-from nextbrief import priority, render, sense
+from nextbrief import cli, priority, render, sense
 from nextbrief.i18n import load_catalog
 
 
@@ -1322,3 +1323,306 @@ class OperatorDiagnostics(RenderCase):
         self.assertEqual(runs[-1]["unknown_fields"], 0)
         self.assertNotIn("18,400 output tokens",
                          (self.ws / "BRIEF.md").read_text(encoding="utf-8"))
+
+
+class BackingStates(TempCase):
+    """NA-0059: what a next action with no resolvable `backlog_id` may print.
+
+    THE REGRESSION THIS CLASS EXISTS FOR is
+    `test_the_three_states_do_not_render_identically`. Everything else here keeps
+    that one from being satisfied trivially.
+
+    No component was wrong. `backlog_id` is written by the model; the renderer
+    printed a `nextbrief show <id>` line only when it was there; both correct.
+    What was wrong is that the ABSENCE of that line carried three unrelated
+    meanings at once -- the model did not link one / the board is empty but was
+    not always / the board has never had anything on it -- and the third, over a
+    hard deadline, is the night before an incident rendered byte-identically to
+    "you just finished everything".
+
+    Driven through `cli.main` rather than `render.main` because `python3 -m
+    nextbrief ... render` is what a scheduler actually runs.
+    """
+
+    LIVE = "orchard"        # two open items, neither linked      -> state (1)
+    CLOSED = "kiln"         # nothing open, one closed            -> state (2)
+    BARE = "quarry"         # nothing open, nothing ever closed   -> state (3)
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        write_snapshot(self.ws, make_snapshot(
+            projects=[make_project_entry(self.LIVE), make_project_entry(self.CLOSED),
+                      make_project_entry(self.BARE)],
+            evidence_index={
+                "orchard/PROJECT_STATUS.md": {"kinds": ["doc_declared", "file_mtime"],
+                                              "value": "2026-03-10"},
+                "kiln/README.md": {"kinds": ["file_mtime"], "value": None},
+                "quarry/README.md": {"kinds": ["file_mtime"], "value": None},
+                "deadline:2026-03-17": {"kinds": ["human"], "value": "Final, worth 50%"},
+            }))
+        write_backlog_item(self.ws, "NA-0001", project=self.LIVE, title="Open one")
+        write_backlog_item(self.ws, "NA-0002", project=self.LIVE, title="Open two")
+        write_backlog_item(self.ws, "NA-0003", project=self.CLOSED, status="done",
+                           title="Already finished", is_next_action=False)
+
+    # -- fixture plumbing ---------------------------------------------------
+
+    # Matched on the model's own words rather than on the "Evidence:" label,
+    # because the label is translated and `--locale zh` prints 证据 -- which let
+    # the evidence line survive into `card()` and made the Chinese assertions
+    # fail for a reason that had nothing to do with what they test.
+    EVIDENCE = "an evidence line"
+
+    def action(self, project, source, **over):
+        a = {"title": "Do the thing on %s" % project, "project": project,
+             "estimate": "30m", "who": "you", "evidence_line": self.EVIDENCE,
+             "evidence": [{"kind": "file_mtime", "source": source}]}
+        a.update(over)
+        return a
+
+    def three_states(self):
+        return [
+            self.action(self.LIVE, "orchard/PROJECT_STATUS.md"),
+            self.action(self.CLOSED, "kiln/README.md"),
+            self.action(self.BARE, "deadline:2026-03-17",
+                        evidence=[{"kind": "human", "source": "deadline:2026-03-17"}]),
+        ]
+
+    def render_actions(self, actions, *args):
+        write_brief_json(self.ws, {"next_actions": actions})
+        code, _, err = capture(
+            cli.main, ["--workspace", str(self.ws), "render", "--no-notify"] + list(args))
+        self.assertEqual(code, 0, err)
+        return ((self.ws / "BRIEF.md").read_text(encoding="utf-8"),
+                (self.ws / "BRIEF.html").read_text(encoding="utf-8"))
+
+    @classmethod
+    def card(cls, md, n):
+        """What the RENDERER contributed to card ``n`` of BRIEF.md.
+
+        The model's own title and evidence line are dropped, because the bug was
+        that the renderer contributed *the same zero bytes* to every card and the
+        only differences on the page were the model's prose.
+        """
+        lines = md.splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln.startswith("%d. **" % n))
+        out = []
+        for ln in lines[start + 1:]:
+            if not ln.startswith("   "):
+                break
+            if cls.EVIDENCE not in ln:
+                out.append(ln)
+        return "\n".join(out).strip()
+
+    @staticmethod
+    def html_cards(page):
+        start = page.index("Do these first")
+        return page[start:page.index("<h2>", start + 10)].split("<div class=card>")[1:]
+
+    @staticmethod
+    def backing_of(card):
+        m = re.search(r"<div class='backing[^']*'>(.*?)</div>", card, re.S)
+        return m.group(1) if m else ""
+
+    @staticmethod
+    def words(text):
+        """One sentence, stripped of whichever markup it happened to arrive in.
+
+        So that "the two artifacts say the same thing" can be asserted rather
+        than assumed -- which is the whole reason `render.py` and `html.py` are
+        required to move in the same commit.
+        """
+        text = html_mod.unescape(re.sub(r"<[^>]+>", "", text))
+        return " ".join(text.lstrip("> ").replace("*", "").replace("`", "").split())
+
+    # -- the regression -----------------------------------------------------
+
+    def test_the_three_states_do_not_render_identically(self):
+        """★ The assertion this whole item is about, in BOTH artifacts. ★
+
+        Before the fix `card(md, n)` was the empty string for all three, and the
+        three HTML cards differed only in the model's title and tags. Any later
+        change that collapses two of these states back together fails here
+        instead of in somebody's morning.
+        """
+        md, page = self.render_actions(self.three_states())
+
+        md_cards = [self.card(md, n) for n in (1, 2, 3)]
+        for n, text in enumerate(md_cards, 1):
+            self.assertTrue(text, "BRIEF.md card %d says nothing about its board" % n)
+        self.assertEqual(len(set(md_cards)), 3, "BRIEF.md states collapse: %r" % md_cards)
+
+        cards = self.html_cards(page)
+        self.assertEqual(len(cards), 3)
+        backings = [self.backing_of(c) for c in cards]
+        for n, text in enumerate(backings, 1):
+            self.assertTrue(text, "BRIEF.html card %d says nothing about its board" % n)
+        self.assertEqual(len(set(backings)), 3, "BRIEF.html states collapse: %r" % backings)
+
+        # ...and the two artifacts say the SAME thing per state. One renderer
+        # phrasing this differently from the other is how `decision_notes` went
+        # wrong: BRIEF.html carried a sentence BRIEF.md had dropped.
+        for n in (1, 2, 3):
+            self.assertEqual(self.words(md_cards[n - 1]), self.words(backings[n - 1]),
+                             "MD and HTML disagree about card %d" % n)
+
+    def test_the_bare_state_is_the_loud_one_in_both(self):
+        """AC #4. The other two are information; this one is a warning.
+
+        Loud has to survive `cat BRIEF.md`, not only a browser -- the Markdown is
+        what gets diffed, pasted into a session and read over SSH.
+        """
+        md, page = self.render_actions(self.three_states())
+        self.assertIn("\n   > ", md)                      # blockquoted in the list item
+        self.assertTrue(self.card(md, 3).startswith("> "), self.card(md, 3))
+        self.assertFalse(self.card(md, 1).startswith(">"))
+        self.assertFalse(self.card(md, 2).startswith(">"))
+
+        cards = self.html_cards(page)
+        self.assertIn("class='backing loud'", cards[2])
+        self.assertNotIn("loud", cards[0])
+        self.assertNotIn("loud", cards[1])
+        # The remedy costs the same as the report: one copyable command.
+        self.assertIn("nextbrief new --project quarry", cards[2])
+        # And it reaches the section a reader scans when not reading cards.
+        self.assertIn("nothing on the board tracking it", md)
+
+    def test_the_deadline_is_named_only_where_it_bites(self):
+        """A `deadline:` source over an empty board is the measured incident.
+
+        The same evidence over a board that HAS items is not a failure and gets
+        no escalation. Keeping the loud line at exactly one meaning is what stops
+        it from being tuned out.
+        """
+        dl = [{"kind": "human", "source": "deadline:2026-03-17"}]
+        md, _ = self.render_actions([
+            self.action(self.LIVE, "orchard/PROJECT_STATUS.md", evidence=dl),
+            self.action(self.BARE, "deadline:2026-03-17", evidence=dl),
+        ])
+        self.assertNotIn("deadline", self.card(md, 1))
+        self.assertIn("deadline", self.card(md, 2))
+
+    # -- the three ways the loud state could cry wolf -----------------------
+
+    def test_a_deferred_board_is_not_reported_as_empty(self):
+        """A parked item IS tracking this; it is only hidden until its date.
+
+        Counting it as "nothing on the board" would fire the loudest line in the
+        file at a workspace that did everything right, and a warning that cries
+        wolf is switched off within the week.
+        """
+        write_backlog_item(self.ws, "NA-0009", project=self.BARE, status="deferred",
+                           deferred_until="2026-06-01", title="Comes back in June")
+        md, page = self.render_actions([self.action(self.BARE, "quarry/README.md")])
+        self.assertIn("deferred", self.card(md, 1))
+        self.assertNotIn("loud", self.html_cards(page)[0])
+
+    def test_a_delegated_project_is_not_reported_as_untracked(self):
+        """Its next step lives in its own daily entry, by declaration.
+
+        `classify` already refuses to call such a project stalled for exactly
+        this reason; the loud state has to make the same exception or it
+        contradicts the project table three sections further down.
+        """
+        write_snapshot(self.ws, make_snapshot(
+            projects=[make_project_entry(self.BARE,
+                                         has_own_daily_entry="quarry/DAILY.md")],
+            evidence_index={"quarry/README.md": {"kinds": ["file_mtime"], "value": None}}))
+        md, page = self.render_actions([self.action(self.BARE, "quarry/README.md")])
+        self.assertIn("DAILY.md", self.card(md, 1))
+        self.assertNotIn("loud", self.html_cards(page)[0])
+
+    def test_an_unbootstrapped_backlog_does_not_repeat_itself_in_reminders(self):
+        """Every card is state (3) in a workspace with no backlog at all, and
+        `reminder.empty_backlog` already says the one useful thing there. One
+        reminder per card is how a section stops being read at all."""
+        for f in (self.ws / "backlog").glob("*.md"):
+            f.unlink()
+        md, _ = self.render_actions([self.action(self.BARE, "quarry/README.md")])
+        self.assertIn("backlog is still empty", md)
+        self.assertNotIn("nothing on the board tracking it", md)
+
+    # -- the ways an absence used to get through ----------------------------
+
+    def test_a_dangling_backlog_id_is_not_treated_as_linked(self):
+        """The same hole one level down: BRIEF.html required the id to resolve
+        before printing its command, so a `backlog_id` naming an item that does
+        not exist printed nothing and looked exactly like an absent one."""
+        md, page = self.render_actions(
+            [self.action(self.CLOSED, "kiln/README.md", backlog_id="NA-9999")])
+        self.assertTrue(self.card(md, 1))
+        self.assertNotIn("nextbrief show NA-9999", page)
+        self.assertIn("class='backing", page)
+
+    def test_a_linked_action_still_gets_its_command_and_no_backing(self):
+        """The control. Without it the regression above could be satisfied by
+        printing a backing line on every card, which is not the fix."""
+        md, page = self.render_actions(
+            [self.action(self.LIVE, "orchard/PROJECT_STATUS.md", backlog_id="NA-0001")])
+        self.assertEqual(self.card(md, 1), "")
+        self.assertIn("nextbrief show NA-0001", page)
+        self.assertNotIn("class='backing", page)
+
+    # -- guards on the commands and on the seam -----------------------------
+
+    def test_the_commands_it_names_all_exist(self):
+        """`reminder.empty_backlog` once named `nextbrief bootstrap`, which has
+        never existed and exits 2 -- in the one line the very first brief gives a
+        new user. The first draft of `BACKING_COMMANDS` repeated the mistake
+        twice over: `nextbrief add`, which is spelled `new`, and `nextbrief ls
+        --project`, for which `ls` has no such flag. `--help` exercises the
+        subcommand AND its flags, which a membership test would not.
+        """
+        checked = 0
+        for template in render.BACKING_COMMANDS.values():
+            if not template:
+                continue
+            argv = template.format(pid="orchard").split()[1:] + ["--help"]
+            code, out, err = capture(cli.main, argv)
+            self.assertEqual(code, 0, "`nextbrief %s` is not a real command: %s"
+                             % (" ".join(argv[:-1]), err))
+            self.assertIn("usage:", out)
+            checked += 1
+        self.assertGreater(checked, 2, "the loop checked almost nothing")
+
+    def test_both_readings_of_the_open_question_are_translated(self):
+        """NA-0059 criterion #3 belongs to the owner, not to the agent: whether
+        state (2) reads as "you just finished this" or as "nothing tracks this".
+        Both wordings ship, in both languages, so choosing between them is one
+        edit to `BACKING_KEYS` and not a translation project."""
+        for locale in ("en", "zh"):
+            cat = load_catalog(locale)
+            for key in ("brief.backing.closed_only.finished",
+                        "brief.backing.closed_only.untracked"):
+                self.assertTrue(cat.has(key), "%s missing from %s" % (key, locale))
+                self.assertNotEqual(cat.t(key), key)
+
+    def test_switching_the_seam_moves_that_wording_and_nothing_else(self):
+        """The seam's cost, asserted rather than claimed. Repointing one entry of
+        `BACKING_KEYS` moves the sentence in both artifacts and leaves the other
+        two states exactly where they were."""
+        before_md, before_page = self.render_actions(self.three_states())
+        original = render.BACKING_KEYS[render.BACKING_CLOSED_ONLY]
+        render.BACKING_KEYS[render.BACKING_CLOSED_ONLY] = \
+            "brief.backing.closed_only.untracked"
+        try:
+            after_md, after_page = self.render_actions(self.three_states())
+        finally:
+            render.BACKING_KEYS[render.BACKING_CLOSED_ONLY] = original
+        self.assertNotEqual(self.card(before_md, 2), self.card(after_md, 2))
+        self.assertEqual(self.card(before_md, 1), self.card(after_md, 1))
+        self.assertEqual(self.card(before_md, 3), self.card(after_md, 3))
+        self.assertNotEqual(self.html_cards(before_page)[1], self.html_cards(after_page)[1])
+        self.assertEqual(self.html_cards(before_page)[2], self.html_cards(after_page)[2])
+
+    def test_it_speaks_chinese_too(self):
+        """Both catalogs are first-class here for the same reason as everywhere
+        else in this engine: the loud state has to be loud in the reader's own
+        language, or it is loud only for the half of the audience that reads
+        English."""
+        md, page = self.render_actions(self.three_states(), "--locale", "zh")
+        self.assertIn("没有", self.card(md, 3))
+        self.assertTrue(self.card(md, 3).startswith("> "))
+        self.assertIn("class='backing loud'", page)
+        self.assertEqual(len({self.card(md, n) for n in (1, 2, 3)}), 3)

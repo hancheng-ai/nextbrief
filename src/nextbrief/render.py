@@ -51,14 +51,22 @@ from .annotate import QUESTIONS, pending_count, question_targets
 from .frontmatter import parse_frontmatter
 from .fs import append_jsonl, append_text, remove_fields, rewrite_fields, write_text
 from .i18n import Catalog, load_catalog
-from .items import HUMAN_ONLY_STATUSES, days_until_due, is_live, is_parked
+from .items import (
+    HUMAN_ONLY_STATUSES,
+    TERMINAL_STATUSES,
+    days_until_due,
+    is_live,
+    is_parked,
+)
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
 from .sense import status_of
 
 __all__ = [
     "main", "classify", "render_brief", "declared_impact",
-    "evidence_phrase",
+    "evidence_phrase", "action_backing", "backing_line", "backing_command",
+    "BACKING_KEYS", "BACKING_KEYS_DEADLINE", "BACKING_LOUD", "BACKING_REMINDS",
+    "BACKING_REMINDER_KEYS", "BACKING_COMMANDS",
     "check_evidence", "gate_maps", "gated_text", "md_cell", "non_goal_flag",
     "enforce_write_permissions", "apply_new_item_cap",
     "should_notify", "write_day_log", "append_jsonl",
@@ -1433,6 +1441,278 @@ def _days_until(deadline) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# what is behind a next action  (NA-0059)
+# ---------------------------------------------------------------------------
+#
+# ★ An absence used to carry three different meanings, and printed as nothing. ★
+#
+# `backlog_id` on a next action is written by the MODEL, never derived here. The
+# HTML printed a `nextbrief show <id>` line when it was there and printed nothing
+# when it was not -- so a missing line meant, indistinguishably:
+#
+#   (1) the project has live items and the model simply did not link one
+#   (2) the project has no live items, but some were closed
+#   (3) the project has no live items and never had one
+#
+# MEASURED 2026-08-16 on a real workspace, and this is the incident that produced
+# the item. Three cards rendered; the second and third carried a `nextbrief show
+# <id>` line and the first carried nothing (project names elided -- they are not
+# this repository's to publish):
+#
+#     next_actions[0]  backlog_id ABSENT
+#                      evidence=[{kind:human, source:"deadline:<the next day>"}]
+#     next_actions[1]  backlog_id present, resolves
+#     next_actions[2]  backlog_id present, resolves
+#
+# The first card's project had zero live items: its two open items were both
+# closed at 21:53, and `brief.json` was written at 21:56, so the model re-ran
+# AFTER the closures and still raised the card. It was right to: the evidence was
+# a hand-written `registry.jsonc` deadline for the next day, worth 50% of a
+# final, and a registry deadline is a different system from the backlog, which no
+# amount of closing items can satisfy. Every component behaved correctly. The
+# defect was that the composition printed nothing.
+#
+# State (3) is the one that bites. A hard deadline tomorrow with nothing on the
+# board tracking it rendered BYTE-IDENTICALLY to "you just finished everything".
+# One of those is good news and the other is the night before an incident.
+#
+# Two states were added after the fact because collapsing them would have made
+# the loud one lie, and a warning that cries wolf is deleted within a week:
+#
+#   `parked_only`   the board is not empty, it is DEFERRED. Something is tracking
+#                   this action; it is simply hidden until its date. Counting a
+#                   parked item as "nothing on the board" would fire the loudest
+#                   line in this file at a workspace that did everything right.
+#   `delegated`     the project declares its own daily entry point, so its next
+#                   step legitimately lives in another file and an empty backlog
+#                   is the expected state, not a gap. `classify` already refuses
+#                   to call such a project stalled for exactly this reason.
+#
+# No recency window. One was written and then thrown away in `sense.closed_block`
+# because measuring it refuted it -- this backlog closes in bursts, so a 14-day
+# window kept 22 of 23 items and saved nothing. Here the date is PRINTED instead,
+# which lets the reader judge recency with the fact rather than with our cutoff.
+
+BACKING_UNLINKED = "unlinked"
+BACKING_PARKED_ONLY = "parked_only"
+BACKING_CLOSED_ONLY = "closed_only"
+BACKING_NONE = "none"
+BACKING_DELEGATED = "delegated"
+
+# ★★ THE SEAM — NA-0059 acceptance criterion #3, and it is the OWNER'S call. ★★
+#
+# The agent that built this deliberately did NOT choose how state (2) should
+# read. The facts on disk are identical either way -- zero live, at least one
+# closed -- and the difference is tone, which is a product judgement about the
+# brief's voice:
+#
+#   "you just finished this"   reads the closure as completion. Warm, and right
+#                              when the closed item really was this action. Wrong
+#                              when the action came from a registry deadline that
+#                              closing a backlog item cannot possibly satisfy --
+#                              which is precisely the shape of the incident above.
+#   "nothing tracks this"      reads the closure as history. Safe, and right when
+#                              the board is genuinely empty in front of live work.
+#                              Wrong-ish when the reader did just finish, where it
+#                              scolds someone who deserves the opposite.
+#
+# What ships by default is the third option: state the two facts and claim
+# neither reading. Both opinionated wordings are already written, in both
+# catalogs, as `brief.backing.closed_only.finished` and
+# `brief.backing.closed_only.untracked`.
+#
+# SWITCHING COSTS ONE LINE. Point the `BACKING_CLOSED_ONLY` entry below at
+# whichever key you want; flip its `BACKING_REMINDS` entry to decide whether it
+# also earns a line in the Reminders section. Nothing else in either renderer
+# reads the state name, so no other file has to change -- except
+# `tests/test_i18n.py`, whose `_INDIRECT` list reads this dict so that a key
+# reachable only through it still has to exist in both languages.
+BACKING_KEYS = {
+    BACKING_UNLINKED: "brief.backing.unlinked",
+    BACKING_PARKED_ONLY: "brief.backing.parked_only",
+    BACKING_CLOSED_ONLY: "brief.backing.closed_only",
+    BACKING_NONE: "brief.backing.none",
+    BACKING_DELEGATED: "brief.backing.delegated",
+}
+
+# The same sentence with the deadline named, for the one combination the item
+# calls "the night before an incident". Only `none` has one: a deadline over a
+# board that has items on it is not the failure being reported.
+BACKING_KEYS_DEADLINE = {
+    BACKING_NONE: "brief.backing.none_deadline",
+}
+
+# Which states are rendered LOUD -- blockquoted in Markdown, warn-coloured and
+# bordered in HTML. Exactly one, and keeping it at exactly one is the point:
+# three warnings a morning is zero warnings by Thursday.
+BACKING_LOUD = {BACKING_NONE}
+
+# Whether a state also earns a line in Reminders, which is the section a reader
+# scans when they are not reading cards. `none` does because it is the one that
+# bites; `closed_only` is the owner's call (see the seam above) and ships False.
+#
+# Only the two states the seam is about are listed. The other three are
+# informational by construction -- there IS something on the board -- and giving
+# them a reminder would mean writing three more sentences in two languages to
+# repeat what the card already said. If a later decision wants one, add the state
+# here and add `reminder.backing.<state>` to both catalogs; `test_i18n` reads
+# `BACKING_REMINDER_KEYS` below, so a missing translation fails rather than
+# silently printing the bare key.
+BACKING_REMINDS = {
+    BACKING_CLOSED_ONLY: False,
+    BACKING_NONE: True,
+}
+
+BACKING_REMINDER_KEYS = {
+    BACKING_CLOSED_ONLY: "reminder.backing.closed_only",
+    BACKING_NONE: "reminder.backing.none",
+}
+
+# How many item ids a line may name before it stops being a sentence. Two is
+# enough to make "go look" concrete without turning a card into a list.
+BACKING_NAMED_IDS = 2
+
+
+def _backing_ids(items) -> List[str]:
+    """Up to `BACKING_NAMED_IDS` ids, newest first, tie-broken by id.
+
+    The tie-break is not decoration: two items closed on the same day is the
+    normal case for a backlog that closes in bursts, and without a total order
+    two runs over one snapshot would print different names -- which the
+    idempotence tests would catch as a rewrite, and a reader would catch as the
+    brief being untrustworthy about small things.
+    """
+    ordered = sorted(items, key=lambda b: (str(b.get("updated_date") or ""),
+                                           str(b.get("id") or "")), reverse=True)
+    return [str(b.get("id") or "?") for b in ordered[:BACKING_NAMED_IDS]]
+
+
+def action_backing(action, projects, backlog, today) -> Optional[dict]:
+    """What the renderer can establish from disk about the item behind a card.
+
+    Returns ``None`` when there is nothing to say -- the action names a backlog
+    item that exists, so the `nextbrief show` line already answers the question.
+    Otherwise a dict the two renderers both consume without re-deciding anything:
+    ``state`` is one of the ``BACKING_*`` constants, and the rest is the material
+    its sentence needs.
+
+    ``projects`` is the snapshot's project entries keyed by id; ``backlog`` is
+    every file in the backlog directory, terminal ones included, which is what
+    makes "and none were ever closed" a fact rather than an inference.
+
+    A ``backlog_id`` that does not resolve falls through to the same analysis
+    rather than being treated as linked. That is the ONE behaviour change for
+    cards that do carry the field, and it closes the same hole one level down:
+    the HTML already required ``bid in by_id`` before printing the command, so a
+    dangling id printed nothing and looked exactly like an absent one.
+    """
+    pid = action.get("project")
+    items = [b for b in backlog if b.get("project") == pid]
+    by_id = {str(b.get("id")): b for b in items}
+    bid = action.get("backlog_id")
+    if bid and str(bid) in by_id:
+        return None
+
+    live = [b for b in items if is_live(b, today)]
+    parked = [b for b in items if is_parked(b, today)]
+    closed = [b for b in items if status_of(b) in TERMINAL_STATUSES]
+    entry = (projects or {}).get(pid) or {}
+
+    if live:
+        state = BACKING_UNLINKED
+    elif parked:
+        state = BACKING_PARKED_ONLY
+    elif closed:
+        state = BACKING_CLOSED_ONLY
+    elif entry.get("has_own_daily_entry"):
+        state = BACKING_DELEGATED
+    else:
+        state = BACKING_NONE
+
+    # A deadline is the evidence that cannot be satisfied by closing a backlog
+    # item, so it is the evidence that makes an empty board dangerous rather than
+    # merely quiet. Read from the claim's own evidence list, which survives the
+    # gate intact, and matched on the `deadline:` prefix `sense` writes into the
+    # evidence index.
+    deadline = any(str((ev or {}).get("source") or "").startswith("deadline:")
+                   for ev in (action.get("evidence") or []) if isinstance(ev, dict))
+
+    return {
+        "state": state,
+        "project": pid,
+        "name": entry.get("name") or str(pid or "?"),
+        "live": len(live),
+        "parked": len(parked),
+        "closed": len(closed),
+        "live_ids": _backing_ids(live),
+        "closed_ids": _backing_ids(closed),
+        "closed_on": (sorted(str(b.get("updated_date") or "") for b in closed)[-1]
+                      if closed else ""),
+        "delegated_to": (Path(str(entry["has_own_daily_entry"])).name
+                         if entry.get("has_own_daily_entry") else ""),
+        "dangling_id": str(bid) if bid else "",
+        "deadline": deadline,
+        "loud": state in BACKING_LOUD,
+    }
+
+
+# The command that answers each state, written once in Python rather than five
+# times across two catalogs.
+#
+# ⚠ EVERY ONE OF THESE IS CHECKED TO BE A REAL SUBCOMMAND by
+# `test_render.BackingStates.test_the_commands_it_names_all_exist`, and that test
+# is not paranoia. `reminder.empty_backlog` shipped naming `nextbrief bootstrap`,
+# which has never existed and exits 2 -- in the ONE line the very first brief
+# gives a new user. The first drafts of this table had the same defect twice
+# over: `nextbrief add`, which is spelled `new`, and `nextbrief ls --project`,
+# which `ls` has no such flag for. A brief that answers "nothing is tracking
+# this" with a command that errors is worse than the silence it replaced.
+BACKING_COMMANDS = {
+    BACKING_UNLINKED: "nextbrief ls",
+    BACKING_PARKED_ONLY: "nextbrief ls --deferred",
+    BACKING_CLOSED_ONLY: "nextbrief closed {pid}",
+    BACKING_NONE: "nextbrief new --project {pid}",
+    BACKING_DELEGATED: "",
+}
+
+
+def backing_command(b) -> str:
+    """The command a reader can run to answer the state this card just reported.
+
+    Also what BRIEF.html hangs its copy button on, which is the reason it is a
+    function and not a literal in each renderer.
+    """
+    if not b:
+        return ""
+    return BACKING_COMMANDS.get(b.get("state"), "").format(
+        pid=str(b.get("project") or ""))
+
+
+def backing_line(b, cat: Catalog) -> str:
+    """The one sentence, rendered once for both artifacts.
+
+    Called by `render_brief` and by `html.render_html` with the same dict, for
+    the reason `gated_text` records in as many words: two renderers phrasing the
+    same fact independently is two renderers that will eventually disagree, and
+    `nextbrief open` shows the one most people actually read. The wrappers differ
+    -- an indented Markdown line against a `<div>` -- but the words do not.
+    """
+    if not b:
+        return ""
+    state = b.get("state")
+    key = BACKING_KEYS.get(state, "brief.backing.none")
+    if b.get("deadline") and state in BACKING_KEYS_DEADLINE:
+        key = BACKING_KEYS_DEADLINE[state]
+    sep = cat.t("sep.list")
+    return cat.t(key, project=b.get("name", ""), live=b.get("live", 0),
+                 parked=b.get("parked", 0), closed=b.get("closed", 0),
+                 items=sep.join(b.get("live_ids") or []),
+                 closed_items=sep.join(b.get("closed_ids") or []),
+                 date=b.get("closed_on", ""), file=b.get("delegated_to", ""),
+                 command=backing_command(b))
+
+
 def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None):
     run = snap.get("run") or {}
     gen = dt.datetime.fromisoformat(run["generated_at"])
@@ -1615,6 +1895,16 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
 
     # ---- do these first (whole portfolio) ----
     nexts = (brief or {}).get("next_actions") or []
+    # ★ Computed once here, rendered twice, and handed over in `notes` -- the
+    #   same route `probe_failures` and `reminders` take, and for the same
+    #   reason `gate_maps` records: MD and HTML diverged once before, and the fix
+    #   was to stop letting each artifact decide for itself. The list is aligned
+    #   with the capped `nexts` slice by position, so BRIEF.html indexes it
+    #   rather than recomputing anything.
+    projects_by_id = {p.get("id"): p for p in (snap.get("projects") or [])}
+    backings = [action_backing(a, projects_by_id, backlog, as_of)
+                for a in nexts[:caps["max_next_actions"]]]
+    notes["backings"] = backings
     if nexts:
         section(L, marks, "next_actions", cat.t("brief.section.next_actions"))
         for i, a in enumerate(nexts[:caps["max_next_actions"]], 1):
@@ -1631,6 +1921,16 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
                 L.append("   %s" % a["why"])
             if a.get("non_goal_flag"):
                 L.append("   " + cat.t("brief.action.non_goal_flag", non_goal=a["non_goal_flag"]))
+            # What is behind this card (NA-0059). An indented continuation line
+            # for the informational states; an indented BLOCKQUOTE for the loud
+            # one, because the three states have to be distinguishable in plain
+            # text and not only in a browser -- BRIEF.md is what gets catted,
+            # diffed and pasted into a session, and the state that bites must
+            # survive all three.
+            b = backings[i - 1]
+            if b:
+                line = backing_line(b, cat)
+                L.append(("   > " if b["loud"] else "   ") + line)
         L.append("")
     else:
         # v0: with no model in the loop, deterministic rules still answer
@@ -1850,6 +2150,23 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
         rem.append(cat.t(key, path="log/rejected.jsonl"))
     elif gate == "no_commits":
         rem.append(cat.t("reminder.write_gate_no_commits"))
+    # An action with nothing on the board behind it (NA-0059), repeated here for
+    # the reader who scans Reminders instead of reading cards. Ranked just under
+    # the write-gate group because it is the same class of fact -- a thing the
+    # engine can prove and the page was silent about -- and above stale docs,
+    # which are there every morning.
+    #
+    # Suppressed entirely when the backlog has never been bootstrapped: in that
+    # workspace EVERY action is state `none`, and `reminder.empty_backlog` two
+    # lines down already says the one useful thing. A warning that fires once per
+    # card on a workspace with no cards to fire about is how this section gets
+    # skipped forever after.
+    if meta["bootstrapped"]:
+        for b in notes.get("backings") or []:
+            if b and BACKING_REMINDS.get(b["state"]):
+                rem.append(cat.t(BACKING_REMINDER_KEYS[b["state"]],
+                                 project=b.get("name", ""),
+                                 command=backing_command(b)))
     if not meta["bootstrapped"]:
         # `nextbrief bootstrap` has never existed; it exits 2. This is the only
         # actionable instruction the very first brief gives, so naming a command

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A next action with nothing behind it said so by saying nothing.** A
+  `next_action` may carry `backlog_id`; the model writes that field and the
+  renderer printed a `nextbrief show <id>` line only when it was there. When it
+  was absent the renderer printed *nothing at all* — and that silence carried
+  three unrelated meanings at once: the project has live items and the model did
+  not link one; the project has no live items but has closed some; the project
+  has no live items and never had any.
+
+  Measured on a real workspace, 2026-08-16, which is how it was found. Three
+  cards rendered, two carrying a `nextbrief show <id>` line and one carrying
+  nothing. The bare card's only evidence was a hand-written `registry.jsonc`
+  deadline for the next day — hard, worth 50% of a final — and its project's
+  backlog was empty because its two open items had both been closed twenty-three
+  minutes before `brief.json` was written. So the model re-ran *after* the
+  closures and still raised the card, correctly: a registry deadline is a
+  different system from the backlog and closing an item cannot satisfy one. Every
+  component behaved correctly. The composition printed nothing.
+
+  **The third state is the one that bites.** A hard deadline tomorrow with
+  nothing on the board tracking it rendered byte-identically to "you just
+  finished everything". One of those is good news and the other is the night
+  before an incident.
+
+  The renderer already walks the backlog directory, so live and closed counts per
+  project were a count away — no new inputs, no new storage, no new dependency.
+  Where the line used to be absent it now states what can be established from
+  disk, in `BRIEF.md` and `BRIEF.html` both, from one sentence computed once. The
+  empty-board-with-a-deadline case is blockquoted in the Markdown and takes the
+  banner treatment inside its card in the HTML, and it is the only one that is
+  loud: a warning that fires three times a morning is not read by Thursday. Two
+  states were split out for the same reason — a board that is *deferred* rather
+  than empty, and a project that declares its own daily entry point — because
+  either one would otherwise have made the loud line cry wolf.
+
+  Two things it also closes, one level down: a `backlog_id` that does not resolve
+  used to print nothing and look exactly like an absent one, and it no longer
+  does; and every command these lines name is now checked to be a real
+  subcommand, after the first draft managed to invent two (`nextbrief add`, which
+  is spelled `new`, and `nextbrief ls --project`, for which `ls` has no such
+  flag) in the same file that records `reminder.empty_backlog` once shipping
+  `nextbrief bootstrap`.
+
+  **One thing is deliberately not decided here.** Whether the "no live items,
+  some closed" state should read as *you just finished this* or as *nothing
+  tracks this* — and whether it is a reminder — is a judgement about the brief's
+  voice, not about the facts, which are identical either way. Both wordings ship
+  in both catalogs; `BACKING_KEYS` and `BACKING_REMINDS` in `render.py` are the
+  one-line seam. What ships by default states the two facts and claims neither
+  reading.
+
 ## [0.4.0rc1] - 2026-08-16
 
 ### Added
