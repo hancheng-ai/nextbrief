@@ -27,10 +27,21 @@ LOCALE_DIR = Path(render_mod.__file__).resolve().parent / "locales"
 
 # Keys reached through a dict rather than written at the call site. Collected from
 # the modules themselves so that adding a signal or a tier cannot bypass the check.
+#
+# `BACKING_*` are read from the modules for a second reason as well. The wording
+# of one of those states is an open product question (NA-0059 criterion #3), and
+# the alternatives are already written in both catalogs; switching to one is
+# meant to be a single edit to `BACKING_KEYS`. Scraping the dict rather than
+# listing the keys here is what makes that edit safe -- flip it to a key that was
+# never translated and this test says so, instead of BRIEF.md printing the bare
+# key string at whoever flipped it.
 _INDIRECT = (
     list(render_mod.WEEKDAY_KEYS)
     + list(render_mod.SIGNAL_KEYS.values())
     + list(render_mod.TIER_KEYS.values())
+    + list(render_mod.BACKING_KEYS.values())
+    + list(render_mod.BACKING_KEYS_DEADLINE.values())
+    + list(render_mod.BACKING_REMINDER_KEYS.values())
     + list(html_mod.WEEKDAY_KEYS)
     + [k for k, _cls in html_mod.SIGNAL.values()]
     + [k for pair in html_mod.TIER_KEYS.values() for k in pair]

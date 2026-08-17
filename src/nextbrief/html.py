@@ -108,6 +108,15 @@ h2{font-size:15px;margin:34px 0 12px;color:var(--dim);font-weight:600;
 .ev{font-size:12.5px;color:var(--dim);border-left:2px solid var(--line);padding-left:9px;margin:7px 0}
 .why{font-size:13.5px;color:var(--fg);opacity:.86}
 .flag{font-size:12.5px;color:var(--warn);margin-top:6px}
+/* What is behind a card (NA-0059). The quiet states sit at `.ev` weight -- they
+   are context, not an alarm. The loud one takes the `.banner` treatment INSIDE
+   the card, because the state it reports (a next action with nothing on the
+   board tracking it, over a deadline) used to render as the absence of a line
+   and has to be impossible to mistake for the other two ever again. */
+.backing{font-size:12.5px;color:var(--dim);margin-top:7px}
+.backing.loud{color:var(--warn);font-size:13px;font-weight:600;
+  border-left:3px solid var(--warn);background:color-mix(in srgb,var(--warn) 8%,transparent);
+  padding:8px 12px;border-radius:0 6px 6px 0;margin:9px 0 0}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
 th{text-align:left;font-weight:600;color:var(--dim);font-size:12.5px;padding:9px 12px;
@@ -259,6 +268,8 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
     a second opinion.
     """
     from .render import (  # imported late: render must not import us at module level
+        backing_command,
+        backing_line,
         caps_of,
         classify,
         gated_text,
@@ -366,8 +377,50 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
             if a.get("non_goal_flag"):
                 A("<div class=flag>%s</div>"
                   % e(cat.t("brief.action.non_goal_flag", non_goal=a["non_goal_flag"])))
+            # ---------- what is behind this card (NA-0059) ----------
+            #
+            # This used to be one `if` whose else-branch was empty, and the
+            # emptiness was the bug: a `nextbrief show <id>` line meant "an item
+            # backs this", and no line meant nothing at all -- where "nothing at
+            # all" was three different situations, one of them a hard deadline
+            # with no item anywhere tracking it. The measurement that produced
+            # this is recorded over `action_backing` in render.py.
+            #
+            # `backings` is read out of `notes` positionally, exactly the way
+            # `reminders` and `probe_failures` already are: the verdict AND the
+            # sentence are the Markdown renderer's, so the two artifacts cannot
+            # end up describing the same board differently. This module still
+            # decides nothing.
+            #
+            # The order of the two branches matters. `action_backing` returns
+            # None exactly when the action names an item that exists, so a
+            # present backing is itself the proof that the command line must not
+            # be printed -- testing `bid in by_id` first would let a `backlog_id`
+            # pointing at ANOTHER project's item print a command here while
+            # BRIEF.md printed a backing line, which is the drift this whole
+            # arrangement exists to prevent. With no `backings` in `notes` (a
+            # caller that invoked this module directly) the fallback is the
+            # pre-NA-0059 behaviour rather than a crash.
             bid = a.get("backlog_id")
-            if bid and bid in by_id:
+            backings = notes.get("backings") or []
+            b = backings[i - 1] if i - 1 < len(backings) else None
+            if b:
+                A("<div class='backing%s'>%s</div>"
+                  % (" loud" if b.get("loud") else "",
+                     md_inline(backing_line(b, cat))))
+                add = backing_command(b) if b.get("loud") else ""
+                if add:
+                    # The loud state is the only one that ends in "and there is
+                    # nothing to open", so it is the only one that has to hand
+                    # over a way to create it. Same copy affordance as a linked
+                    # card, so the remedy costs the same as the report. The
+                    # command comes from `backing_command` rather than a literal
+                    # here: the sentence above already names it, and two spellings
+                    # of one command in one card is a typo waiting to happen.
+                    A("<div class=cmd><code>%s</code>"
+                      "<button onclick=\"cp(this,'%s')\">%s</button></div>"
+                      % (e(add), _attr(add), e(cat.t("html.copy_button"))))
+            elif bid and bid in by_id:
                 show, done = _cmd("show", bid), _cmd("done", bid)
                 A("<div class=cmd><code>%s</code>"
                   "<button onclick=\"cp(this,'%s')\">%s</button>"
