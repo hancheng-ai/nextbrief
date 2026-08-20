@@ -82,7 +82,7 @@ class Nextbrief < Formula
   # to be right, and everything around it has to protect itself by having
   # nothing version-shaped left to match.
   # <!-- bump-version:skip:begin -->
-  # sha256-of: 0.4.0rc1
+  # sha256-of: 0.4.0rc2
   # <!-- bump-version:skip:end -->
   #
   # Which release this digest was actually taken from, written down because it
@@ -115,7 +115,7 @@ class Nextbrief < Formula
   # While the two disagree, the pinned install is not documented anywhere --
   # tests/test_docs_consistency.py holds both ends of that, so restoring the
   # command means fixing the digest first.
-  sha256 "8594f8095f99c77714d34701149357f743db1db4d37c4652de0703020bd1d109"
+  sha256 "f5e72c4c6040a5b9b6e34a7ab11944eb423fcadf267031e97ca544238f517d00"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"
 
