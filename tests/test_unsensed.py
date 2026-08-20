@@ -25,10 +25,14 @@ from helpers import (
     TempCase,
     base_registry,
     capture,
+    make_project_entry,
+    make_snapshot,
     set_tree_mtime,
+    write_brief_json,
+    write_snapshot,
 )
 
-from nextbrief import cli, render, sense
+from nextbrief import cli, html, render, sense
 from nextbrief.i18n import load_catalog
 
 CAT = load_catalog("en")
@@ -319,6 +323,152 @@ class BothAtOnce(Pipeline):
         row = self.row(self.run_both(ws), "Orchard")
         self.assertIn(CAT.t("brief.signal.declaration_broken"), row)
         self.assertIn("declared path is not there", row)
+
+
+class TheCandidateSearchHonoursItsOwnBounds(TempCase):
+    """The three properties the release note advertises, each pinned.
+
+    `_candidate_dirs` is bounded to four levels, names three candidates, and
+    prunes build and vendor directories. All three were advertised in the
+    changelog and guarded by nothing: each survived direct mutation with the
+    whole suite green, and the fourth -- the in-place `dirnames[:]` slice that
+    makes the pruning work at all -- survived even though the source carries a
+    comment explaining that rebinding it prunes nothing.
+
+    Asserted against `_candidate_dirs` directly rather than through `check`,
+    because a bound is about what the walk does, and routing it through the
+    warning would test the sentence instead.
+    """
+
+    NAME = "robots"
+
+    def setUp(self):
+        super().setUp()
+        self.root = self.tmp / "portfolio"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _plant(self, rel):
+        (self.root / rel / self.NAME).mkdir(parents=True, exist_ok=True)
+
+    def _found(self):
+        return cli._candidate_dirs(self.root, self.NAME)
+
+    def test_it_stops_at_the_depth_it_advertises(self):
+        self._plant("a/b/c")                      # depth 3 -> reachable
+        self.assertIn("a/b/c/" + self.NAME, self._found())
+        deep = self.root / "x/y/z/w" / self.NAME
+        deep.mkdir(parents=True)                  # depth 4 -> past the bound
+        self.assertNotIn("x/y/z/w/" + self.NAME, self._found(),
+                         "descended past the depth bound")
+
+    def test_it_names_no_more_than_it_advertises(self):
+        for parent in ("one", "two", "three", "four", "five"):
+            self._plant(parent)
+        found = self._found()
+        self.assertEqual(len(found), cli.MAX_CANDIDATES,
+                         "named more candidates than the cap: %s" % found)
+        # Deterministic, not whichever the filesystem happened to hand back:
+        # two runs that disagree turn one edit into a coin toss.
+        self.assertEqual(found, sorted(found))
+        self.assertEqual(found, self._found())
+
+    def test_a_build_directory_is_not_offered_as_a_candidate(self):
+        """The pruning, and the in-place slice that makes it real.
+
+        `dirnames[:] = ...` rather than `dirnames = ...`: os.walk reads the list
+        back to decide where to descend, so rebinding it prunes nothing and the
+        skip list becomes decoration.
+        """
+        for skipped in sorted(cli.CANDIDATE_SKIP)[:4]:
+            self._plant(skipped)
+        self._plant("real")
+        self.assertEqual(self._found(), ["real/" + self.NAME],
+                         "offered a pruned directory as a candidate")
+
+    def test_a_dotted_directory_is_not_offered_either(self):
+        self._plant(".cache")
+        self._plant("real")
+        self.assertEqual(self._found(), ["real/" + self.NAME],
+                         "offered a pruned directory as a candidate")
+
+
+class AProbeReadingReachesBothRenderers(TempCase):
+    """The half of a hand-reported row that a page could still check.
+
+    `evidence: "reported"` withdraws git, mtimes and sessions deliberately, so a
+    declared `evidence_probe` is not one signal among several -- it is the only
+    machine-checkable thing left on the row. It reached `BRIEF.md` and not
+    `BRIEF.html`, while `html._facts` carried a comment claiming the two
+    renderers took the same path.
+
+    Two reasons that went unnoticed for a release, and both are the point of
+    this class. Every test for these features read `BRIEF.md` only: replacing
+    `html.render_html` with a function that raises left all of them green. And
+    `render.py` catches `Exception` around the HTML pass and still exits 0, so a
+    crash there cannot fail a suite either.
+
+    The repository already had this exact precedent -- `mutations.json` carries
+    "NA-0056 the proposals reach BRIEF.md but not BRIEF.html", guarded by
+    `test_a_suggestion_reaches_both_renderers` -- and it was not followed here.
+    """
+
+    PID = "orchard"
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        entry = make_project_entry(self.PID)
+        entry["reported"] = {"declared": True, "last_report": "2026-02-01",
+                             "cadence_days": 14, "days_since": 43,
+                             "never_reported": False, "overdue": True}
+        # `declared` is what `probe_bits` gates on -- a reading with no
+        # declaration behind it contributes nothing, deliberately.
+        entry["probe"] = {"declared": True, "ok": True, "count": 9,
+                          "label": "published posts", "date": "2026-03-11",
+                          "stale": False, "age_days": 1}
+        write_snapshot(self.ws, make_snapshot(projects=[entry]))
+        write_brief_json(self.ws, {"project_lines": [
+            {"project": self.PID, "next": "**Stalled: no next action**",
+             "evidence": [{"kind": "human", "source": "report:" + self.PID}]}]})
+
+    def _pages(self):
+        code, _out, err = capture(render.main,
+                                  ["--workspace", str(self.ws), "--no-notify"])
+        self.assertEqual(code, 0, err)
+        return ((self.ws / "BRIEF.md").read_text(encoding="utf-8"),
+                (self.ws / "BRIEF.html").read_text(encoding="utf-8"))
+
+    def test_the_probe_count_is_on_both_pages(self):
+        md, html = self._pages()
+        for page, name in ((md, "BRIEF.md"), (html, "BRIEF.html")):
+            self.assertIn("9", page, "%s lost the probe reading" % name)
+            self.assertIn("published posts", page,
+                          "%s lost the probe reading -- on a hand-reported row "
+                          "that is the only sensor left" % name)
+
+    def test_the_report_age_is_on_both_pages(self):
+        md, html = self._pages()
+        for page, name in ((md, "BRIEF.md"), (html, "BRIEF.html")):
+            self.assertIn("2026-02-01", page,
+                          "%s lost the date the last report was made" % name)
+
+    def test_an_html_renderer_that_raises_does_not_pass_silently(self):
+        """The reason the divergence survived a release.
+
+        `render.py` catches `Exception` around the HTML pass and still exits 0 --
+        right for a nightly run, since a broken page should not cost the brief,
+        and fatal for a test suite that only ever reads `BRIEF.md`. This asserts
+        on the artifact instead of the exit code, so the fail-open stays and the
+        blind spot does not.
+        """
+        import unittest.mock as _mock
+        with _mock.patch.object(html, "render_html",
+                                side_effect=RuntimeError("boom")):
+            capture(render.main, ["--workspace", str(self.ws), "--no-notify"])
+        page = self.ws / "BRIEF.html"
+        self.assertFalse(page.exists() and "published posts" in
+                         page.read_text(encoding="utf-8"),
+                         "a raising renderer still produced a good-looking page")
 
 
 if __name__ == "__main__":

@@ -420,7 +420,7 @@
     {
       "label": "the privacy page unlinked from the Chinese README",
       "file": "README.zh.md",
-      "old": "\n\n[PRIVACY.md](https://github.com/hancheng-ai/nextbrief/blob/v0.4.0rc2/PRIVACY.md) 把同一件事写成了一页政策",
+      "old": "\n\n[PRIVACY.md](https://github.com/hancheng-ai/nextbrief/blob/v0.4.0rc3/PRIVACY.md) 把同一件事写成了一页政策",
       "new": "\n\n这一段就是全部说明",
       "select": "test_it_is_linked_from_the_documents_that_would_send_someone_to_it",
       "expect": "README.zh.md never links PRIVACY.md",
@@ -1281,6 +1281,51 @@
       "select": "test_every_key_the_cli_asks_for_exists_in_both",
       "expect": "missing from zh",
       "note": "`launch` asks through `tr`, which returns its English fallback rather than a bare key -- so a missing string is not loud. It drops one paragraph of English into the middle of a Chinese session prompt, and that paragraph is the one carrying the boundary on what the session may tick."
+    },
+    {
+      "label": "the candidate search descends past the depth it advertises",
+      "file": "src/nextbrief/cli.py",
+      "old": "CANDIDATE_DEPTH = 4",
+      "new": "CANDIDATE_DEPTH = 99",
+      "select": "test_it_stops_at_the_depth_it_advertises",
+      "expect": "descended past the depth bound",
+      "note": "Advertised in 0.4.0rc2's release note and pinned by nothing -- it survived this exact mutation with 368 tests green."
+    },
+    {
+      "label": "the candidate list names more than it advertises",
+      "file": "src/nextbrief/cli.py",
+      "old": "MAX_CANDIDATES = 3",
+      "new": "MAX_CANDIDATES = 99",
+      "select": "test_it_names_no_more_than_it_advertises",
+      "expect": "named more candidates than the cap",
+      "note": "A warning that lists everything is one nobody reads to the end, which is why the cap exists."
+    },
+    {
+      "label": "build and vendor directories are offered as candidates",
+      "file": "src/nextbrief/cli.py",
+      "old": "and d not in CANDIDATE_SKIP",
+      "new": "and True",
+      "select": "test_a_build_directory_is_not_offered_as_a_candidate",
+      "expect": "offered a pruned directory as a candidate",
+      "note": "The skip list covers where a name repeats a thousand times without meaning anything."
+    },
+    {
+      "label": "the walk's prune list is rebound instead of sliced",
+      "file": "src/nextbrief/cli.py",
+      "old": "        dirnames[:] = sorted(d for d in dirnames\n                             if not d.startswith(\".\") and d not in CANDIDATE_SKIP)",
+      "new": "        dirnames = sorted(d for d in dirnames\n                          if not d.startswith(\".\") and d not in CANDIDATE_SKIP)",
+      "select": "test_a_build_directory_is_not_offered_as_a_candidate",
+      "expect": "offered a pruned directory as a candidate",
+      "note": "os.walk reads the list back to decide where to descend, so rebinding prunes nothing. The source says exactly that two lines above, and the regression was still invisible to the suite."
+    },
+    {
+      "label": "a declared probe reaches BRIEF.md but not BRIEF.html",
+      "file": "src/nextbrief/html.py",
+      "old": "        bits.extend(report_bits(p, cat))\n        bits.extend(probe_bits(p, cat))",
+      "new": "        bits.extend(report_bits(p, cat))",
+      "select": "test_the_probe_count_is_on_both_pages",
+      "expect": "lost the probe reading",
+      "note": "What 0.4.0rc2 shipped. On a row declaring `evidence: reported` the probe is the only machine-checkable evidence left, and every test for that feature read BRIEF.md only. Same shape as NA-0056 above."
     }
   ]
 }

@@ -2484,5 +2484,93 @@ class FollowUpListing(TempCase):
         self.assertNotIn("About to create", out)
 
 
+class TheTraceLintReadsEnglishAsWellAsItReadsChinese(unittest.TestCase):
+    """The last net was measured on one language and applied to two.
+
+    `_TRACE_WORDS` was tuned against a Chinese backlog — the comment above it
+    says so — and the bare-word rule above it is gated on the criterion
+    containing CJK at all. So a Chinese criterion passes on any Latin token it
+    happens to carry, and an English one falls all the way through to a
+    code-centric vocabulary of about thirty words. The result inverts the
+    warning's own promise: it flagged criteria naming a signed contract, a
+    merged pull request and a bank refund, while passing "a mental note".
+
+    Two defects, and only one of them is the vocabulary:
+
+    1. The vocabulary was matched with ``word in lowered`` — a SUBSTRING. So
+       "bio**log**y" and "apo**log**etic" named a log, and any criterion
+       containing them was waved through.
+    2. It carried no word for a trace that is not a file: a contract, an
+       invoice, a release, a review, a reply, a screenshot.
+    """
+
+    # Each of these names something that demonstrably outlives the doing.
+    NAMES_A_TRACE = (
+        "The invoice from the printer is paid",
+        "The contract is signed by both parties",
+        "The pull request is reviewed and merged",
+        "The release is tagged and published",
+        "The refund arrived in the bank account",
+        "The dashboard shows the new metric",
+        "The insurance policy names the new address",
+        "A screenshot of the failure is attached",
+        "The trademark registration is filed",
+    )
+
+    # Deliberately absent from the list above: "Her reply is in the thread".
+    # A reply is an event, not an artifact, and "there was a reply" is the
+    # canonical criterion this whole warning exists to catch -- so the words for
+    # it stay out of the vocabulary even though a reply does, in some sense,
+    # persist. See `_TRACE_WORDS`.
+
+    # Each of these is true or false in the world and written down nowhere.
+    NAMES_NOTHING = (
+        "I understood the biology of it",
+        "He was apologetic",
+        "Everyone is happy with the direction",
+        "It feels faster",
+    )
+
+    def test_a_criterion_that_names_a_trace_is_not_flagged(self):
+        missed = [c for c in self.NAMES_A_TRACE if items.ac_trace(c) is None]
+        self.assertEqual(missed, [],
+                         "flagged criteria that name a real, checkable trace")
+
+    def test_a_criterion_that_names_nothing_is_flagged(self):
+        waved = [(c, items.ac_trace(c)) for c in self.NAMES_NOTHING
+                 if items.ac_trace(c) is not None]
+        self.assertEqual(waved, [],
+                         "waved through criteria that name nothing")
+
+    def test_a_modifier_that_negates_the_trace_is_a_known_miss(self):
+        """The boundary, asserted rather than hidden.
+
+        "a mental note" is the null case wearing the word for its opposite, and
+        this lint reads words. Recognising that *mental* negates *note* is
+        semantics, and a stoplist entry for that one phrase would be a rule
+        about one sentence rather than about anything.
+
+        Pinned as a miss so the limit is visible and stays measured: if a later
+        rule catches it, this test says so by failing, which is the right way to
+        find out.
+        """
+        self.assertEqual(items.ac_trace("She agreed on the phone and I made a "
+                                        "mental note"), "note")
+
+    def test_the_vocabulary_matches_whole_words_not_substrings(self):
+        """The specific bug: `log` inside `biology`.
+
+        A substring net is not a smaller net, it is a differently shaped one --
+        it lets through exactly the sentences that happen to contain a trace
+        word spelled inside another word, which correlates with nothing.
+        """
+        for word, carrier in (("log", "I understood the biology of it"),
+                              ("log", "He was apologetic"),
+                              ("note", "It was a notable improvement")):
+            with self.subTest(word=word, carrier=carrier):
+                self.assertIsNone(items.ac_trace(carrier),
+                                  "%r matched inside %r" % (word, carrier))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc3] - 2026-08-20
+
+### Fixed
+
+- **The trace lint read English by a narrower path than Chinese, and matched
+  substrings.** The bare-word rule is reached only when a criterion contains
+  CJK, so an English one fell through to a fixed vocabulary that was the whole
+  net there — and that vocabulary had been tuned on Chinese software work.
+  Measured: it flagged *"the contract is signed by both parties"*, *"the pull
+  request is reviewed and merged"* and *"the refund arrived in the bank
+  account"* — traces more durable than most of the words it did know — while
+  waving through *"I understood the biology of it"* and *"he was apologetic"*,
+  because `word in lowered` found `log` inside them. A substring net is not a
+  smaller net; it is a differently shaped one, letting through the sentences
+  that happen to spell a trace word inside another word, which correlates with
+  nothing.
+
+  The Latin half now matches whole words and carries the traces that are not
+  files — contract, invoice, release, review, screenshot, export. It
+  deliberately does **not** carry `reply`, `message`, `email` or `thread`: those
+  name the subject of a claim rather than a record of it, and *"there was a
+  reply"* is the canonical criterion this warning was built to catch. The
+  Chinese half stays a substring test, which is correct for a script with no
+  word boundaries to find.
+
+  README's "wrong about roughly one criterion in six" is gone. It had no
+  reproducible derivation and described behaviour this changes; what replaces it
+  is the measurement anyone can re-run — **16 of 161** open criteria on the
+  workspace it was tuned against — plus the fact that the English sample is nine
+  criteria, too few to quote a rate from, and that silence there should be read
+  as *unmeasured* rather than as *correct*.
+
+- **A declared probe reached `BRIEF.md` and not `BRIEF.html`.** `html._facts`
+  carried a comment claiming "the same two early exits as
+  `render.evidence_phrase`" and then omitted `probe_bits`, which that function
+  calls twice. On an ordinary row this cost one reading of several; on a row
+  declaring `evidence: "reported"` it cost everything, because that declaration
+  withdraws git, mtimes and sessions on purpose and leaves the probe as the only
+  machine-checkable thing on the line.
+
+  It went unnoticed through a release for two compounding reasons, both now
+  closed: every test for these features read `BRIEF.md` only — replacing
+  `html.render_html` with a function that raises left all of them green — and
+  `render` catches `Exception` around the HTML pass and still exits 0, which is
+  right for a nightly run and fatal for a suite. The repository already had the
+  precedent (`mutations.json` carries *"NA-0056 the proposals reach BRIEF.md but
+  not BRIEF.html"*); `AProbeReadingReachesBothRenderers` follows it, and asserts
+  on the artifact rather than the exit code so the fail-open can stay.
+
+### Added
+
+- **The candidate search's advertised bounds are guarded.** Four levels deep,
+  three candidates named, build and vendor directories pruned — all three
+  described in 0.4.0rc2's release note and pinned by nothing. Each survived
+  direct mutation with the suite green, including the in-place `dirnames[:]`
+  slice whose own source comment explains that rebinding it prunes nothing.
+  `TheCandidateSearchHonoursItsOwnBounds` turns all four red.
 
 ## [0.4.0rc2] - 2026-08-20
 
@@ -2612,7 +2669,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0rc2...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0rc3...HEAD
+[0.4.0rc3]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc3
 [0.4.0rc2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc2
 [0.4.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc1
 [0.3.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.3.0

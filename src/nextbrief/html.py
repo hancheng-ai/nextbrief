@@ -665,7 +665,7 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
 def _facts(p, cat: Catalog) -> str:
     """The evidence column. Same rule as the Markdown brief: name the kind of
     signal, never launder a file mtime into something that sounds like a commit."""
-    from .render import _named_paths, report_bits  # late, as everywhere else here
+    from .render import _named_paths, probe_bits, report_bits  # late, as everywhere else here
 
     bits = []
     g = (p.get("git") or [{}])[0]
@@ -675,17 +675,20 @@ def _facts(p, cat: Catalog) -> str:
     # broken declaration goes in front of any number, and a hand-reported
     # project's numbers do not appear at all.
     #
-    # NOT the same in one respect, and it is written down because the comment
-    # above used to claim otherwise: `render.evidence_phrase` follows
-    # `report_bits` with `probe_bits`, and this does not. `_facts` has never
-    # rendered a probe reading, so on an ordinary row it costs one bit of three
-    # -- but on a hand-reported row the probe is the ONLY surviving sensor, and
-    # losing it takes the whole of what the page could still check.
+    # The parity that sentence claims was not true until 0.4.0rc3: `_facts` had
+    # never called `probe_bits`, so a declared probe reached BRIEF.md and not
+    # BRIEF.html. On an ordinary row that cost one bit of three; on a
+    # hand-reported row the probe is the ONLY surviving sensor -- the
+    # declaration withdraws git, mtimes and sessions on purpose -- so the page
+    # `nextbrief open` shows was missing the whole of what it could still
+    # check. Both renderers now go through the same two calls in the same
+    # order, and `test_a_probe_reading_reaches_both_renderers` pins it.
     missing = fs.get("missing_paths") or []
     if missing:
         bits.append(cat.t("evidence.paths_missing", paths=_named_paths(missing, cat)))
     if (p.get("reported") or {}).get("declared"):
         bits.extend(report_bits(p, cat))
+        bits.extend(probe_bits(p, cat))
         return cat.t("sep.dot").join(bits)
     if (g.get("commits_since") or {}).get("30"):
         bits.append(cat.t("evidence.commits_30d", count=g["commits_since"]["30"]))
@@ -701,6 +704,7 @@ def _facts(p, cat: Catalog) -> str:
     s = p.get("sessions") or {}
     if s.get("distinct_session_days"):
         bits.append(cat.t("evidence.session_days.compact", count=s["distinct_session_days"]))
+    bits.extend(probe_bits(p, cat))
     if not bits:
         bits.append(cat.t("evidence.no_signal_since",
                           date=(p.get("evidence") or {}).get("best_date")

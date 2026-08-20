@@ -20,7 +20,7 @@
 # On every later release, bump `version` and re-derive the checksum from the
 # published asset -- the url is built from `version`, so one edit moves both:
 #
-#   V=0.4.0rc2
+#   V=0.4.0rc3
 #   curl -fsSLO "https://github.com/hancheng-ai/nextbrief/releases/download/v$V/nextbrief-$V.tar.gz"
 #   shasum -a 256 "nextbrief-$V.tar.gz"      # paste over the sha256 below
 #   cd homebrew-tap
@@ -56,11 +56,11 @@ class Nextbrief < Formula
   # filename, and `version`. They are spelled out rather than interpolated
   # because Homebrew audits the stanza order (url, version, sha256), which leaves
   # nothing to interpolate from at the point the url is written.
-  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.4.0rc2/nextbrief-0.4.0rc2.tar.gz"
-  # Declared rather than inferred from the filename: `0.4.0rc2` is exactly the
+  url "https://github.com/hancheng-ai/nextbrief/releases/download/v0.4.0rc3/nextbrief-0.4.0rc3.tar.gz"
+  # Declared rather than inferred from the filename: `0.4.0rc3` is exactly the
   # kind of string Homebrew's parser is entitled to read as `0.1.0-rc1`, and the
   # test block compares `version` against what the binary prints.
-  version "0.4.0rc2"
+  version "0.4.0rc3"
   # The markers are the repository-wide "do not sweep this" fence, defined in
   # scripts/bump-version.sh and spelled the same in every file it edits -- an
   # HTML comment inside a Ruby one because the fence is a contract with that
@@ -102,7 +102,7 @@ class Nextbrief < Formula
   # release's own SHA256SUMS and opens a pull request setting both lines. What
   # it does by hand, if it ever has to be done by hand:
   #
-  #   V=0.4.0rc2
+  #   V=0.4.0rc3
   #   gh release view "v$V" --json assets \
   #     --jq '.assets[]|select(.name|endswith(".tar.gz")).digest|sub("^sha256:";"")'
   #

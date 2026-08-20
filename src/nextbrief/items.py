@@ -349,6 +349,19 @@ _TRACE_WORDS = (
     " log report receipt snapshot backup file path directory field flag"
     " config comment docstring document checklist record note written write"
     " wrote page link appears exists timestamp"
+    # Traces that are not files. The list above was measured on a Chinese
+    # backlog of software work, and read as a general rule it flagged a signed
+    # contract, a merged pull request and a bank refund -- things that outlive
+    # the doing more durably than most of the words above it.
+    " contract invoice bill payment refund order signature signed policy"
+    " release tag tagged published merged review reviewed approved"
+    # NOT `reply`, `message`, `email` or `thread`. Those name the SUBJECT of the
+    # claim, not a record of it: "there was a reply" is the canonical criterion
+    # this warning was built for, and it is unanswerable precisely because a
+    # reply existing somewhere is not a place anybody can look. An artifact
+    # (a contract, a screenshot, an export) is a thing; a reply is an event.
+    " ticket issue screenshot recording export"
+    " dashboard registration filed attached uploaded receipt entry"
 ).split()
 
 
@@ -375,9 +388,18 @@ def ac_trace(text: str) -> Optional[str]:
         for m in _TRACE_WORD.finditer(body):
             if m.group(0).lower() not in _TRACE_STOP:
                 return m.group(0)
+    # Whole words, not substrings. `word in lowered` read "bio-LOG-y" and
+    # "apo-LOG-etic" as naming a log, which is not a smaller net but a
+    # differently shaped one: it waves through the sentences that happen to
+    # spell a trace word inside another word, and that correlates with nothing.
+    # The Chinese half has no word boundaries to find, so it stays a substring
+    # test -- which is correct for it and wrong for the Latin half.
     lowered = text.lower()
     for word in _TRACE_WORDS:
-        if word in lowered:
+        if word.isascii():
+            if re.search(r"\b%s\w{0,3}\b" % re.escape(word), lowered):
+                return word
+        elif word in lowered:
             return word
     return None
 
