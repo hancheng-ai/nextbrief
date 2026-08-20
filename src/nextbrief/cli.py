@@ -759,7 +759,14 @@ def _candidate_dirs(root: Path, name: str) -> List[str]:
                              if not d.startswith(".") and d not in CANDIDATE_SKIP)
         for d in dirnames:
             if d.casefold() == want:
-                found.append(str(rel / d) if str(rel) != "." else d)
+                # POSIX separators, like every other path this engine emits
+                # (`sense.walk_project`, `discovery`, the delivered-file scan
+                # above). `str(Path)` uses the platform's separator, so on
+                # Windows this handed back `real\\robots` -- and the sentence it
+                # is printed in says to paste it into `paths` in registry.jsonc,
+                # which is forward-slash by convention everywhere else. A
+                # suggestion nobody can paste is not a suggestion.
+                found.append((rel / d).as_posix() if str(rel) != "." else d)
                 if len(found) >= MAX_CANDIDATES:
                     return found
     return found
