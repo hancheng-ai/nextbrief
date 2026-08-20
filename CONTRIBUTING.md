@@ -49,6 +49,25 @@ python3 -m unittest discover -s tests -v
 python3 -m pip install ruff && python3 -m ruff check .
 ```
 
+**Nothing merges until CI is green, and nothing is tagged off a red `main`.**
+Not a preference — a rule, and it was written the day it was broken. A local
+suite is one platform's answer: `_candidate_dirs` returned `real\robots` on
+Windows and `real/robots` everywhere else, so 1372 tests passed on macOS, four
+Windows jobs went red, and `0.4.0rc3` was tagged anyway because nobody opened
+the run. The failure was three days old in the code and about ninety seconds
+old in anybody's awareness.
+
+So before a merge and before a tag:
+
+```bash
+gh pr checks <n>          # every row, not the summary
+gh run list --branch main --workflow CI --limit 1
+```
+
+A green local run tells you the code is probably fine. Only CI tells you the
+thing that gates the release agrees, and those are different claims — the whole
+point of a matrix is that it runs where you cannot.
+
 CI runs both across Linux, macOS and Windows on Python 3.9, 3.11 and 3.13, plus
 four guard jobs: zero runtime dependencies, locale catalogs in sync, version
 literals in agreement, and a clean `twine check` on the built artifacts. On

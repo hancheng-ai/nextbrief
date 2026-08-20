@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A moved project's suggested path came back with the platform separator.**
+  `_candidate_dirs` built its result with `str(Path)`, so on Windows it returned
+  `real\robots` while every other path this engine emits — `sense.walk_project`,
+  `discovery`, the delivered-file scan — normalises to forward slashes. The
+  sentence it is printed in says to paste the value into `paths` in
+  `registry.jsonc`, which is forward-slash by convention, so on Windows the
+  suggestion was one nobody could use.
+
+  Found by the tests added for the bounds in 0.4.0rc3, on the one platform that
+  can see it: three of them went red on four Windows jobs while 1372 passed on
+  macOS. Worth stating plainly, because the process failure is the more useful
+  half — `0.4.0rc3` was tagged off a red `main`, since a local run was read as
+  the answer and the run that gates the release was never opened. CONTRIBUTING
+  now says nothing merges until CI is green and nothing is tagged off a red
+  `main`, with the two commands that answer it.
+
+
 ## [0.4.0rc3] - 2026-08-20
 
 ### Fixed

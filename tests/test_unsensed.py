@@ -385,6 +385,26 @@ class TheCandidateSearchHonoursItsOwnBounds(TempCase):
         self.assertEqual(self._found(), ["real/" + self.NAME],
                          "offered a pruned directory as a candidate")
 
+    def test_every_candidate_is_posix_whatever_the_platform_separator_is(self):
+        """The one that was actually broken, and the honest limit of this test.
+
+        `str(Path)` uses the platform separator, so on Windows the search handed
+        back `real\\robots` while the sentence around it says to paste the value
+        into `paths` in registry.jsonc -- forward-slash by convention in every
+        other path this engine emits. Four CI jobs went red on it and three
+        platforms could not see it.
+
+        On POSIX this assertion is nearly vacuous: `os.sep` is already `/`, so
+        it can only fail if somebody writes a literal backslash. It is here so
+        the intent is stated in the file rather than living only in the Windows
+        matrix -- which is the thing that actually catches a regression.
+        """
+        self._plant("a/b")
+        for got in self._found():
+            self.assertNotIn("\\", got, "a candidate came back with a "
+                                          "platform separator in it")
+            self.assertIn("/", got)
+
     def test_a_dotted_directory_is_not_offered_either(self):
         self._plant(".cache")
         self._plant("real")
