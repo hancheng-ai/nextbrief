@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -69,11 +70,13 @@ from .items import (
     SUMMARY_DRAFT,
     SUMMARY_HUMAN,
     SUMMARY_NONE,
+    TERMINAL_STATUSES,
     Closing,
     FutureWork,
     ac_lines,
     ac_owner,
     ac_progress,
+    append_note,
     blank_item_text,
     claim_age_days,
     claim_lines,
@@ -82,12 +85,14 @@ from .items import (
     id_shape,
     is_live,
     is_parked,
+    needs_you,
     new_item_text,
     next_item_id,
     parse_closing,
     record_promotion,
     slug,
     status_of,
+    untraceable_acs,
     upsert_closing,
 )
 from .jsonc import JSONCError, load_jsonc
@@ -104,6 +109,12 @@ __all__ = ["main", "build_parser"]
 _ac_lines = ac_lines
 _ac_owner = ac_owner
 _ac_progress = ac_progress
+# `_needs_you` followed them, and later than it should have: `launch` grew a
+# second reader of "whose criterion is this" and could not import this module to
+# get it. A predicate copied into the prompt builder would have been the same
+# subtraction failure with higher stakes -- there it decides what an agent may
+# tick without asking anybody.
+_needs_you = needs_you
 
 ENV_LOCALE = "NEXTBRIEF_LOCALE"
 ENV_AGENT = "NEXTBRIEF_AGENT"
@@ -131,6 +142,7 @@ commands:
   do <id>      open an agent session in the right directory, context already loaded
   show <id>    print one item in full
   ok <id>      confirm an item: it is real, and written the way you meant it
+  settle <id>  record a decision about one criterion; the item stays open
   done <id>    close it, and record what actually happened
   drop <id>    drop it (the file stays, and so does its git history)
   defer <id>   park it until a date; it comes back on its own
@@ -674,6 +686,10 @@ def cmd_check(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
     for line in (_criteria_warnings(ws, cat) + _abandoned_claims(ws, cat)
                  + _delivered_but_unticked(ws, cat)):
         _err("warning: " + line)
+    # Last of the warnings, because it is the only one that prints a line per
+    # offender underneath itself, and a multi-line warning in the middle of a
+    # list of one-liners reads as though the ones after it belong to it.
+    _report_missing_paths(ws, cat)
     if rc != EXIT_OK:
         return rc
     return _run_render(["--check", "--no-notify"])
@@ -698,10 +714,117 @@ def _named(things: Sequence[str]) -> str:
     return head if len(things) <= NAMED else "%s (+%d)" % (head, len(things) - NAMED)
 
 
-def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
-    """Items whose acceptance criteria are shaped wrong, as at most two lines.
+# How far under the portfolio root to look for a directory that has moved, and
+# how many places to name when one turns up. Both are bounds on a search that
+# runs on a tree nobody has promised is small; a `check` that takes a minute is
+# a `check` people stop running, and the fix it is pointing at is one line long.
+CANDIDATE_DEPTH = 4
+MAX_CANDIDATES = 3
 
-    ★ Two lines total, however big the backlog. ★
+# Pruned from the search, not because a project could not live there, but
+# because these are where a name repeats a thousand times without meaning
+# anything -- and a candidate list with `node_modules/robots` in it is a list
+# nobody reads to the end.
+CANDIDATE_SKIP = {"node_modules", "__pycache__", "venv", ".venv", "vendor",
+                  "site-packages", "dist", "build", "target", "Pods"}
+
+
+def _candidate_dirs(root: Path, name: str) -> List[str]:
+    """Where else a directory of this name exists, relative to the root.
+
+    ★ Suggests. Never edits. ★
+
+    "Where is this project now" is a fact, not a judgement, so the engine could
+    in principle re-point the registry itself. It must not, and the reason is
+    that the two ways of being wrong do not cost the same: guessing right saves
+    one edit, guessing wrong silently aims a project at somebody else's
+    directory -- and every number about it afterwards is true, checkable, and
+    about the wrong thing. That is precisely what a single declared registry
+    exists to prevent, so the engine says what it found and stops.
+    """
+    if not name:
+        return []
+    want = name.casefold()
+    found: List[str] = []
+    root = Path(root)
+    for dirpath, dirnames, _files in os.walk(str(root)):
+        rel = Path(dirpath).relative_to(root)
+        depth = 0 if str(rel) == "." else len(rel.parts)
+        if depth >= CANDIDATE_DEPTH:
+            dirnames[:] = []
+            continue
+        # In place: os.walk reads the list back to decide where to descend, so
+        # rebinding it prunes nothing.
+        dirnames[:] = sorted(d for d in dirnames
+                             if not d.startswith(".") and d not in CANDIDATE_SKIP)
+        for d in dirnames:
+            if d.casefold() == want:
+                found.append(str(rel / d) if str(rel) != "." else d)
+                if len(found) >= MAX_CANDIDATES:
+                    return found
+    return found
+
+
+def _missing_paths(ws: Workspace) -> List[Dict[str, Any]]:
+    """Declared paths that are not on disk, each with somewhere to look.
+
+    Read straight from the registry rather than from the snapshot, so the answer
+    is about the tree as it is now: `check` runs *before* the pipeline it is
+    deciding whether to re-run, and a snapshot old enough to need re-running is
+    old enough to be wrong about this.
+    """
+    reg = _registry(ws)
+    root = Path(_projects_root(ws))
+    out: List[Dict[str, Any]] = []
+    for pr in (reg.get("projects") or []):
+        if not isinstance(pr, dict):
+            continue
+        pid = str(pr.get("id") or "")
+        for rel in (pr.get("paths") or []):
+            if not isinstance(rel, str) or (root / rel).exists():
+                continue
+            out.append({"id": pid, "missing": rel,
+                        "candidates": _candidate_dirs(root, Path(rel).name)})
+    return out
+
+
+def _report_missing_paths(ws: Workspace, cat: Optional[Catalog]) -> None:
+    """Say it, name where the directory turned up, and change nothing.
+
+    A warning rather than an error, and so not part of the exit code: the
+    pipeline still produces a correct brief for this workspace -- one that now
+    says on its own front page that a declaration is broken. What `check` adds
+    is the half the brief cannot: where the thing went.
+    """
+    missing = _missing_paths(ws)
+    if not missing:
+        return
+    _err("warning: " + tr(cat, "cli.check.missing_path",
+                          "{n} project(s) declare a path that is not there, so their "
+                          "numbers are the absence of a directory rather than a quiet "
+                          "project: {ids}",
+                          n=len(missing),
+                          ids=_named(sorted({m["id"] for m in missing}))))
+    for m in missing:
+        if m["candidates"]:
+            _err(tr(cat, "cli.check.missing_path_candidate",
+                    "  {pid}: `{missing}` is gone; a directory of that name is at "
+                    "{candidates}. Nothing has been changed -- edit `paths` in "
+                    "registry.jsonc if that is the one.",
+                    pid=m["id"], missing=m["missing"],
+                    candidates=", ".join(m["candidates"])))
+        else:
+            _err(tr(cat, "cli.check.missing_path_nocandidate",
+                    "  {pid}: `{missing}` is gone, and no directory of that name was "
+                    "found under the portfolio root. Fix `paths` in registry.jsonc, "
+                    "or archive the project.",
+                    pid=m["id"], missing=m["missing"]))
+
+
+def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
+    """Items whose acceptance criteria are shaped wrong, as at most three lines.
+
+    ★ Three lines total, however big the backlog. ★
 
     One line per offending item is what this obviously wanted to be, and it is
     what would have killed it: every criterion written before the marker existed
@@ -715,6 +838,7 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
     """
     unmarked: List[str] = []
     crowded: List[Tuple[str, int]] = []
+    untraceable: List[Tuple[str, int]] = []
     today = dt.date.today()
     for path in sorted(ws.backlog.glob("*.md")):
         try:
@@ -729,6 +853,14 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
         item_id = str(fm.get("id") or path.stem)
         if any(_ac_owner(t) is None for _i, _m, t in lines):
             unmarked.append(item_id)
+        # Reads the sentence. Runs nothing, opens nothing, resolves nothing --
+        # see the note at the top of `untraceable_acs`. Both the other rules
+        # here are about the *shape* of an item's criteria; this one is about
+        # whether a criterion is answerable at all, and an unanswerable one
+        # does not become answerable by being handed to somebody.
+        blind = untraceable_acs(body or "")
+        if blind:
+            untraceable.append((item_id, len(blind)))
         # Only OPEN criteria can be crowding anyone. A `[~]` one is set aside --
         # nobody has to answer it, so counting it says an item is badly shaped on
         # the strength of criteria its author already retired. Found by UAT on the
@@ -756,6 +888,17 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
                       "{ids}",
                       n=len(crowded), max=MAX_YOURS,
                       ids=_named(["%s (%d)" % (i, c) for i, c in crowded])))
+    if untraceable:
+        # "not that it needs you" is the whole sentence. The reflex this warning
+        # exists to interrupt is re-marking such a criterion `(you)`, which
+        # changes nothing: a criterion nothing records cannot be settled by the
+        # author either, and the author is the reader of this line.
+        out.append(tr(cat, "cli.check.untraceable_criteria",
+                      "{n} open item(s) have criteria that name nothing anyone "
+                      "could look at afterwards -- not that they need you, but "
+                      "that nothing would record the answer: {ids}",
+                      n=len(untraceable),
+                      ids=_named(["%s (%d)" % (i, c) for i, c in untraceable])))
     return out
 
 
@@ -1033,13 +1176,26 @@ def cmd_v0(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> i
 
 def _projects_root(ws: Workspace) -> str:
     """The portfolio root the registry declares. Fails open to the workspace: a
-    prompt with a slightly wrong path in it beats no brief at all."""
+    prompt with a slightly wrong path in it beats no brief at all.
+
+    A RELATIVE ``defaults.root`` is relative to the workspace, never to wherever
+    the command was typed -- the same rule `sense.resolve_root` and
+    `_project_dirs` already apply, and the reason they do. Resolving it against
+    the process's directory turned the shipped `"./projects"` into the bare
+    string `projects`, so the daily prompt told the model the portfolio lived in
+    a directory that exists only when you happen to have run from the workspace.
+    """
     try:
         reg = load_jsonc(ws.registry_path)
     except JSONCError:
         return str(ws.root)
     declared = (reg.get("defaults") or {}).get("root") if isinstance(reg, dict) else None
-    return str(expand(declared)) if declared else str(ws.root)
+    if not declared:
+        return str(ws.root)
+    root = expand(declared)
+    if not root.is_absolute():
+        root = ws.root / root
+    return str(Path(os.path.normpath(str(root))))
 
 
 def _daily_prompt(ws: Workspace, cat: Optional[Catalog]) -> Optional[str]:
@@ -1355,23 +1511,6 @@ ACCEPT_DRAFT = "="
 # lands in the summary question that was going to be asked anyway, because a
 # third question is precisely the friction this flow exists to remove.
 DROP_KEY = "-"
-
-
-def _needs_you(text: str) -> bool:
-    """Whether this criterion is one to put in front of a person.
-
-    ★ Unmarked counts as yours, and that is the load-bearing half. ★
-
-    An unmarked criterion is not the agent's -- it is one nobody has classified
-    yet, and *every criterion written before the marker existed is unmarked*.
-    Reading the absence as "the agent's" would empty the tick selector for the
-    entire existing backlog in one move, and empty is the one thing it must never
-    be: `done` could not ask at all until recently, measured at 1 ticked box
-    across 25 items, and being askable is the whole point of the step. So the
-    default is to ask, and `check` reports how many are still unclassified rather
-    than the engine guessing on their behalf.
-    """
-    return _ac_owner(text) != AC_AGENT
 
 
 def _unticked_acs(body: str) -> List[str]:
@@ -3967,6 +4106,221 @@ def cmd_probe(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -
     return EXIT_OK
 
 
+def _parse_settle_sets(specs, rows, item_id, cat) -> Tuple[Dict[int, str], List[Tuple[str, str]]]:
+    """`#N=mark[: why]` into marks-by-line-index and (anchor, why) pairs.
+
+    Raises ValueError with a finished sentence. Validation is ALL OR NOTHING and
+    happens before anything is written: a half-applied batch is a state nobody
+    asked for, and the criterion that failed is the one you would not notice.
+
+    The reason splits once, so prose keeps its colons.
+    """
+    by_anchor = {}
+    for i, mark, text in rows:
+        m = re.match(r"#(\d+)", text.strip())
+        if m:
+            by_anchor["#" + m.group(1)] = (i, mark)
+
+    marks: Dict[int, str] = {}
+    notes: List[Tuple[str, str]] = []
+    for spec in specs:
+        anchor, sep, rest = str(spec).partition("=")
+        anchor = anchor.strip()
+        if not sep or not anchor.startswith("#"):
+            raise ValueError(tr(cat, "cli.settle.bad_spec",
+                                "--set wants `#N=mark` with an optional `: why`, "
+                                "and got: {spec}", spec=spec))
+        mark, _c, why = rest.partition(":")
+        mark = mark.strip()
+        if mark not in (AC_DONE, AC_DROPPED):
+            raise ValueError(tr(cat, "cli.settle.bad_mark",
+                                "{spec}: a mark is `x` (met) or `~` (superseded), "
+                                "not {mark}.", spec=spec, mark=mark or "''"))
+        if anchor not in by_anchor:
+            raise ValueError(tr(cat, "cli.settle.unknown_criterion",
+                                "{item} has no criterion {anchor}. It has: {have}",
+                                item=item_id, anchor=anchor,
+                                have=", ".join(sorted(by_anchor)) or "none"))
+        index, current = by_anchor[anchor]
+        if current != AC_OPEN:
+            raise ValueError(tr(cat, "cli.settle.already_marked",
+                                "{anchor} is already `[{mark}]`. `settle` only ever "
+                                "adds a mark -- clearing one would take back a "
+                                "statement its author made. Edit the file if that "
+                                "is what you mean.", anchor=anchor, mark=current))
+        marks[index] = mark
+        if why.strip():
+            notes.append((anchor, why.strip()))
+    return marks, notes
+
+
+def cmd_settle(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) -> int:
+    """Record a decision about a criterion, on an item that stays open.
+
+    There was no command for this. `ok`, `done`, `drop` and `defer` are all
+    item-level; criterion-level settlement lived only inside `done` -- which is
+    terminal, so the only moment you could settle was the moment you closed --
+    and inside `do`, which spawns an agent session. Everything between fell back
+    to prose.
+
+    Measured on this portfolio, 2026-08-20: a direction ruled in conversation
+    reached the file by three hops and two actors -- the owner decided, an agent
+    typed the reasoning into NOTES, and the box was ticked days later inside
+    `done`. The mark and the reason were recorded separately, so nothing joined
+    them, and the reason was in an agent's words rather than the decider's.
+
+    `review` was the obvious home and is the wrong one. Its answers are
+    project-keyed, land in `annotations.jsonc`, and are fixed multiple choice; a
+    criterion is item-keyed, belongs in the backlog file the engine already
+    writes to, and its substance is whatever a person wrote. So this borrows
+    `done`'s selector instead -- the same keystrokes, nothing new to learn -- and
+    `done` itself is untouched.
+
+    The mark and the note are ONE write. Half of a decision landing is not a
+    state worth having, and it is the exact half-state this command exists to
+    end.
+    """
+    path = _find_item(ws, args.item_id, cat)
+    if path is None:
+        return EXIT_FAIL
+    try:
+        original = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _err("error: cannot read %s: %s" % (path, exc))
+        return EXIT_FAIL
+
+    fm, _body = parse_frontmatter(original)
+    status = str(fm.get("status") or "").strip()
+    if status in TERMINAL_STATUSES:
+        _err(tr(cat, "cli.settle.not_open",
+                "{id} is {status}. `settle` records a decision on an item that is "
+                "still open; a criterion on a closed item belongs to "
+                "`nextbrief done` or to the file itself.",
+                id=args.item_id, status=status))
+        return EXIT_FAIL
+
+    open_rows = [(i, text) for i, mark, text in _ac_lines(original) if mark == AC_OPEN]
+    # `--set` is checked BEFORE this. A named criterion that is already marked
+    # deserves the refusal that says so and names it; bailing out here with
+    # "nothing to settle" answers a question nobody asked and hides which of the
+    # ones they named was the problem.
+    if not open_rows and not getattr(args, "set_criteria", None):
+        print(tr(cat, "cli.settle.nothing_open",
+                 "{id} has no open criteria -- nothing to settle.", id=args.item_id))
+        return EXIT_OK
+
+    # A decision given as an argument needs no terminal, and that is the point:
+    # it is the form that works in a pipe, in a script, and in a command drafted
+    # after the conversation where the decision was actually made.
+    specs = list(getattr(args, "set_criteria", None) or [])
+    if specs:
+        try:
+            marks, notes = _parse_settle_sets(specs, _ac_lines(original),
+                                              args.item_id, cat)
+        except ValueError as exc:
+            _err(str(exc))
+            _err(tr(cat, "cli.settle.nothing_written", "Nothing was written."))
+            return EXIT_FAIL
+        updated = _apply_marks(original, marks)
+        for anchor, why in notes:
+            updated = append_note(updated, tr(
+                cat, "cli.settle.note_line",
+                "**[{date}] {anchor} settled by hand (`nextbrief settle`)** -- {text}",
+                date=dt.date.today().isoformat(), anchor=anchor, text=why))
+        try:
+            write_text(ws, path, updated)
+        except OSError as exc:
+            _err("error: cannot write %s: %s" % (path, exc))
+            return EXIT_FAIL
+        ticked = sum(1 for m in marks.values() if m == AC_DONE)
+        print(tr(cat, "cli.settle.wrote",
+                 "{id}: {ticked} ticked, {dropped} set aside. The item is still open.",
+                 id=args.item_id, ticked=ticked, dropped=len(marks) - ticked))
+        if notes:
+            print(tr(cat, "cli.settle.note_saved", "Recorded in NOTES."))
+        return EXIT_OK
+
+    # Checked before asking, not inside the selector: a scheduled run that blocks
+    # on a prompt at 21:30 produces nothing and says nothing about it. `review`
+    # refuses the same way and for the same reason, and saying what it WOULD have
+    # asked is what makes the refusal a report rather than a shrug.
+    if not sys.stdin.isatty():
+        print(tr(cat, "cli.settle.would_ask",
+                 "Not a terminal, so nothing was asked and nothing was written. "
+                 "{n} open criterion(s) would have been offered:", n=len(open_rows)))
+        for _i, text in open_rows:
+            print("  " + text)
+        return EXIT_OK
+
+    try:
+        picked, dropped = _ask_ticks(original, cat,
+                                     bool(getattr(args, "all_criteria", False)))
+    except KeyboardInterrupt:
+        print()
+        _err(tr(cat, "cli.settle.no_marks",
+                "Nothing marked. {id} is unchanged.", id=args.item_id))
+        return EXIT_FAIL
+    if not picked and not dropped:
+        print(tr(cat, "cli.settle.no_marks",
+                 "Nothing marked. {id} is unchanged.", id=args.item_id))
+        return EXIT_OK
+
+    marks = dict.fromkeys(picked, AC_DONE)
+    marks.update(dict.fromkeys(dropped, AC_DROPPED))
+    updated = _apply_marks(original, marks)
+
+    # One prompt per decision, not one per run.
+    #
+    # The first version asked a single free-text question for the whole batch,
+    # which is the same defect `--set` was added to fix, in the path a person
+    # actually sits in front of: two decisions, one reason, and nothing saying
+    # which is which. The item it shipped on had one open box, so it read fine
+    # and was wrong the moment there were two.
+    #
+    # The criterion is printed IN FULL before its prompt. The selector clips each
+    # row to one terminal line so the list stays readable, and being asked to
+    # explain a truncated sentence is the other half of why this pass did not
+    # feel trustworthy.
+    given = getattr(args, "note", None)
+    by_index = {i: t for i, _m, t in _ac_lines(original)}
+    notes: List[Tuple[str, str]] = []
+    for i in sorted(marks):
+        text = by_index.get(i, "").strip()
+        m = re.match(r"#\d+", text)
+        anchor = m.group(0) if m else "?"
+        if given:
+            notes.append((anchor, given))
+            continue
+        print(tr(cat, "cli.settle.asking_about", "{anchor} [{mark}] {text}",
+                 anchor=anchor, mark=marks[i], text=text))
+        try:
+            why = input(tr(cat, "cli.settle.note_prompt",
+                           "One line on why (Enter to skip): ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            why = ""
+        if why:
+            notes.append((anchor, why))
+    for anchor, why in notes:
+        updated = append_note(updated, tr(
+            cat, "cli.settle.note_line",
+            "**[{date}] {anchor} settled by hand (`nextbrief settle`)** -- {text}",
+            date=dt.date.today().isoformat(), anchor=anchor, text=why))
+    note = bool(notes)
+
+    try:
+        write_text(ws, path, updated)
+    except OSError as exc:
+        _err("error: cannot write %s: %s" % (path, exc))
+        return EXIT_FAIL
+
+    print(tr(cat, "cli.settle.wrote",
+             "{id}: {ticked} ticked, {dropped} set aside. The item is still open.",
+             id=args.item_id, ticked=len(picked), dropped=len(dropped)))
+    if note:
+        print(tr(cat, "cli.settle.note_saved", "Recorded in NOTES."))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "run": cmd_run,
     "probe": cmd_probe,
@@ -3980,6 +4334,7 @@ _HANDLERS = {
     "do": cmd_do,
     "show": cmd_show,
     "ok": cmd_ok,
+    "settle": cmd_settle,
     "done": cmd_done,
     "drop": cmd_drop,
     "defer": cmd_defer,
@@ -4078,6 +4433,17 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p = add(name, help_text)
         p.add_argument("item_id", metavar="<id>")
+
+    p = add("settle", "record a decision about a criterion, leaving the item open")
+    p.add_argument("item_id", metavar="<id>")
+    p.add_argument("--set", dest="set_criteria", metavar="#N=MARK[: WHY]",
+                   action="append",
+                   help="settle one criterion outright, with its own reason; "
+                        "repeatable, needs no terminal")
+    p.add_argument("--note", metavar="TEXT",
+                   help="one line on why; goes into NOTES beside the mark")
+    p.add_argument("--all-criteria", dest="all_criteria", action="store_true",
+                   help="ask about every criterion in one list, rather than yours first and the rest after")
 
     p = add("done", "close an item and record what happened")
     p.add_argument("item_id", metavar="<id>")

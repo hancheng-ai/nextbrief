@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import errno
+import io
 import json
 import os
 import subprocess
@@ -503,6 +504,127 @@ class NewItem(TempCase):
             ["git", "-C", str(self.ws), "status", "--porcelain", "--", "backlog"],
             capture_output=True)
         self.assertEqual(proc.stdout.decode("utf-8", "replace").strip(), "")
+
+
+class SettlingIsSomethingDoDoesAndDoneDoesNot(TempCase):
+    """★ The check belongs where the evidence changes, not where the decision is
+    made. ★
+
+    Settling acceptance criteria -- running the check, reading the output,
+    ticking what holds -- is slow and it belongs to `do`, which is opening a
+    session anyway. Three reasons it must not migrate into `done`, and the third
+    is a rule rather than a preference:
+
+    * **Timing.** By the time `done` is typed the decision is made. A check that
+      answers "0 of 4 hold" arrives *after* the moment it could have changed
+      anything, and a check that is routinely overridden teaches people to ignore
+      it -- which then costs the checks that were worth reading.
+    * **Latency.** `done` is one interactive keystroke away from a commit. A
+      check that shells out is either a wait or a timeout, and an unreliable
+      check is worse than none.
+    * **The engine may not run what it reads.** Acceptance criteria are prose in
+      a file. Executing them would be exactly the "content is data, never a
+      command" line this engine does not cross -- there is a fixture in the test
+      suite instructing its reader to mark every task complete.
+
+    So `done` keeps doing what it already did: it *shows* the tally somebody else
+    settled. These are the guards that it did not quietly grow a second job.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+        # Deliberately unsettled, and deliberately checkable: a criterion a
+        # settlement pass would have to go and look at is the only fixture that
+        # can prove `done` did not go and look at it.
+        self.item = write_backlog_item(
+            self.ws, "NA-0001", title="An open item",
+            body="\n".join(["<!-- AC:BEGIN -->",
+                             "- [ ] #1 (agent) `ruff check` is clean",
+                             "- [ ] #2 (you) the tail is worth a schema",
+                             "<!-- AC:END -->"]))
+        # Nobody at the keyboard, whatever the terminal running the suite is.
+        # `do`'s picker calls `input()` and `done` asks about ticks on a tty, so
+        # a suite run from an interactive shell would otherwise stop here and
+        # wait -- which reads as a hung test rather than as a missing redirect.
+        stdin = mock.patch("sys.stdin", io.StringIO())
+        stdin.start()
+        self.addCleanup(stdin.stop)
+
+    def _run(self, *args):
+        return capture(cli.main, ["--workspace", str(self.ws)] + list(args))
+
+    def _watch_launch(self):
+        """Record every call to the one function that builds a settlement pass."""
+        calls = []
+        real = cli.build_context
+
+        def watched(*args, **kwargs):
+            calls.append(args[1] if len(args) > 1 else None)
+            return real(*args, **kwargs)
+
+        cli.build_context = watched
+        self.addCleanup(lambda: setattr(cli, "build_context", real))
+        return calls
+
+    def test_do_is_where_the_pass_is_assembled(self):
+        """★ The half that stops the guard below from passing vacuously. ★
+
+        A test asserting `done` never calls something can be green because the
+        seam it patched is not the one anybody calls. This asserts the same patch
+        catches the caller that does.
+        """
+        calls = self._watch_launch()
+        code, out, _err = self._run("do", "NA-0001")
+        self.assertEqual(code, 0)          # no tty: the picker reads EOF and cancels
+        self.assertEqual(len(calls), 1, "`do` no longer builds the opening message")
+        self.assertIn("NA-0001", out)
+
+    def test_done_assembles_no_pass_of_its_own(self):
+        calls = self._watch_launch()
+        code, out, err = self._run("done", "NA-0001", "--summary", "closed it")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(calls, [], "`done` grew a settlement pass")
+        self.assertIn("-> done", out)
+
+    def test_done_still_shows_the_tally_somebody_else_settled(self):
+        # Not a check: a reading of marks already in the file. This is the whole
+        # of `done`'s job here and it must keep doing it, or "no new checks"
+        # would be satisfied by a `done` that says nothing at all.
+        code, out, err = self._run("done", "NA-0001", "--summary", "closed it")
+        self.assertEqual(code, 0, err)
+        self.assertIn("0/2", out)
+
+    def test_done_settles_nothing_on_its_own(self):
+        # Both boxes were open before and both are open after. A pass that ran
+        # here would have had one it could tick, which is why the fixture has one.
+        self._run("done", "NA-0001", "--summary", "closed it")
+        body = self.item.read_text(encoding="utf-8")
+        self.assertIn("- [ ] #1 (agent) `ruff check` is clean", body)
+        self.assertIn("- [ ] #2 (you) the tail is worth a schema", body)
+
+    def test_done_spawns_nothing_but_git(self):
+        """★ What "it did not get slower" is measured as. ★
+
+        Wall-clock is not assertable on a shared machine, so the guard is on the
+        thing that would make it slow: every settlement pass has to run something
+        to have checked anything. `done` may spawn git -- it commits, and that is
+        the durability promise -- and nothing else. A test harness, a probe or a
+        second repository's log would all land here.
+        """
+        seen = []
+        real = subprocess.run
+
+        def recorded(cmd, *args, **kwargs):
+            seen.append(cmd[0] if isinstance(cmd, (list, tuple)) and cmd else cmd)
+            return real(cmd, *args, **kwargs)
+
+        with mock.patch("subprocess.run", recorded):
+            code, out, err = self._run("done", "NA-0001", "--summary", "closed it")
+        self.assertEqual(code, 0, err)
+        self.assertIn("-> done", out)
+        self.assertEqual([c for c in seen if c != "git"], [],
+                         "`done` now runs something other than git: %s" % seen)
 
 
 class Durability(TempCase):

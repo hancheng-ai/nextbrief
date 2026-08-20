@@ -38,12 +38,14 @@ __all__ = [
     "OPEN_STATUSES", "TERMINAL_STATUSES", "DEFERRED", "HUMAN_ONLY_STATUSES",
     "AC_OPEN", "AC_DONE", "AC_DROPPED", "AC_YOU", "AC_AGENT",
     "AC_BEGIN", "AC_END",
-    "ac_owner", "ac_span", "ac_lines", "ac_progress",
+    "ac_owner", "ac_span", "ac_lines", "ac_progress", "needs_you",
+    "ac_trace", "untraceable_acs",
     "status_of", "defer_due", "is_live", "is_parked", "days_until_due",
     "Closing", "FutureWork", "CLOSING_BEGIN", "CLOSING_END",
     "SUMMARY_HUMAN", "SUMMARY_DRAFT", "SUMMARY_NONE",
     "parse_closing", "render_closing", "upsert_closing", "record_promotion",
     "next_item_id", "id_shape", "slug", "new_item_text", "blank_item_text",
+    "NOTES_END", "append_note",
     "IN_PROGRESS", "CLAIM", "CLAIM_KEYS", "claim_of", "claim_lines", "claim_age_days",
 ]
 
@@ -109,6 +111,34 @@ def ac_owner(text: str) -> Optional[str]:
     """``"you"``, ``"agent"``, or ``None`` for a criterion carrying no marker."""
     m = _AC_OWNER.match(text.strip())
     return m.group(1).lower() if m else None
+
+
+def needs_you(text: str) -> bool:
+    """Whether this criterion is one to put in front of a person.
+
+    ★ Unmarked counts as yours, and that is the load-bearing half. ★
+
+    An unmarked criterion is not the agent's -- it is one nobody has classified
+    yet, and *every criterion written before the marker existed is unmarked*.
+    Reading the absence as "the agent's" would empty the tick selector for the
+    entire existing backlog in one move, and empty is the one thing it must never
+    be: `done` could not ask at all until recently, measured at 1 ticked box
+    across 25 items, and being askable is the whole point of the step. So the
+    default is to ask, and `check` reports how many are still unclassified rather
+    than the engine guessing on their behalf.
+
+    ★ It lives here, beside the parser, because two callers now read it and they
+    point opposite ways. ★
+
+    `done` uses it to decide **what to ask a person about**, where reading an
+    unmarked criterion as the human's costs one extra question. `launch` uses it
+    to decide **what an agent may tick unasked**, where the same reading is the
+    only thing standing between an unclassified criterion and a box ticked by
+    something that was never told it owned it. One predicate, one answer, and
+    the conservative direction happens to be the same one in both -- which is
+    exactly the property a second copy would eventually lose.
+    """
+    return ac_owner(text) != AC_AGENT
 
 
 def ac_span(body: str) -> Tuple[int, int]:
@@ -216,6 +246,214 @@ def ac_lines(body: str) -> List[Tuple[int, str, str]]:
             if mark in (AC_OPEN, AC_DONE, AC_DROPPED) and s[5:].strip():
                 out.append((i, mark, s[5:].strip()))
     return out
+
+
+# ---------------------------------------------------------------------------
+# criteria that name nothing
+# ---------------------------------------------------------------------------
+
+# ★ Reads text. Runs nothing. ★
+#
+# Everything below decides whether a *sentence* names something, by looking at
+# the characters in it. It never opens the file it thinks it sees, never runs
+# the command it thinks it sees, and never asks whether the thing named exists.
+# That is not a limitation to be fixed later -- it is the property that makes
+# this safe to run over a backlog full of sentences somebody else wrote. The
+# engine's oldest rule is that it does not execute what it reads, and a lint
+# about criteria is the most tempting place to break it: "does `pytest -k foo`
+# pass" is one `subprocess` call away from being answerable, and answering it
+# would turn every item file in the workspace into a script.
+#
+# So the question is deliberately the weaker one: **is there anything here a
+# person could go and look at afterwards?** A criterion that answers no is not
+# waiting on anybody. It is broken, and it was broken the moment it was written.
+
+# Fenced in backticks: a path, a symbol, a flag, a value. The strongest signal
+# there is, because somebody deliberately marked it as a name.
+_TRACE_CODE = re.compile(r"`[^`\n]+`")
+
+# A quoted run with no whitespace in it -- `「还没有完成过的练习」`, the sentence a
+# screen must stop saying. Whitespace is what separates a literal from prose:
+# "does the tail get worse with tenant size" is a question somebody is quoting,
+# not a string anybody can grep for, and counting it would let every rhetorical
+# question in a backlog pass as evidence.
+_TRACE_LITERAL = re.compile(r"[「『\"“]([^」』\"”\s]{5,})[」』\"”]")
+
+# Identifier-shaped: `cli.py`, `--db`, `data/retention/`, `.gitignore`,
+# `nightlySweep`, `VT_DB_PATH`, `demo-final-v3`, `NA-0034`, `2026-08-17`.
+#
+# Hyphens are the awkward case and get their own rule below, because
+# `first-time` is an English word and `windows-latest` is a CI runner, and no
+# amount of regex tells them apart.
+#
+# Two of these alternatives are narrower than they look, and both narrowings
+# were put there by the nine English criteria in `examples/workspace/`:
+#
+#   * the separator must have something after it, or every English sentence
+#     that ends in a full stop names `feed.` and nothing is ever flagged;
+#   * a flag must start at a word boundary, or `first-time` is `-time`.
+#
+# Both passed silently on a CJK backlog, where the rule below this one was
+# answering first. A lint that cannot fail is worth what a test that cannot
+# fail is worth.
+_TRACE_IDENT = re.compile(r"""
+      [A-Za-z][A-Za-z0-9]*[_./\\:][A-Za-z0-9*][A-Za-z0-9_./\\:*+-]*  # cli.py
+    | [A-Za-z][A-Za-z0-9_-]*/                             # assets/
+    | \.[A-Za-z][A-Za-z0-9]{2,}                           # .gitignore
+    | (?<![A-Za-z0-9])--?[A-Za-z][A-Za-z0-9-]+            # --db
+    | [a-z][a-z0-9]*[A-Z][A-Za-z0-9]*                     # nightlySweep
+    | [A-Z]{2,}[A-Z0-9_]*                                 # CONFIG, VT_DB_PATH
+    | [A-Za-z]+[0-9][A-Za-z0-9]*                          # v3, md5, p95
+    | \d{4}-\d{2}-\d{2}                                   # 2026-08-17
+""", re.X)
+
+# Hyphenated, and only counted when it cannot be one English word: three or
+# more segments, or a digit somewhere in it.
+_TRACE_HYPHEN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+){2,}"
+                           r"|[A-Za-z]+-[A-Za-z0-9]*\d[A-Za-z0-9]*")
+
+# Any CJK character. Its presence switches on the rule below it. Spelled in
+# escapes rather than literals, so that a file re-encoded by an editor that
+# means well cannot quietly turn this into a range matching nothing.
+_CJK = re.compile("[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+# A bare Latin word, counted ONLY in a criterion that is otherwise written in
+# CJK -- where a Latin word is nearly always a name somebody reached for
+# because there is no other name: `registry`, `tier`, `dormant`, `mode`,
+# `assets`, `provider`, `skill`, `deck`, `domain`.
+#
+# ★ The asymmetry is deliberate, and it is the honest half of this whole file.
+# ★ In an English criterion the same rule would match every word in the
+# sentence, so it is off, and an English backlog is judged on the narrower
+# evidence above plus the vocabulary below. The consequence is real and worth
+# knowing before you trust a clean run: this was measured over 126 criteria in
+# a CJK workspace and tried against nine English ones. Being quieter in English
+# is the right direction to be wrong in -- see the note on the two error
+# directions in `untraceable_acs`. The nine were not wasted: they are what
+# caught the two regexes above matching `feed.` and `-time`.
+_TRACE_WORD = re.compile(r"[A-Za-z][A-Za-z]{2,}")
+
+# The format's own vocabulary, which every criterion carries and which
+# therefore names nothing about any particular one.
+_TRACE_STOP = frozenset(("agent", "you", "and", "the", "not", "for", "with"))
+
+# Words that assert a *record* or a *check* rather than an act. The list is
+# small on purpose: it is the last net, and every entry widened it. Chinese
+# first, because that is what it was measured on.
+_TRACE_WORDS = (
+    "测试 判据 断言 回归 变异 命令 脚本 提交 分支 日志 报告 收据 快照 备份"
+    " 文件 目录 路径 字段 标记 配置 参数 注释 文档 简报 表 图"
+    " 留档 留痕 痕迹 记录 记进 记入 写进 写下 写回 写明 写成 注明 贴进 贴出"
+    " 落在 落进 落到 定稿 产出 存在 不存在"
+    " test assert guard regression mutation command script commit branch"
+    " log report receipt snapshot backup file path directory field flag"
+    " config comment docstring document checklist record note written write"
+    " wrote page link appears exists timestamp"
+).split()
+
+
+def ac_trace(text: str) -> Optional[str]:
+    """The first thing this criterion names that would outlive the doing.
+
+    ``None`` when it names nothing -- which is the whole point of the function.
+
+    Returns the token rather than a boolean so that a warning can say *why* it
+    stayed quiet about a criterion somebody expected it to flag. Half the cost
+    of a lint is arguing with it, and "it saw ``HOME``" ends that argument in
+    one line where "it did not fire" starts a hunt through the rules.
+    """
+    body = _TRACE_CODE.sub(" ", text)
+    for rx in (_TRACE_CODE, _TRACE_LITERAL):
+        m = rx.search(text)
+        if m:
+            return m.group(0)
+    for rx in (_TRACE_IDENT, _TRACE_HYPHEN):
+        m = rx.search(body)
+        if m:
+            return m.group(0)
+    if _CJK.search(body):
+        for m in _TRACE_WORD.finditer(body):
+            if m.group(0).lower() not in _TRACE_STOP:
+                return m.group(0)
+    lowered = text.lower()
+    for word in _TRACE_WORDS:
+        if word in lowered:
+            return word
+    return None
+
+
+def _ac_paragraphs(body: str) -> List[Tuple[int, str, str]]:
+    """``ac_lines``, with each criterion's wrapped continuation folded back in.
+
+    A comprehension over ``ac_lines`` rather than a second scan, for the reason
+    written at the top of it: a criterion this disagreed with about where it
+    starts would be a criterion two features count differently.
+
+    Wrapping is not decoration. Ten of the 142 criteria measured on
+    2026-08-18 continue onto a second line, and four of those put the *only*
+    checkable half there -- ``两半都贴进 NOTES``, ``把这个 0 连同尝试过的命令一起
+    贴进 NOTES``. Reading the checkbox line alone would flag them, and being
+    wrong about a criterion that is written correctly is exactly the failure
+    this lint cannot afford.
+    """
+    lines = body.splitlines()
+    found = ac_lines(body)
+    _lo, hi = ac_span(body)
+    starts = [i for i, _m, _t in found]
+    out = []
+    for n, (i, mark, text) in enumerate(found):
+        stop = starts[n + 1] if n + 1 < len(starts) else hi
+        tail = []
+        for j in range(i + 1, stop):
+            # Indented, and it stops at the first line that is not. A
+            # continuation is indented under its bullet -- that is what makes
+            # it a continuation -- and taking everything up to the next
+            # checkbox instead would, on a body with no AC markers, fold the
+            # whole of NOTES into the last criterion. That failure is silent
+            # and it points the safe way (a criterion swallowing prose always
+            # finds a noun and is never flagged), which is exactly the kind
+            # nobody finds later.
+            if not lines[j][:1].isspace() or not lines[j].strip():
+                break
+            tail.append(lines[j].strip())
+        out.append((i, mark, " ".join([text] + tail)))
+    return out
+
+
+def untraceable_acs(body: str) -> List[Tuple[int, str]]:
+    """Open criteria that name nothing anybody could go and look at.
+
+    ``(line index, text)``, in file order.
+
+    ★ Why this is a warning and never an error. ★ It is a judgement about a
+    sentence, made by a regex, and it is wrong about roughly one criterion in
+    six. `check` exits 3 to tell a scheduler the brief is out of date and 1 to
+    tell a person two files claim one id; neither is true here, and neither is
+    fixed by re-running anything. Nothing downstream may key off this.
+
+    ★ The two ways of being wrong do not cost the same. ★ A criterion wrongly
+    flagged is a warning that fires on work somebody did correctly -- and a
+    warning that does that is one people learn to scroll past, after which the
+    one that matters goes past unread too. A criterion wrongly *passed* is
+    merely a miss: the item was already broken and stays exactly as broken as
+    it was. So every rule above leans towards silence, and four known misses
+    were left in rather than tightened out.
+
+    Measured on the workspace this was written for, 2026-08-18, 126 open
+    criteria across 31 live items: 14 of them name nothing that outlives the
+    doing, and this flags 11 -- 10 of the 14, plus one that does name a real
+    artifact (``25 个改动已分类处理``) without saying where it lands. The four it
+    misses all *mention*
+    something durable without asserting anything about it (``从快照恢复到一台
+    干净机器`` names a snapshot and records nothing), which is a distinction
+    between a noun and a claim that no regex is going to draw.
+
+    ★ Open criteria only. ★ A ticked one has already been settled and a
+    dropped one was set aside on purpose; warning about either is a complaint
+    about history, which is the same thing as noise.
+    """
+    return [(i, text) for i, mark, text in _ac_paragraphs(body)
+            if mark == AC_OPEN and ac_trace(text) is None]
 
 
 def ac_progress(body: str) -> Tuple[int, int, int]:
@@ -690,3 +928,26 @@ def blank_item_text(item_id: str, title: str, project: str, today: str) -> str:
              "confirmed as worth doing -- it is written down so that it stopped "
              "being something only one person remembered." % today,
     )
+
+
+NOTES_END = "<!-- SECTION:NOTES:END -->"
+
+
+def append_note(text: str, line: str) -> str:
+    """Add one line to the end of the NOTES block, leaving the rest alone.
+
+    Appends rather than prepends because NOTES is a log: the order records when
+    each thing was learned, and a newest-first block loses that the moment two
+    entries stop being obviously dated.
+
+    A file with no NOTES marker gets the line at the end rather than a
+    synthesised block. Inventing structure in somebody's file is how a tool
+    starts owning a document it was only supposed to add a line to.
+    """
+    if not line:
+        return text
+    block = "\n" + line.rstrip() + "\n"
+    if NOTES_END not in text:
+        return text.rstrip("\n") + "\n" + block
+    head, _sep, tail = text.rpartition(NOTES_END)
+    return head.rstrip("\n") + block + NOTES_END + tail

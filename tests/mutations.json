@@ -420,7 +420,7 @@
     {
       "label": "the privacy page unlinked from the Chinese README",
       "file": "README.zh.md",
-      "old": "\n\n[PRIVACY.md](https://github.com/hancheng-ai/nextbrief/blob/v0.4.0rc1/PRIVACY.md) 把同一件事写成了一页政策",
+      "old": "\n\n[PRIVACY.md](https://github.com/hancheng-ai/nextbrief/blob/v0.4.0rc2/PRIVACY.md) 把同一件事写成了一页政策",
       "new": "\n\n这一段就是全部说明",
       "select": "test_it_is_linked_from_the_documents_that_would_send_someone_to_it",
       "expect": "README.zh.md never links PRIVACY.md",
@@ -1015,8 +1015,8 @@
     {
       "label": "the session prompt scans for its own criteria",
       "file": "src/nextbrief/launch.py",
-      "old": "    marked = [(mark, raw[i].strip()) for i, mark, _text in ac_lines(body)]",
-      "new": "    marked = [(ln.strip()[3:4], ln.strip()) for ln in raw if ln.strip().startswith(\"- [\")]",
+      "old": "    marked = [(mark, text, raw[i].strip()) for i, mark, text in ac_lines(body)]",
+      "new": "    marked = [(ln.strip()[3:4], ln.strip()[5:].strip(), ln.strip())\n              for ln in raw if ln.strip().startswith(\"- [\")]",
       "select": "test_it_does_not_arrive_under_done_when",
       "expect": "decide the posture",
       "note": "The expensive one. `ac_lines` names `launch` as a reason it lives in `items`, then `launch` scanned the body itself -- so a sentence quoting what a criterion looks like arrived at an agent under **Done when**. `future_work` mints a task somebody may still reject; this opens the session that starts on it."
@@ -1024,8 +1024,8 @@
     {
       "label": "a withdrawn criterion quoted in prose reaches the prompt",
       "file": "src/nextbrief/launch.py",
-      "old": "    marked = [(mark, raw[i].strip()) for i, mark, _text in ac_lines(body)]",
-      "new": "    marked = [(ln.strip()[3:4], ln.strip()) for ln in raw if ln.strip().startswith(\"- [\")]",
+      "old": "    marked = [(mark, text, raw[i].strip()) for i, mark, text in ac_lines(body)]",
+      "new": "    marked = [(ln.strip()[3:4], ln.strip()[5:].strip(), ln.strip())\n              for ln in raw if ln.strip().startswith(\"- [\")]",
       "select": "test_it_does_not_arrive_under_no_longer_applies_either",
       "expect": "legacy sidecar",
       "note": "The opposite mistake and the same door: a heading telling an agent not to work on something nobody ever proposed, minted out of a line of NOTES."
@@ -1173,6 +1173,114 @@
       "select": "test_both_renderers_mark_it_unverified",
       "expect": "BRIEF.md shows the proposal without saying it is unchecked",
       "note": "For this section the label IS the safety property. These lines cite no evidence by design, so an unlabelled proposal sitting above a footer stating that every claim passed the evidence gate makes that footer false -- the same failure, and the same footer, as the decision_notes incident."
+    },
+    {
+      "label": "NA-0063 the criteria lint resolves the path it read instead of reading it",
+      "file": "src/nextbrief/items.py",
+      "old": "    return [(i, text) for i, mark, text in _ac_paragraphs(body)\n            if mark == AC_OPEN and ac_trace(text) is None]",
+      "new": "    import os\n    return [(i, text) for i, mark, text in _ac_paragraphs(body)\n            if mark == AC_OPEN\n            and not os.path.exists((ac_trace(text) or \"\").strip(\"`\"))]",
+      "select": "test_a_path_that_is_not_there_reads_the_same_as_one_that_is",
+      "expect": "the lint resolved a path instead of reading a sentence",
+      "note": "The improvement somebody reaches for first: stop passing criteria that name files nobody ever created. It costs determinism -- the same backlog then warns differently on two machines and on two working directories -- and it silently excludes every workspace whose evidence lives in Drive, Gmail or a provider console, which is a whole legitimate class of `(you)` criterion. One step further along the same road is running the command a criterion names, and the engine does not execute what it reads."
+    },
+    {
+      "label": "NA-0063 the criteria lint warns about criteria that are already settled",
+      "file": "src/nextbrief/items.py",
+      "old": "            if mark == AC_OPEN and ac_trace(text) is None]",
+      "new": "            if ac_trace(text) is None]",
+      "select": "test_a_ticked_criterion_is_never_flagged",
+      "expect": "name nothing anyone could look at",
+      "note": "Dropping the mark makes the warning a complaint about history: a ticked criterion was settled and a `[~]` one was set aside on purpose, and neither can be rewritten now. It is also how a warning becomes permanent, which is how it becomes unread -- the same failure `_criteria_warnings` caps its own line count to avoid."
+    },
+    {
+      "label": "NA-0063 the criteria lint reads only the first line of a wrapped criterion",
+      "file": "src/nextbrief/items.py",
+      "old": "            tail.append(lines[j].strip())",
+      "new": "            break",
+      "select": "test_a_wrapped_criterion_is_read_whole",
+      "expect": "name nothing anyone could look at",
+      "note": "Ten of the 142 criteria measured on 2026-08-18 wrap, and four put the only checkable half on the continuation line -- `两半都贴进 NOTES`. Truncating flags criteria that are written correctly, and a warning that fires on good work is the one failure this lint cannot afford: people stop reading it, and then the one that matters goes past unread too."
+    },
+    {
+      "label": "the opening message goes back to one list of every mark at once",
+      "file": "src/nextbrief/launch.py",
+      "old": "    still_open = [(text, ln) for mark, text, ln in marked if mark == AC_OPEN]",
+      "new": "    still_open = [(text, ln) for mark, text, ln in marked if mark != AC_DROPPED]",
+      "select": "test_it_is_not_also_listed_as_work",
+      "expect": "one file per crate",
+      "note": "The exact behaviour this replaced: `[x]` and `[ ]` handed to a session under one heading reading 'Done when', so a criterion somebody already settled arrives as an instruction to go and do it."
+    },
+    {
+      "label": "criteria the author must settle are offered to the agent as work",
+      "file": "src/nextbrief/launch.py",
+      "old": "    mine = [ln for text, ln in still_open if needs_you(text)]\n    yours = [ln for text, ln in still_open if not needs_you(text)]",
+      "new": "    mine = [ln for text, ln in still_open if not needs_you(text)]\n    yours = [ln for text, ln in still_open if needs_you(text)]",
+      "select": "test_a_you_criterion_is_never_offered_as_work",
+      "expect": "per-tenant schema",
+      "note": "The half of the boundary that is structural rather than stated. Reversed, a `(you)` criterion arrives under a heading that says it is the agent's to settle -- and the ticking that follows is indistinguishable on the page from work that was done."
+    },
+    {
+      "label": "an unclassified criterion is read as the agent's",
+      "file": "src/nextbrief/items.py",
+      "old": "    return ac_owner(text) != AC_AGENT",
+      "new": "    return ac_owner(text) == AC_YOU",
+      "select": "test_an_unmarked_criterion_lands_on_the_same_side_as_a_you_one",
+      "expect": "nobody has classified",
+      "note": "Every criterion written before the marker existed carries none, so this hands a whole backlog to something entitled to tick it, in one move and without a symptom. `done` reads the same predicate and would start skipping the same criteria."
+    },
+    {
+      "label": "the pass is asked for with no boundary on it",
+      "file": "src/nextbrief/launch.py",
+      "old": "    if still_open:\n        # ★ The boundary is stated where the ticking is asked for, and nowhere",
+      "new": "    if not still_open:\n        # ★ The boundary is stated where the ticking is asked for, and nowhere",
+      "select": "test_the_pass_is_told_not_to_write_a_terminal_status",
+      "expect": "Settle what you can before you start",
+      "note": "Deleting the paragraph deletes the only place the session is told not to write a terminal status, and nothing else changes: the criteria still arrive, the prompt still reads complete."
+    },
+    {
+      "label": "the terminal statuses are named one at a time",
+      "file": "src/nextbrief/launch.py",
+      "old": "            statuses=\"/\".join(HUMAN_ONLY_STATUSES),",
+      "new": "            statuses=\"done\",",
+      "select": "test_the_pass_is_told_not_to_write_a_terminal_status",
+      "expect": "dropped",
+      "note": "The shape a fourth off-the-page status would arrive in: the sentence still reads like a rule and covers less than it says. `deferred` was added to HUMAN_ONLY_STATUSES for exactly this reason -- parking an item hides it as thoroughly as closing it."
+    },
+    {
+      "label": "a section of criteria is dealt out and then not printed",
+      "file": "src/nextbrief/launch.py",
+      "old": "        lines.extend(mine)",
+      "new": "        lines.extend([])",
+      "select": "test_every_criterion_still_arrives_somewhere",
+      "expect": "per-tenant schema",
+      "note": "How splitting a list loses one: the prompt still reads as a complete definition of done, one heading shorter, and the criteria that vanish are the ones nobody assigned to the agent."
+    },
+    {
+      "label": "`done` grows a settlement pass of its own",
+      "file": "src/nextbrief/cli.py",
+      "old": "    _gap, problem = _durability_problem(ws)\n    if problem is not None:\n        _err(problem)\n        return EXIT_FAIL\n\n    # Ticking comes first,",
+      "new": "    build_context(ws, path, cat)\n    _gap, problem = _durability_problem(ws)\n    if problem is not None:\n        _err(problem)\n        return EXIT_FAIL\n\n    # Ticking comes first,",
+      "select": "test_done_assembles_no_pass_of_its_own",
+      "expect": "grew a settlement pass",
+      "note": "The migration this item exists to prevent. Settling at `done` puts the answer after the decision it could have changed, and a check people routinely override is one they learn to scroll past."
+    },
+    {
+      "label": "`done` shells out to something on the way to closing",
+      "file": "src/nextbrief/cli.py",
+      "old": "    message = tr(cat, \"cli.done.done\", \"{id} -> done\", id=args.item_id)",
+      "new": "    subprocess.run([sys.executable, \"-c\", \"pass\"], capture_output=True)\n    message = tr(cat, \"cli.done.done\", \"{id} -> done\", id=args.item_id)",
+      "select": "test_done_spawns_nothing_but_git",
+      "expect": "now runs something other than git",
+      "note": "Wall-clock is not assertable on a shared machine, so \"it did not get slower\" is measured as what it spawns: every check that checked anything had to run something. git is allowed -- `done` commits, and that is the durability promise."
+    },
+    {
+      "label": "the opening message's own strings ship untranslated",
+      "file": "src/nextbrief/locales/zh.json",
+      "old": "  \"launch.prompt.settlement\":",
+      "new": "  \"launch.prompt.settlement.unused\":",
+      "select": "test_every_key_the_cli_asks_for_exists_in_both",
+      "expect": "missing from zh",
+      "note": "`launch` asks through `tr`, which returns its English fallback rather than a bare key -- so a missing string is not loud. It drops one paragraph of English into the middle of a Chinese session prompt, and that paragraph is the one carrying the boundary on what the session may tick."
     }
   ]
 }

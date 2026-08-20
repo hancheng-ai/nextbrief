@@ -15,6 +15,9 @@ Read the agent rules at the workspace root first (`{workspace_root}/CLAUDE.md` o
 1. **Read** `{workspace_root}/state/digest.json` -- **this one file, and everything you need is in it**: per-project facts,
    the legal citation handles, non-goals, deadlines, pending decisions, stale documents, plus a summary of every
    backlog item you can still act on and the cap configuration.
+   **Read `digest.schema_version` first.** This prompt describes shape `1`. If the file says anything else, or
+   the key is missing, **stop and say so** rather than reading on -- a best-effort read of a shape you have not
+   seen is how a pass ends up confidently reporting the wrong thing, which costs more than reporting nothing.
    `digest.backlog[]` holds the items that are **still live** -- open, in progress, waiting, deferred. Closed ones are
    not there: they moved to `digest.closed`, and every entry in it is `id` / `project` / `title` / `status` /
    `updated_date` and nothing else. There is no judgement left to make about a closed item -- the one call you are

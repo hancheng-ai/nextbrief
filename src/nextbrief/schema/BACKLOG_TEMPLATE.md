@@ -87,6 +87,16 @@ agent cannot obtain, and your own judgement as the user.
 `done` asks you about the `(you)` ones first, then about any the agent's that
 nothing settled, in a list of their own (`--all-criteria` asks about all of them
 in one list). Enter leaves them open.
+
+`do` deals them into three lists in the opening message — already settled, still
+open and the agent's, still open and yours — and asks for a settlement pass before
+the work starts: check what can be checked, tick only what something was run to
+establish, and record in NOTES *what was run and what was seen*. A tick with no
+evidence under it is the false completion the status rule above exists to refuse,
+in a smaller box. Two things that pass may never do: tick a criterion that is not
+marked `(agent)` (an unmarked one counts as yours), and write any of the three
+human-only statuses.
+
 `check` warns when an item has more than two on you, or has criteria carrying no
 label at all. An unlabelled criterion is treated as yours, because nobody has said
 otherwise yet.

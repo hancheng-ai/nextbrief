@@ -27,7 +27,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .frontmatter import parse_frontmatter
 from .i18n import Catalog, load_catalog
-from .items import AC_DROPPED, ac_lines
+from .items import (
+    AC_DONE,
+    AC_DROPPED,
+    AC_OPEN,
+    AC_YOU,
+    HUMAN_ONLY_STATUSES,
+    ac_lines,
+    needs_you,
+)
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, expand
 
@@ -271,13 +279,74 @@ def build_context(ws: Workspace, item_path, cat: Optional[Catalog] = None) -> La
     # a `- [ ]` one, so membership was safe -- but it re-derived the mark in a
     # fourth place, and one of the two spellings was going to drift eventually.
     raw = body.splitlines()
-    marked = [(mark, raw[i].strip()) for i, mark, _text in ac_lines(body)]
-    set_aside = [ln for mark, ln in marked if mark == AC_DROPPED]
-    done_when = [ln for mark, ln in marked if mark != AC_DROPPED]
-    if done_when:
+    marked = [(mark, text, raw[i].strip()) for i, mark, text in ac_lines(body)]
+    set_aside = [ln for mark, _text, ln in marked if mark == AC_DROPPED]
+    settled = [ln for mark, _text, ln in marked if mark == AC_DONE]
+    still_open = [(text, ln) for mark, text, ln in marked if mark == AC_OPEN]
+    # ★ Split by the same predicate `done` asks its questions with, not by a
+    # second reading of the marker. ★ See `items.needs_you`: unmarked counts as
+    # the human's, which here is the difference between a criterion nobody has
+    # classified and a box ticked by something nobody told it owned.
+    mine = [ln for text, ln in still_open if needs_you(text)]
+    yours = [ln for text, ln in still_open if not needs_you(text)]
+
+    # ★ Three lists, because "which of these already hold" is a question the
+    # engine can answer and the reader was being asked to answer again. ★
+    #
+    # One list titled "Done when" carrying every mark at once put the work of
+    # separating settled from open onto the agent, every session, from marks it
+    # had to re-parse -- and the cost was not the parsing. An item is routinely
+    # older than the work: criteria come true while nobody is looking, and a
+    # session that cannot see which ones starts by redoing them. The engine
+    # already knows the mark and already knows the owner; withholding both and
+    # printing a flat list is this repository's characteristic bug, a fact
+    # collected and then given no consumer.
+    if settled:
         lines.append("")
-        lines.append(tr(cat, "launch.prompt.acceptance", "**Done when**:"))
-        lines.extend(done_when)
+        lines.append(tr(cat, "launch.prompt.settled",
+                        "**Already settled** -- ticked when somebody checked them, "
+                        "with what they ran recorded in NOTES. Do not redo these, "
+                        "and do not untick them:"))
+        lines.extend(settled)
+    if yours:
+        lines.append("")
+        lines.append(tr(cat, "launch.prompt.acceptance",
+                        "**Done when** -- still open, and yours to settle:"))
+        lines.extend(yours)
+    if mine:
+        # Shown, never folded into the list above. An agent that cannot see a
+        # criterion cannot tell me it looks done -- and that report is worth
+        # having. What it may not do is tick it, which is why the heading says so
+        # rather than the paragraph below saying it about criteria it can no
+        # longer point at.
+        lines.append("")
+        lines.append(tr(cat, "launch.prompt.acceptance_mine",
+                        "**Done when -- but mine, not yours** -- marked ({you}), or "
+                        "carrying no marker at all, which means nobody has said yet. "
+                        "Check them if you can and tell me what you found. **Never "
+                        "tick one of these**, however plainly it holds:", you=AC_YOU))
+        lines.extend(mine)
+    if still_open:
+        # ★ The boundary is stated where the ticking is asked for, and nowhere
+        # else. ★ It is two sentences at the point of use rather than a rule in
+        # a document the session may never open -- and the half of it that can
+        # be enforced by structure already has been, one heading up.
+        lines.append("")
+        lines.append(tr(
+            cat,
+            "launch.prompt.settlement",
+            "**Settle what you can before you start, not on the way out.** This "
+            "entry can be older than the work, so some of what is still open may "
+            "already hold. Go through the open criteria once, first thing. Tick "
+            "one only if you ran something and saw the answer, and write into "
+            "NOTES what you ran and what you saw -- the output, not the "
+            "conclusion, because a tick with nothing under it is a false "
+            "completion in a smaller box. One you cannot check stays open with "
+            "the reason beside it: \"I could not verify this\" is an answer, "
+            "\"probably done\" is not. And never write `status: {statuses}` -- "
+            "taking an item off the page stays mine.",
+            statuses="/".join(HUMAN_ONLY_STATUSES),
+        ))
     if set_aside:
         # Kept, rather than dropped from the prompt. The sentence is the record
         # that the goal moved, and an agent that cannot see it will propose the

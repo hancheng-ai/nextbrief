@@ -67,6 +67,7 @@ SURVEY = {
     "do":          (HONOURED, "finds the item under ws.backlog before it launches anything"),
     "show":        (HONOURED, "ws.backlog"),
     "ok":          (HONOURED, "ws.backlog"),
+    "settle":      (HONOURED, "ws.backlog -- reads and rewrites the item in place"),
     "done":        (HONOURED, "ws.backlog + ws.log"),
     "drop":        (HONOURED, "ws.backlog"),
     "defer":       (HONOURED, "ws.backlog + ws.log"),
@@ -85,7 +86,7 @@ SURVEY = {
 
 # Enough argv for argparse to accept the command. The refusal happens during
 # workspace resolution, before any of these mean anything.
-NEEDS_ID = ("do", "show", "ok", "drop", "done", "defer", "followup")
+NEEDS_ID = ("do", "show", "ok", "settle", "drop", "done", "defer", "followup")
 
 # Commands whose own arguments are not an id. Spelled out rather than folded
 # into the line above, because getting one of these wrong turns a refusal test

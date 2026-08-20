@@ -1295,6 +1295,58 @@ TIER_KEYS = {"hook": "action.tier.hook", "skill": "action.tier.skill",
              "explore": "action.tier.explore"}
 
 
+# Signal-cell labels that a DECLARATION decides rather than a sensor. Kept in a
+# dict, and reached through it in both renderers, so that adding one cannot
+# bypass the catalog-parity test the same way a literal at a call site would.
+#
+# Two spellings of each, because the two pages consume them differently: the
+# Markdown brief is rendered, so emphasis works, while the HTML signal cell is
+# escaped rather than rendered and a `**` in it reaches the reader as two
+# asterisks.
+DECLARED_SIGNAL_KEYS = {
+    "declaration_broken": ("signal.declaration_broken", "dec"),
+    "report_never": ("signal.report_never", "dormant"),
+    "report_due": ("signal.report_due", "dormant"),
+    "reported": ("signal.reported", "warm"),
+    # "reported 0d ago" is not a sentence anybody writes. A report filed today is
+    # the one case where the age is worth nothing and the fact is worth saying.
+    "reported_today": ("signal.reported_today", "warm"),
+}
+
+
+def declared_signal(p, cat: Catalog, ns: str = "brief"):
+    """The signal cell when a declaration -- not a sensor -- decides it.
+
+    Returns ``(text, css_class)`` or ``None``. Shared by both renderers rather
+    than written twice, because the two pages disagreeing about what a project's
+    state is called is the failure mode this engine is least able to notice:
+    `nextbrief open` shows the HTML one and nobody diffs them.
+
+    Order matters and is the whole judgement. A broken declaration outranks
+    everything, including a decision that is pending, because until the registry
+    points at something real nothing else on the row was measured. A report that
+    is due outranks "neglected", which would otherwise say "untouched for 40
+    days" about a project whose entire declaration is that touching is not the
+    measure here.
+    """
+    def label(name, **kw):
+        key, cls = DECLARED_SIGNAL_KEYS[name]
+        return cat.t("%s.%s" % (ns, key), **kw), cls
+
+    if p.get("declaration_broken"):
+        return label("declaration_broken")
+    rep = p.get("reported") or {}
+    if not rep.get("declared"):
+        return None
+    if rep.get("never_reported"):
+        return label("report_never")
+    if rep.get("overdue"):
+        return label("report_due", days=rep.get("days_since"))
+    if not rep.get("days_since"):
+        return label("reported_today")
+    return label("reported", days=rep.get("days_since"))
+
+
 def probe_bits(p, cat: Catalog) -> List[str]:
     """The probe's contribution to a project's evidence cell.
 
@@ -1361,6 +1413,74 @@ def probe_problems(listed, cat: Catalog):
     return failures, resample
 
 
+# At most this many missing paths are named before the line stops counting.
+# A banner that prints eleven paths is a banner people scroll past, and the one
+# that mattered is somewhere in the middle of it.
+MAX_NAMED_PATHS = 3
+
+
+def _named_paths(paths, cat: Catalog) -> str:
+    head = cat.t("sep.comma").join(str(x) for x in paths[:MAX_NAMED_PATHS])
+    if len(paths) <= MAX_NAMED_PATHS:
+        return head
+    return cat.t("brief.paths_and_more", head=head, more=len(paths) - MAX_NAMED_PATHS)
+
+
+def broken_declarations(projects, cat: Catalog) -> List[dict]:
+    """Projects whose registry entry points at a directory that is not there.
+
+    ★ The one thing this must never render as is a quiet project. ★
+
+    Both states put the same nothing on the row -- no commits, no files, no
+    active days -- and they call for opposite actions: a moved directory wants
+    one line of the registry edited, an abandoned project wants doing or
+    archiving. The engine has always known which it was looking at; ``sense``
+    has recorded ``fs.missing_paths`` since the walk was written. Nothing read
+    it, so on the page the two were the same sentence.
+
+    Ordered by id so two runs over one snapshot produce identical bytes.
+    """
+    out = []
+    for p in sorted(projects, key=lambda q: str(q.get("id") or "")):
+        missing = (p.get("fs") or {}).get("missing_paths") or []
+        if not missing:
+            continue
+        declared = p.get("paths") or []
+        out.append({
+            "id": p.get("id"),
+            "name": p.get("name") or p.get("id") or "",
+            "missing": list(missing),
+            # Whether anything at all is still being measured. Some paths gone
+            # is a partial reading and says so; all paths gone means every
+            # number on the row is the absence of a directory.
+            "total": len(declared) and len(missing) >= len(declared),
+        })
+    return out
+
+
+def report_bits(p, cat: Catalog) -> List[str]:
+    """The hand-reported project's evidence cell.
+
+    Three sentences, because a reader acts differently on each: a fresh report
+    is the row doing its job, an overdue one is a request addressed to a person,
+    and a declaration with no report behind it has never done anything at all.
+
+    None of them is "cold". That word is the point of the whole declaration:
+    spent on a project that is quiet only on disk, it teaches its reader to skip
+    the signal column -- and the column still has work to do on the projects
+    where file silence really does mean something.
+    """
+    rep = p.get("reported") or {}
+    if not rep.get("declared"):
+        return []
+    if rep.get("never_reported"):
+        return [cat.t("evidence.no_report_yet")]
+    if rep.get("overdue"):
+        return [cat.t("evidence.no_report_since", date=rep.get("last_report"),
+                      days=rep.get("days_since"))]
+    return [cat.t("evidence.reported_on", date=rep.get("last_report"))]
+
+
 def evidence_phrase(p, cat: Catalog) -> str:
     """★ The brief must name the kind of signal it is quoting.
     "76 files changed (file mtimes; no git here)" and "178 commits" should not
@@ -1369,6 +1489,19 @@ def evidence_phrase(p, cat: Catalog) -> str:
     fs = p.get("fs") or {}
     changed = fs.get("changed") or {}
     bits = []
+    # First, and ahead of any number, because it is the sentence that decides
+    # whether the numbers mean anything. A partially broken declaration still
+    # prints its counts -- they are real, just incomplete -- with the breakage
+    # in front of them saying so.
+    missing = fs.get("missing_paths") or []
+    if missing:
+        bits.append(cat.t("evidence.paths_missing", paths=_named_paths(missing, cat)))
+    # A disowned sensor contributes nothing, however much it has to say. See
+    # `report_bits`: what replaces the counts is the age of the last report.
+    if (p.get("reported") or {}).get("declared"):
+        bits.extend(report_bits(p, cat))
+        bits.extend(probe_bits(p, cat))
+        return cat.t("sep.dot").join(bits)
     if p.get("has_git") and p.get("git"):
         r = p["git"][0]
         c30 = (r.get("commits_since") or {}).get("30")
@@ -1893,6 +2026,27 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
             L.append("> " + cat.t("brief.banner.probe_failed_aged", days=f["aged_days"]))
         L.append("")
 
+    # ---- a broken declaration says so, in the same loud place ----
+    #
+    # A banner for the same reason the probe failure gets one, and it is the
+    # same defect: a sensor that is not reporting must never be allowed to read
+    # as a project that is not moving. The difference is only which end broke --
+    # there the site changed shape, here the directory moved -- and the cost of
+    # silence is identical, except that this one is a single line of the
+    # registry away from being fixed.
+    #
+    # `tracked` rather than `listed`, deliberately: the table drops projects
+    # whose declared phase takes them out of the ranking, and a maintenance
+    # project pointed at a directory that no longer exists is exactly the one
+    # nobody would otherwise catch.
+    broken = broken_declarations(tracked, cat)
+    notes["declaration_broken"] = broken
+    for b in broken:
+        L.append("> " + cat.t("brief.banner.declaration_broken", project=b["name"],
+                              paths=_named_paths(b["missing"], cat),
+                              command="nextbrief check"))
+        L.append("")
+
     # ---- do these first (whole portfolio) ----
     nexts = (brief or {}).get("next_actions") or []
     # ★ Computed once here, rendered twice, and handed over in `notes` -- the
@@ -1975,7 +2129,10 @@ def render_brief(snap, brief, backlog, cfg, reg, cat: Catalog, notes, meta=None)
             continue
         ev = p.get("evidence") or {}
         sig = cat.t(SIGNAL_KEYS.get(ev.get("signal"), "signal.unknown"))
-        if pid in unrated_ids:
+        declared_sig = declared_signal(p, cat)
+        if declared_sig:
+            sig = declared_sig[0]
+        elif pid in unrated_ids:
             sig = cat.t("brief.signal.unrated")
         elif pid in dec_ids:
             sig = cat.t("brief.signal.decision_pending")
@@ -2506,6 +2663,21 @@ def read_prev_run(ws: Workspace, current_at=None) -> Optional[dict]:
     return None
 
 
+def measurement_release(snap) -> Optional[str]:
+    """The engine RELEASE that produced a snapshot, or None if it does not say.
+
+    The local version segment is dropped -- `0.4.0` and `0.4.0+dev.gabc1234.dirty`
+    measure identically, and marking every editable-install run would be an alarm
+    that is always on, which teaches the reader to skip the line that matters.
+
+    None when the field is absent, and the caller then says nothing: the marker's
+    whole value is naming the two versions, and "something changed, no idea what"
+    is not worth a line in a log somebody reads every morning.
+    """
+    v = ((snap or {}).get("run") or {}).get("generator_version")
+    return str(v).split("+", 1)[0] if v else None
+
+
 def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catalog, dry_run=False):
     """★ Append, never rewrite. A second run on the same day adds `## run N`."""
     path = ws.log / ("%s.md" % as_of.isoformat())
@@ -2557,6 +2729,18 @@ def write_day_log(ws: Workspace, as_of, snap, prev_snap, meta, notes, cat: Catal
                                     bits=cat.t("sep.list").join(bits)))
         out.append("### " + cat.t("log.section.changes"))
         if deltas:
+            # A delta is a subtraction between two snapshots, and it silently
+            # assumes both were measured the same way. An engine upgrade breaks
+            # that assumption without moving anything in the world: 0.4.0 stopped
+            # counting a nested worktree's files as its host project's, and the
+            # log recorded `files/7d -540` and then `+540` as if a project had
+            # collapsed and come back. Said only when there is a delta to
+            # explain -- a marker on a quiet night is noise, and noise is what
+            # makes the loud night skippable.
+            old_rel, new_rel = measurement_release(prev_snap), measurement_release(snap)
+            if old_rel and new_rel and old_rel != new_rel:
+                out.append("- " + cat.t("log.delta.measurement_changed",
+                                        old=old_rel, new=new_rel))
             for d in deltas:
                 out.append("- " + d)
         else:

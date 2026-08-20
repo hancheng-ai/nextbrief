@@ -350,6 +350,29 @@ strains one, say so in the PR rather than working around it quietly.
    used to close whichever file the directory listing reached first, printing
    the same success line it prints when it is right.
 
+9. **A criterion must name at least one thing that outlives the doing** — a path
+   or a file, a command or a test, a symbol or a field, a sentence that has to
+   appear on a screen, **or a record it explicitly asks somebody to write down**.
+   "Asked her" does not count; "asked her, and the date is in NOTES" does. The
+   difference is not whether the work happened, it is whether anything in the
+   world would remember.
+
+   A criterion that names none of those is not one that *needs a person*. It is
+   broken, and it was broken the moment it was written, because nobody can
+   settle it afterwards — the author included. Re-marking it `(you)` moves an
+   unanswerable question to somebody who also cannot answer it. Make it produce
+   a trace instead.
+
+   ⚠ **The question is whether a trace EXISTS, not whether this engine can see
+   one.** Evidence that lands in Drive, in Gmail, in a provider console or on a
+   NAS is evidence. A threshold that asked for a checkable path instead would
+   condemn a whole legitimate class of `(you)` criterion — and, measured over
+   126 open criteria, would have flagged ten that were written exactly as this
+   rule asks. `nextbrief check` warns about the criteria that name nothing at
+   all; it is a warning, never an error, it never touches the exit code, and it
+   **runs nothing and resolves nothing** — see `items.untraceable_acs`, which
+   also records where it is known to be wrong.
+
 ---
 
 ## The four extension points

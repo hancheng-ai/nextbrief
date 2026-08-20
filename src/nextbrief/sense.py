@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import build_version, transcripts
 from .annotate import ASKED_VERSION, apply_annotations, load_annotations
-from .discovery import checkout_kind, discover
+from .discovery import checkout_kind, discover, is_git_dir
 from .frontmatter import parse_frontmatter
 from .fs import write_text
 from .inventory import INVENTORY_NAME, inventory_document
@@ -95,6 +95,17 @@ DEFAULT_SESSIONS_DIR = "~/.claude/projects"
 # Non-goal tables are looked up by heading text, which is language-specific;
 # registries written in another language set ``non_goals_heading`` explicitly.
 DEFAULT_NON_GOALS_HEADING = "Non-goals"
+
+# The version of the DIGEST's field set -- not of the engine, and not tied to
+# `snapshot.json`'s own number. Two contracts, two versions, for the reason
+# `docs/INVENTORY_SCHEMA.md` gives about the third: making them track each other
+# implies a relationship that is not there, and bumps a consumer for a file that
+# did not move.
+#
+# Starts at 1 with the shape 0.4.0 settled on. An absent key means an engine
+# older than that, whose `backlog[]` still carried closed items -- which is
+# exactly the read a consumer needs to be able to make, and could not before.
+DIGEST_SCHEMA_VERSION = 1
 
 # How many `done` items reach the digest, newest first. Fixed rather than
 # configurable: it buys the reader one line of the brief ("what got finished
@@ -627,6 +638,8 @@ def count_under(base, rel_base: str, pfilter: PathFilter,
             rel = rel_dir + "/" + d
             if private and private.covers_dir(rel):
                 continue
+            if is_git_dir(os.path.join(dirpath, d)):
+                continue
             kept.append(d)
         dirnames[:] = kept
         for fn in filenames:
@@ -693,6 +706,14 @@ def walk_project(root, pfilter: PathFilter, as_of: dt.date,
                 continue
             rel = (rel_dir + "/" + d).strip("/") if rel_dir else d
             if private and private.covers_dir(rel):
+                continue
+            # Git's own storage, under whatever name. Dropped SILENTLY, unlike
+            # a nested checkout below: a checkout hides files somebody wrote, so
+            # its disappearance has to be visible, while a git directory holds no
+            # work at any name and the standard one has always gone without a
+            # word. Reporting every `.git` in a portfolio would be noise, and
+            # noise is what teaches a reader to skip the line that matters.
+            if is_git_dir(os.path.join(dirpath, d)):
                 continue
             # Checked after the two exclusions above, not before: a checkout
             # inside a private or already-ignored tree must stay unnamed, and
@@ -1635,6 +1656,94 @@ def classify_signal(days: Optional[int], cfg: Dict[str, Any]) -> str:
     return "dormant"
 
 
+# How long a hand-reported project may go unreported before the brief asks for
+# one. A default rather than a required config key: a workspace written before
+# this existed must keep sensing without an edit.
+REPORT_CADENCE_DEFAULT_DAYS = 14
+
+
+def reported_view(pr: Dict[str, Any], as_of: dt.date, cfg: Dict[str, Any],
+                  parse_failed: List[dict]) -> Optional[Dict[str, Any]]:
+    """★ Normalise a project's ``evidence`` declaration, or return None.
+
+    ``status`` answers *what phase is this in*; this answers a different
+    question -- *what counts as evidence here*. They are orthogonal, and
+    conflating them is what `maintenance` was being asked to do and cannot:
+    maintenance says "it is meant to be quiet", while a hand-reported project
+    expects a great deal to happen and simply none of it on this disk.
+
+    ``evidence: "reported"`` is the whole declaration. It says the filesystem is
+    not a sensor for this project, so the engine stops treating file silence as
+    a finding and starts counting the only thing it can honestly count: how long
+    it has been since a person said something. ``last_report`` is that date, and
+    a human types it -- deliberately, and never scraped out of prose, for the
+    same reason `deadlines` are typed: a date lifted from a sentence is the
+    highest-hallucination field there is, and this one decides a whole row.
+
+    ``evidence: "sensed"`` is the default written out. It changes nothing, and
+    exists so a registry can say "yes, files really are the measure here"
+    rather than leave it to be inferred from a missing key.
+    """
+    spec = pr.get("evidence")
+    if spec is None:
+        return None
+    pid = str(pr.get("id"))
+
+    def fail(why: str) -> None:
+        parse_failed.append({"path": pid, "code": "bad_evidence", "why": why})
+        return None
+
+    if isinstance(spec, str):
+        spec = {"kind": spec}
+    if not isinstance(spec, dict):
+        return fail("evidence must be \"sensed\", \"reported\", or an object, got %s"
+                    % _kind(pr.get("evidence")))
+    kind = spec.get("kind")
+    if kind == "sensed":
+        return None
+    if kind != "reported":
+        return fail("evidence.kind must be \"sensed\" or \"reported\", got %s"
+                    % _kind(kind))
+
+    last = spec.get("last_report")
+    last_date = None
+    if last is not None:
+        if not isinstance(last, str):
+            return fail("evidence.last_report must be an ISO date string, got %s"
+                        % _kind(last))
+        try:
+            last_date = dt.date.fromisoformat(last.strip())
+        except ValueError:
+            return fail("evidence.last_report is not a valid ISO date: %s" % (last,))
+
+    cadence = day_count(spec.get("cadence_days", (cfg.get("evidence") or {}).get(
+        "report_cadence_days", REPORT_CADENCE_DEFAULT_DAYS)),
+        REPORT_CADENCE_DEFAULT_DAYS, pid, "evidence.cadence_days", parse_failed)
+
+    days = None
+    if last_date is not None:
+        days = (as_of - last_date).days
+        if days < 0:
+            # Same rule as every other date this engine reads: a future date is
+            # recorded and clamped, never silently accepted. An unclamped one
+            # would make "reported -3 days ago" the freshest evidence in the
+            # portfolio for as long as it sat there.
+            parse_failed.append({"path": pid, "code": "future_dated_evidence",
+                                 "detail": "evidence.last_report %s is after as_of %s"
+                                           % (last_date.isoformat(), as_of.isoformat())})
+            days = 0
+    return {
+        "declared": True,
+        "last_report": last_date.isoformat() if last_date else None,
+        "days_since": days,
+        "cadence_days": cadence,
+        "never_reported": last_date is None,
+        # Never reported counts as overdue: a declaration with no report behind
+        # it is exactly the state this field exists to make visible.
+        "overdue": last_date is None or (days is not None and days > cadence),
+    }
+
+
 def _rank(order: Sequence[str], kind: Optional[str]) -> int:
     """Confidence rank, with unknown kinds sorting last instead of raising."""
     try:
@@ -1793,6 +1902,13 @@ def check_shapes(cfg: Any, reg: Any) -> None:
             for key in ("privacy", "ice"):
                 if pr.get(key) is not None:
                     want(isinstance(pr[key], dict), "%s.%s" % (at, key), "an object", pr[key])
+            # Only the container's type, here. The contents are normalised by
+            # `reported_view`, which records a bad value as a parse failure
+            # rather than refusing to produce a brief: a mistyped date should
+            # cost you one project's row, not the whole morning's page.
+            if pr.get("evidence") is not None:
+                want(isinstance(pr["evidence"], (str, dict)), "%s.evidence" % at,
+                     '"sensed", "reported", or an object', pr["evidence"])
             never = (pr.get("privacy") or {}).get("never_read")
             if never is not None:
                 want(isinstance(never, list), "%s.privacy.never_read" % at,
@@ -2078,6 +2194,9 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         pid = pr["id"]
         paths = list(pr.get("paths", []) or [])
         own_globs = list(pr.get("ignore_globs", []) or [])
+        # Read before anything is measured, because it decides what the
+        # measurements are allowed to mean further down.
+        reported = reported_view(pr, as_of, cfg, parse_failed)
 
         # ---- filesystem ----
         fs_agg: Dict[str, Any] = {
@@ -2356,6 +2475,24 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         if probe_view and probe_view.get("date"):
             cands.append(("probe", probe_view["date"]))
 
+        # ★ A hand-reported project runs a different contest, with one entrant.
+        #
+        # Not a filter over the same candidates -- a replacement of them. The
+        # declaration says the filesystem is not a sensor here, and a sensor you
+        # have disowned cannot be allowed to set the date the whole row is
+        # phrased around: leaving `file_mtime` in would put "7 active days" back
+        # on a project whose activity was a child building Lego, and leaving it
+        # in only when it happens to be fresh would be worse still, because then
+        # the number appears exactly on the days it is most misleading.
+        #
+        # A probe survives, because a probe is the same declaration made
+        # precisely: somebody named a URL that measures this work. What does not
+        # survive is anything derived from files, commits or sessions.
+        if reported:
+            cands = [("human", reported["last_report"])] if reported["last_report"] else []
+            if probe_view and probe_view.get("date"):
+                cands.append(("probe", probe_view["date"]))
+
         best_kind, best_date, days_since = None, None, None
         conf = cfg["evidence"]["confidence_order"]
         for kind, ds in cands:
@@ -2387,10 +2524,20 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                     or (age == days_since and _rank(conf, kind) < _rank(conf, best_kind))):
                 days_since, best_kind, best_date = age, kind, ds
 
-        for p in fs_agg["top_changed_paths"]:
-            add_ev(p, "file_mtime", None)
-        for rel in paths:
-            add_ev(rel, "file_mtime", None)
+        # The same gate one level down, and this is the half that has teeth: an
+        # evidence handle is a licence to write a sentence. Minting `file_mtime`
+        # handles for a project that has disowned file timestamps would let a
+        # model write "12 files changed this week" about it and have the sentence
+        # pass a gate whose whole promise is that every claim was checked.
+        if not reported:
+            for p in fs_agg["top_changed_paths"]:
+                add_ev(p, "file_mtime", None)
+            for rel in paths:
+                add_ev(rel, "file_mtime", None)
+        elif reported["last_report"]:
+            # One handle, so a project line may say what the report said and
+            # when -- and may say nothing else about progress here.
+            add_ev("report:" + pid, "human", reported["last_report"])
         # On the count, not on the block. `scan_sessions` creates a project's
         # entry as soon as a directory name matches, so a project that has never
         # had an agent session -- or whose transcripts have since been cleaned up,
@@ -2402,7 +2549,7 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
         # magnitude. So the handle resolved, the kind matched, and a model could
         # write "three agent sessions this week" about a project with none and
         # have it printed under a footer promising every claim was checked.
-        if sess.get("session_files"):
+        if sess.get("session_files") and not reported:
             add_ev("session:" + pid, "session", sess.get("last_active_date"))
 
         # Minted only when there is something to cite -- a declared-but-never-run
@@ -2533,6 +2680,16 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 cfg["neglect"]["default_days"], pid, "neglect_days", parse_failed),
             "live_url": pr.get("live_url"),
             "probe": probe_view,
+            # What counts as evidence here, and -- when the answer is "a person
+            # saying so" -- how long it has been since one did.
+            "reported": reported,
+            # ★ A declared path that is not there is a broken declaration, and
+            #   the one thing it must never be rendered as is a quiet project.
+            #   The paths themselves have been collected in `fs.missing_paths`
+            #   since the walk was written; this is the flag that finally gives
+            #   them a consumer, because a fact nobody reads is worse than one
+            #   nobody collected -- it makes people think the case is covered.
+            "declaration_broken": bool(fs_agg["missing_paths"]),
             "registry_notes": pr.get("notes"),
             "evidence": {
                 "best_kind": best_kind,
@@ -2542,10 +2699,14 @@ def build(ws: Workspace, cfg: Dict[str, Any], reg: Dict[str, Any],
                 # The brief must name the kind of signal: "76 files changed
                 # (file timestamps; this tree has no git)" and "178 commits"
                 # should not read the same.
-                "caveat_code": "no_git" if (best_kind != "commit" and no_git) else None,
+                # Not for a hand-reported project: the caveat names the numbers
+                # on the row as file timestamps, and that row has no numbers from
+                # files on it. Printing it there would caveat a claim nobody made.
+                "caveat_code": ("no_git" if (best_kind != "commit" and no_git
+                                             and not reported) else None),
                 "caveat": ("git is not read for this project, so progress can only be "
                            "inferred from file timestamps and sessions"
-                           ) if (best_kind != "commit" and no_git) else None,
+                           ) if (best_kind != "commit" and no_git and not reported) else None,
             },
         })
 
@@ -2724,6 +2885,30 @@ def load_backlog_summary(ws: Workspace) -> List[Dict[str, Any]]:
     return out
 
 
+def _digest_facts(p: Dict[str, Any], g0: Dict[str, Any],
+                  rep: Dict[str, Any]) -> Dict[str, Any]:
+    """The sensed numbers, or the same keys emptied out.
+
+    Emptied rather than omitted: the shape stays constant so nothing downstream
+    has to branch on which kind of project it is holding, and a null reads as
+    "not measured", which is the true statement. Handing a hand-reported project
+    its file counts would be handing the model the one number this whole
+    declaration exists to stop it from quoting -- and the model would quote it,
+    because it is there and it looks like evidence.
+    """
+    facts = {
+        "commits_30d": (g0.get("commits_since") or {}).get("30"),
+        "last_commit": (g0.get("last_commit") or {}).get("date"),
+        "last_commit_subject": (g0.get("last_commit") or {}).get("subject"),
+        "uncommitted": g0.get("uncommitted"),
+        "files_changed_7d": p["fs"]["changed"].get("7"),
+        "active_days_30d": p["fs"].get("distinct_active_days_30d"),
+        "session_days": (p.get("sessions") or {}).get("distinct_session_days"),
+        "newest_file": p["fs"].get("newest_file_path"),
+    }
+    return dict.fromkeys(facts) if rep.get("declared") else facts
+
+
 def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
     """The model-facing input. The full snapshot stays behind for the evidence gate.
 
@@ -2738,7 +2923,17 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         # on its own tooling every night.
         if p.get("is_self"):
             continue
-        cite = list(p.get("paths") or [])
+        # ★ Offered citations and minted handles are one decision in two
+        #   places, so they are gated on the same condition. A hand-reported
+        #   project mints no `file_mtime` handle, so offering its declared paths
+        #   here would advertise a citation that never resolves -- and what that
+        #   costs is not an error message. The model writes the true sentence,
+        #   the gate drops it for citing a source it was told to cite, and the
+        #   row goes blank for a reason nobody can see.
+        rep = p.get("reported") or {}
+        cite = [] if rep.get("declared") else list(p.get("paths") or [])
+        if rep.get("last_report"):
+            cite.append("report:" + p["id"])
         for r in p.get("git") or []:
             if r.get("last_commit"):
                 cite.append(r["last_commit"]["short"])
@@ -2748,7 +2943,7 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         # true sentence and shows up as gate noise rather than as the mismatch it
         # is. A zero-session block is truthy, so this needs the count, not the
         # block.
-        if (p.get("sessions") or {}).get("session_files"):
+        if (p.get("sessions") or {}).get("session_files") and not rep.get("declared"):
             cite.append("session:" + p["id"])
         # Same rule as the handle itself: offered only when a reading exists.
         pv = p.get("probe") or {}
@@ -2757,7 +2952,8 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
         for d in p.get("status_docs") or []:
             if d.get("exists"):
                 cite.append(d["path"])
-        cite.extend((p["fs"].get("top_changed_paths") or [])[:3])
+        if not rep.get("declared"):
+            cite.extend((p["fs"].get("top_changed_paths") or [])[:3])
         for dl in p.get("deadlines") or []:
             cite.append("deadline:" + dl["date"])
         for oid in p.get("serves") or []:
@@ -2775,16 +2971,22 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
             "days_since_evidence": p["evidence"]["days_since"],
             "evidence_kind": p["evidence"]["best_kind"],
             "no_git": p.get("git_declared") == "none",
-            "facts": {
-                "commits_30d": (g0.get("commits_since") or {}).get("30"),
-                "last_commit": (g0.get("last_commit") or {}).get("date"),
-                "last_commit_subject": (g0.get("last_commit") or {}).get("subject"),
-                "uncommitted": g0.get("uncommitted"),
-                "files_changed_7d": p["fs"]["changed"].get("7"),
-                "active_days_30d": p["fs"].get("distinct_active_days_30d"),
-                "session_days": (p.get("sessions") or {}).get("distinct_session_days"),
-                "newest_file": p["fs"].get("newest_file_path"),
-            },
+            # What the numbers below are worth here. "sensed" is the ordinary
+            # case; "reported" says the sensors were disowned by declaration and
+            # the only thing that moves this row is a person saying something.
+            "evidence_basis": "reported" if rep.get("declared") else "sensed",
+            "reported": ({"last_report": rep.get("last_report"),
+                          "days_since_report": rep.get("days_since"),
+                          "cadence_days": rep.get("cadence_days"),
+                          "never_reported": rep.get("never_reported"),
+                          "overdue": rep.get("overdue")}
+                         if rep.get("declared") else None),
+            # A broken declaration, handed over as a fact rather than left to be
+            # inferred from an absence -- which is precisely how it used to reach
+            # the page as "quiet".
+            "declaration_broken": bool(p.get("declaration_broken")),
+            "missing_paths": list((p.get("fs") or {}).get("missing_paths") or []),
+            "facts": _digest_facts(p, g0, rep),
             # Handed to the model with its age and its failure state attached,
             # never as a bare number. A count with no sampling time is the exact
             # shape of the hand-written prose this engine exists to replace, and
@@ -2883,7 +3085,12 @@ def build_digest(ws: Workspace, snap: Dict[str, Any], cfg: Dict[str, Any]) -> Di
     }
 
     return {
-        "_readme": ("The only input to stage 2. Each project's `cite` list is the set of "
+        # First key on purpose: a reader that does not recognise this number is
+        # meant to stop, and it should not have to parse the file to find out.
+        "schema_version": DIGEST_SCHEMA_VERSION,
+        "_readme": ("The only input to stage 2. Read `schema_version` first -- if it is not "
+                    "a number you know, stop rather than guess the shape. Each project's "
+                    "`cite` list is the set of "
                     "evidence sources that project may be cited with -- cite what you can "
                     "see and nothing you write will be dropped by the evidence gate. The "
                     "full data lives in snapshot.json, which the renderer checks you against."),

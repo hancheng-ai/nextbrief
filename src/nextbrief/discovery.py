@@ -60,6 +60,7 @@ __all__ = [
     "DOC_PATTERNS",
     "SKIP_NAMES",
     "checkout_kind",
+    "is_git_dir",
     "claimed_segments",
     "discover",
     "worktree_main_repo",
@@ -205,6 +206,27 @@ def _looks_versioned(directory: Path) -> bool:
     except OSError:
         pass
     return False
+
+
+def is_git_dir(path) -> bool:
+    """Is this directory git's own storage, whatever it happens to be called?
+
+    An ignore glob like ``**/.git/**`` matches a NAME, and git does not require
+    that name: a second remote, a split history, a `--separate-git-dir` layout,
+    all leave a directory that is git's bookkeeping under a name of somebody's
+    choosing. Measured 2026-08-19: one project reported 88 files of which **75
+    were a `.git-private/`**, and its whole "last active" evidence came from what
+    was left.
+
+    All three marks are required, and ``HEAD`` must be a file. Any one of them
+    alone is something a real project could plausibly contain; together they are
+    a repository. The point is to test the structure, because testing the name is
+    what produced the defect.
+    """
+    base = str(path)
+    return (os.path.isfile(os.path.join(base, "HEAD"))
+            and os.path.isdir(os.path.join(base, "objects"))
+            and os.path.isdir(os.path.join(base, "refs")))
 
 
 def checkout_kind(path) -> Optional[str]:

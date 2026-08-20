@@ -20,6 +20,7 @@ from helpers import TempCase
 
 from nextbrief import cli as cli_mod
 from nextbrief import html as html_mod
+from nextbrief import launch as launch_mod
 from nextbrief import render as render_mod
 from nextbrief.i18n import DEFAULT_LOCALE, Catalog, available_locales, load_catalog
 
@@ -38,6 +39,12 @@ LOCALE_DIR = Path(render_mod.__file__).resolve().parent / "locales"
 _INDIRECT = (
     list(render_mod.WEEKDAY_KEYS)
     + list(render_mod.SIGNAL_KEYS.values())
+    # Both spellings of each. The Markdown brief and the HTML cell consume these
+    # differently -- one is rendered, the other escaped -- so a label that exists
+    # in only one namespace reaches half the readers as a bare key.
+    + ["%s.%s" % (ns, key)
+       for key, _cls in render_mod.DECLARED_SIGNAL_KEYS.values()
+       for ns in ("brief", "html")]
     + list(render_mod.TIER_KEYS.values())
     + list(render_mod.BACKING_KEYS.values())
     + list(render_mod.BACKING_KEYS_DEADLINE.values())
@@ -136,8 +143,14 @@ class Catalogs(unittest.TestCase):
         first thing a person sees when closing an item. They did not look broken.
         `tr` returned its English fallback, so a Chinese session printed English
         instructions for the `-N` syntax and nothing anywhere said why.
+
+        `launch` was outside it for the same reason and is the worse half: its
+        strings are not a line of chrome but the opening message handed to an
+        agent session, and a fallback there drops one paragraph of English into
+        the middle of it -- the settlement pass, which is where the boundary on
+        what that session may tick is written.
         """
-        used = keys_passed_to_tr(cli_mod)
+        used = keys_passed_to_tr(cli_mod) | keys_passed_to_tr(launch_mod)
         self.assertGreater(len(used), 50)
         for locale in ("en", "zh"):
             strings = load(locale)

@@ -883,10 +883,6 @@ class Notification(RenderCase):
         return render.classify(make_snapshot(), [], {})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WhatIsNotRanked(TempCase):
     """A score multiplies a human's stated importance. Where none was stated
     there is no number that stands in for it, so the project is not ranked --
@@ -1626,3 +1622,85 @@ class BackingStates(TempCase):
         self.assertTrue(self.card(md, 3).startswith("> "))
         self.assertIn("class='backing loud'", page)
         self.assertEqual(len({self.card(md, n) for n in (1, 2, 3)}), 3)
+
+
+class TheDayLogSaysWhenTheRulerChanged(RenderCase):
+    """A measurement change and a change in the world print the same line.
+
+    `write_day_log` reports `files/7d {delta}` against the previous snapshot. That
+    subtraction assumes both snapshots were measured the same way, and an engine
+    upgrade can break the assumption silently -- the numbers move, nothing says
+    why, and the log states it as fact.
+
+    **Measured, 2026-08-18.** Upgrading the engine mid-day put both of these in
+    one log file, hours apart and unmarked:
+
+        - VirtualTutor: files/7d -540, commits/30d +6
+        - VirtualTutor: files/7d +540, commits/30d -6
+
+    Nothing moved. 0.4.0 stopped counting a nested worktree's 540 files as the
+    project's own, and the run either side of it counted them again. A reader
+    gets a project that collapsed and then exploded.
+
+    The marker says so rather than hiding the deltas: suppressing them would hide
+    whatever really did change that night, and the night an engine lands is not a
+    night to go blind. Same reason the closed-item cap ships the count it capped
+    from -- a number whose basis moved has to say so, or it is read as fact.
+    """
+
+    OLD, NEW = "0.3.0", "0.4.0"
+
+    def _pair(self, old_version, new_version, old_files=600, new_files=60):
+        def snap(version, files):
+            p = make_project_entry()
+            p["fs"] = dict(p["fs"], changed={"1": 0, "7": files, "30": files})
+            s = make_snapshot(projects=[p])
+            s["run"] = dict(s["run"], generator_version=version)
+            return s
+        write_snapshot(self.ws, snap(new_version, new_files))
+        (self.ws / "state" / "snapshot.prev.json").write_text(
+            json.dumps(snap(old_version, old_files), indent=2), encoding="utf-8")
+
+    def _log(self):
+        code, _out, err = self.render()
+        self.assertEqual(code, 0, err)
+        return (self.ws / "log" / ("%s.md" % AS_OF)).read_text(encoding="utf-8")
+
+    def test_a_delta_across_two_engines_is_marked_as_a_measurement_change(self):
+        self._pair(self.OLD, self.NEW)
+        text = self._log()
+        self.assertIn(self.OLD, text)
+        self.assertIn(self.NEW, text,
+                      "the log reports a -540-shaped delta and never says which "
+                      "two engines produced the two numbers")
+
+    def test_the_deltas_are_still_printed_beside_the_marker(self):
+        # Not suppressed: the engine landing does not stop the world changing,
+        # and a night with no numbers is worse than a night with explained ones.
+        self._pair(self.OLD, self.NEW)
+        self.assertIn("files/7d", self._log())
+
+    def test_two_runs_of_one_engine_say_nothing_about_measurement(self):
+        # The marker has to be rare or it is noise. Same version either side is
+        # the overwhelmingly common case and must read exactly as before.
+        self._pair(self.NEW, self.NEW)
+        text = self._log()
+        self.assertIn("files/7d", text)
+        self.assertNotIn(self.OLD, text)   # the marker names both versions;
+        self.assertNotIn("measurement", text.lower())   # locale-coupled, kept as a second net
+
+    def test_a_dev_build_of_the_same_release_is_not_a_ruler_change(self):
+        """`0.4.0` and `0.4.0+dev.gabc1234.dirty` are the same measurement.
+
+        Developing against an editable install would otherwise mark every run,
+        which is the "alarm that is always on" failure -- it teaches the reader
+        to skip the line that matters.
+        """
+        self._pair("0.4.0", "0.4.0+dev.gabc1234.dirty")
+        log = self._log()
+        self.assertNotIn("gabc1234", log)
+        self.assertNotIn("measurement", log.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

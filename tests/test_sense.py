@@ -1512,5 +1512,145 @@ class TheEnginesOwnOutput(TempCase):
                              "the engine's own %s was counted as project activity" % product)
 
 
+class TheDigestSaysWhichShapeItIs(TempCase):
+    """`snapshot.json` carries `schema_version: 2`; the digest carried nothing.
+
+    That was survivable while the shape held still. It stopped being survivable in
+    0.4.0, which changed it twice and neither time additively: closed items left
+    `backlog[]`, and `closed` then split into a complete `dropped` list beside a
+    capped `done` block. A reader with no version has one move left, which is to
+    guess from which keys happen to be present -- and the workspace this engine
+    runs against had already hand-written exactly that branch into its prompt,
+    where nothing will ever flag it as expired.
+
+    Starting at 1 rather than at the snapshot's 2, for the reason
+    `INVENTORY_SCHEMA.md` gives about its own: these are versions of separate
+    contracts and making them track each other implies a relationship that does
+    not exist. Absent means an engine older than this one.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+
+    def _digest(self):
+        code, _out, err = capture(sense.main,
+                                  ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        return json.loads((self.ws / "state" / "digest.json").read_text(encoding="utf-8"))
+
+    def test_the_digest_declares_its_own_schema_version(self):
+        self.assertEqual(self._digest().get("schema_version"),
+                         sense.DIGEST_SCHEMA_VERSION)
+
+    def test_it_is_the_digests_version_not_the_snapshots(self):
+        # Two contracts, two numbers. Tying them together would mean a snapshot
+        # change bumping a digest whose shape nobody touched, and a consumer
+        # re-reading a file that did not move.
+        digest = self._digest()
+        snap = json.loads((self.ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snap.get("schema_version"), 2)
+        self.assertEqual(digest.get("schema_version"), 1)
+
+    def test_both_prompts_tell_the_reader_to_stop_on_an_unknown_version(self):
+        # A version nobody is told to check is decoration. The instruction is the
+        # product here; the integer is just what it refers to.
+        for name in ("daily.en.md", "daily.zh.md"):
+            text = (REPO_ROOT / "src" / "nextbrief" / "prompts" / name).read_text(encoding="utf-8")
+            self.assertIn("schema_version", text,
+                          "%s never names the field a reader is meant to check" % name)
+            # The field name alone is decoration. What makes it a contract is the
+            # instruction to stop, and deleting that paragraph left this green.
+            stop = "stop and say so" if name.endswith("en.md") else "停下来说出来"
+            self.assertIn(stop, text,
+                          "%s names `schema_version` but never says to stop on a "
+                          "number it does not know" % name)
+
+
+class GitsOwnBookkeepingIsNotCountedWhateverItIsCalled(TempCase):
+    """`**/.git/**` matches a NAME. A git directory under another name does not.
+
+    Measured 2026-08-19 on the portfolio this engine runs against: `cc-notify`
+    reported `total_files: 88`, of which **75 were `.git-private/`** -- a real git
+    directory (`HEAD`, `objects/`, `refs/`, `logs/`, an index) that simply is not
+    called `.git`. Its `newest_file_path`, and therefore the project's entire
+    "last active" evidence, was `.claude/settings.local.json`. The project is in
+    maintenance, so nobody looks closely and the number sat there being wrong.
+
+    This is the third form of one defect. A checkout is not work (a worktree's
+    files), a cache is not work, and git's own storage is not work -- and the
+    test for the third was the *name* rather than the structure.
+
+    Pruned SILENTLY, unlike a nested checkout. A nested checkout hides real files
+    somebody wrote, so its disappearance has to be visible; a git directory holds
+    no work at any name, and the standard one has always been dropped without a
+    word. Reporting every `.git` in the portfolio would be noise, and noise is
+    what teaches people to skip the line that matters.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+        self.orchard = self.ws / "projects" / "orchard"
+
+    def _orchard_fs(self):
+        code, _out, err = capture(sense.main,
+                                  ["--workspace", str(self.ws), "--as-of", AS_OF])
+        self.assertEqual(code, 0, err)
+        snap = json.loads((self.ws / "state" / "snapshot.json").read_text(encoding="utf-8"))
+        return {p["id"]: p for p in snap["projects"]}["orchard"]["fs"]
+
+    def _plant_git_dir(self, name, head=True, objects=True, refs=True, files=3):
+        base = self.orchard / name
+        base.mkdir(parents=True, exist_ok=True)
+        if head:
+            (base / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        if objects:
+            (base / "objects").mkdir(exist_ok=True)
+            for n in range(files):
+                (base / "objects" / ("obj%d" % n)).write_text("x", encoding="utf-8")
+        if refs:
+            (base / "refs").mkdir(exist_ok=True)
+            (base / "refs" / "main").write_text("abc\n", encoding="utf-8")
+        set_tree_mtime(base, RECENT_MTIME)
+        return base
+
+    def test_a_git_directory_under_another_name_is_not_counted(self):
+        before = self._orchard_fs()["total_files"]
+        self._plant_git_dir(".git-private")
+        self.assertEqual(self._orchard_fs()["total_files"], before,
+                         "a second git directory was counted as the project's own "
+                         "files, which is what put 75 of cc-notify's 88 there")
+
+    def test_no_path_inside_one_reaches_the_snapshot(self):
+        self._plant_git_dir(".git-private")
+        for path in self._orchard_fs()["top_changed_paths"]:
+            self.assertNotIn(".git-private", path)
+
+    def test_it_is_not_reported_as_a_nested_checkout(self):
+        # It is not one. A checkout hides files somebody wrote; this hides none,
+        # and the standard `.git` has always gone without a word.
+        self._plant_git_dir(".git-private")
+        self.assertEqual(self._orchard_fs()["nested_checkouts"], [])
+
+    def test_all_three_marks_are_required_before_a_directory_is_dropped(self):
+        """The guard against over-eager matching.
+
+        A directory holding a file called `HEAD` is not git's. Requiring `HEAD`
+        as a FILE plus `objects/` and `refs/` as directories is what keeps this a
+        structural test rather than a superstition about names.
+        """
+        # Asserted on the count rather than on `top_changed_paths`: that list
+        # holds eight entries, and three planted directories crowd each other out
+        # of it for reasons that have nothing to do with the rule under test.
+        for missing in ("head", "objects", "refs"):
+            with self.subTest(missing=missing):
+                before = self._orchard_fs()["total_files"]
+                self._plant_git_dir("notgit-%s" % missing, **{missing: False})
+                self.assertGreater(
+                    self._orchard_fs()["total_files"], before,
+                    "a directory missing %s was dropped as if it were git's, but "
+                    "it is not a git directory" % missing)
+
 if __name__ == "__main__":
     unittest.main()

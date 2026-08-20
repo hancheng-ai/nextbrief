@@ -292,6 +292,95 @@ non-problem. A count that includes non-problems is a count nobody reads.
 
 ---
 
+## What counts as evidence
+
+`status` answers *what phase is this in*. A second, orthogonal question is *what
+would count as progress here at all*, and for most of a portfolio the answer is
+so obvious it never gets asked: commits, file timestamps, agent sessions — what
+happened in this filesystem.
+
+Two ways that answer goes wrong, and until they were separated both produced the
+same sentence on the page.
+
+### A declared path that is not there
+
+The registry says `paths: ["robots"]`; the directory was moved to
+`cowork/robots` last week. Every sensor now reports nothing, correctly, and the
+row reads exactly like a project nobody has touched.
+
+The two states call for opposite actions — one wants a line of the registry
+edited, the other wants the project done or archived — so the engine has to
+distinguish them, and it always could: the walk has recorded
+`fs.missing_paths` since it was written. Nothing read it. **A fact that is
+collected and never consumed is worse than one that was never collected**,
+because it makes people believe the case is covered.
+
+So a broken declaration is announced as a banner, above the fold, next to the
+probe failures, for the same reason those are: a sensor that has stopped
+reporting must never be allowed to read as a project that has stopped moving.
+The signal cell says the declaration is broken and prints no signal word at all
+— outranking every other verdict, including a pending decision, because until
+the registry points at something real nothing else on that row was measured.
+
+`nextbrief check` adds the half the brief cannot: it looks under the portfolio
+root for a directory of that name and prints where it found one.
+
+**It suggests. It never edits.** "Where is this project now" is a fact rather
+than a judgement, so the engine could in principle re-point the entry itself.
+The two ways of being wrong do not cost the same: guessing right saves one edit,
+guessing wrong silently aims a project at somebody else's directory — after
+which every number about it is true, checkable, and about the wrong thing. That
+is the exact failure a single declared registry exists to prevent.
+
+### Work that does not land on this disk
+
+The other case is not a mistake at all. A child building a competition robot, a
+deck being rehearsed, an exam being revised for, posts published to a platform
+with no public count — the project is moving as fast as it ever has and the
+filesystem has nothing to say about it.
+
+Measured with the ruler built for code, these read "cold" every morning. The
+cost is not one wrong row: it teaches the reader to skip the signal column, and
+that column still has work to do on the projects where file silence really does
+mean something. Sometimes the ruler is worse than useless — a directory of
+downloaded course material goes hot when you page through it, and paging through
+it is the study method that does not work.
+
+`status: maintenance` is the closest existing declaration and it says the wrong
+thing. Maintenance means *it is meant to be quiet*. These projects expect a
+great deal to happen; just not here.
+
+```jsonc
+"evidence": { "kind": "reported", "last_report": "2026-03-02", "cadence_days": 21 }
+```
+
+`"sensed"` is the default written out. `"reported"` withdraws the filesystem as
+a sensor for this project, and the row then says **"no report since `<date>`"**
+— how long it has been is the entire signal, and a report that is overdue is
+phrased as a request addressed to a person rather than as a verdict about the
+project.
+
+`last_report` is typed by a human, every time, and is never scraped out of
+prose. Same rule as `deadlines`, for the same reason: a date lifted from a
+sentence is the highest-hallucination field there is, and this one is what the
+whole row is phrased around. Updating it *is* the report.
+
+The withdrawal is enforced rather than merely phrased. The counts are not
+rendered, they are not put in the digest the model reads, and the `file_mtime`
+citation handles are not minted — so a sentence quoting them cannot be written
+and could not pass gate 1 if it were. An engine that keeps a number it has
+disowned will eventually print it.
+
+This does not replace `evidence_probe`, which is for work that *is* measurable,
+just not here: somebody can name a public, credential-free URL that counts it.
+A declared probe still counts for a reported project, because it is the same
+statement made precisely. `evidence: reported` is the honest answer when there
+is no such URL. The answer there is not a cleverer sensor — it is admitting the
+engine cannot measure this, and counting how long it has been since somebody
+said so.
+
+---
+
 ## Outcomes: what the work is for
 
 A deadline is a property of a commitment, not of a directory. Written into three

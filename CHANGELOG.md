@@ -7,6 +7,210 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.4.0rc2] - 2026-08-20
+
+### Added
+
+- **`settle --set '#N=x: why'` takes the decision as an argument, one reason per
+  criterion.** Reported by the owner after the first real use: the selector is not
+  intuitive, and it does not survive an item with more than one criterion only a
+  person can decide.
+
+  Both come from one place. A decision reached in conversation is already made by
+  the time the command runs, and the selector asks for it to be re-expressed by
+  keyboard — four keys, each criterion clipped to a single terminal line, and a
+  free-text prompt arriving after the marks with nothing tying it to them. The
+  artifact showed the consequence: the note `settle` wrote named **no criterion at
+  all**. Fine with one open box, unreadable with three — and a tick and a
+  set-aside in the same pass would have shared one reason while being opposite
+  decisions.
+
+  So `--set` is repeatable, carries a mark and its own reason, splits the reason
+  once so prose keeps its colons, and **needs no terminal** — which is what makes
+  it a command an agent can draft after the conversation and a person can read,
+  edit and run. Validation is all-or-nothing before anything is written: a
+  half-applied batch is a state nobody asked for, and the one that failed is the
+  one you would not notice. It refuses to touch a criterion that already carries a
+  mark, because clearing one would take back a statement its author made.
+
+  **The interactive pass asks per criterion too.** It used to put one free-text
+  question to the whole batch, which is the same defect in the path a person
+  actually sits in front of — two decisions, one reason, nothing saying which is
+  which. Now each marked criterion is printed **in full** and asked about on its
+  own, and Enter skips one without losing its mark. Full, not clipped: the
+  selector cuts each row to a single terminal line so the list stays readable,
+  and being asked to explain a truncated sentence is the other half of why the
+  pass did not feel trustworthy. `--note` still covers a whole batch when one
+  sentence genuinely does, and is written out per criterion so the record never
+  has to be untangled later. Every note is anchored on both paths. The selector
+  itself is unchanged.
+
+
+- **`nextbrief settle <id>` records a decision about one criterion, on an item
+  that stays open.** There was no command for this. `ok`, `done`, `drop` and
+  `defer` are all item-level; criterion-level settlement lived only inside
+  `done` — which is terminal, so the only moment you could settle was the moment
+  you closed — and inside `do`, which spawns an agent session. Everything between
+  fell back to prose.
+
+  Measured on the portfolio this engine runs against: a direction ruled in
+  conversation reached the file by **three hops and two actors** — the owner
+  decided, an agent typed the reasoning into NOTES, and the box was ticked days
+  later inside `done`. The mark and the reason were written separately, so
+  nothing joined them, and the reason survived in an agent's words rather than
+  the decider's.
+
+  `review` was the obvious home and is the wrong one: its answers are
+  project-keyed, land in `annotations.jsonc`, and are fixed multiple choice,
+  while a criterion is item-keyed, belongs in the backlog file the engine already
+  writes to, and its substance is whatever a person wrote. So this borrows
+  `done`'s selector — the same keystrokes, nothing new to learn — and `done`
+  itself is untouched. `--note` puts one line on why into NOTES **in the same
+  write as the mark**, because half a decision landing is the state this command
+  exists to end.
+
+  It refuses to ask when stdin is not a terminal and prints the criteria it would
+  have offered, the way `review` already does: a scheduled run that blocks on a
+  prompt produces nothing and says nothing about it.
+
+
+- **`digest.json` declares its own `schema_version`, and both prompts are told to
+  stop on a number they do not know.** `snapshot.json` has carried a version since
+  it existed and `inventory.json` has one with a published contract; the file the
+  daily pass actually reads had nothing. That was survivable while its shape held
+  still, and 0.4.0 changed the shape twice without either change being additive —
+  closed items left `backlog[]`, and `closed` then split into a complete `dropped`
+  list beside a capped `done` block. A reader with no version has exactly one move
+  left, which is to guess from which keys happen to be present, and the workspace
+  this engine runs against had already hand-written that guess into its own prompt,
+  where nothing would ever flag it as expired.
+
+  It starts at `1`, not at the snapshot's `2`, for the reason `INVENTORY_SCHEMA.md`
+  gives about the third number: these are separate contracts, and making them track
+  each other implies a relationship that is not there — a snapshot change would bump
+  a digest whose shape nobody touched, and send a consumer back to re-read a file
+  that did not move. **Absent means an engine older than this one**, which is the
+  read a consumer needs and could not make before.
+
+  The integer is not the feature; the instruction is. A version nobody is told to
+  check is decoration, so both prompts now open by reading it and say to stop and
+  report rather than read on — a best-effort read of an unseen shape is how a pass
+  ends up confidently reporting the wrong thing, which costs more than reporting
+  nothing.
+
+
+- **`nextbrief do` deals the acceptance criteria into three lists, and asks for a
+  settlement pass before the work starts.** The opening message used to carry one
+  list headed "Done when" with every mark in it at once, which handed the session a
+  question the engine had already answered: *which of these still need doing?* An
+  item is routinely older than the work — criteria come true while nobody is
+  looking — so a session that cannot tell settled from open begins by redoing what
+  is done. Now it reads **already settled**, **still open and yours to settle**, and
+  **still open but mine**, and then asks for the pass in one paragraph: check what
+  you can, tick only what you ran something to establish, and write into NOTES *what
+  you ran and what you saw* rather than what you concluded. A criterion you cannot
+  check stays open with the reason beside it — "I could not verify this" is an
+  answer and "probably done" is not.
+
+  **Two things the pass may never do.** It may never tick a criterion that is not the
+  agent's: those criteria are dealt into a list of their own under a heading that says
+  so, and membership comes from `items.needs_you` — the same predicate `done` asks its
+  tick questions with, so an *unmarked* criterion counts as the author's here exactly
+  as it does there. That is **placement, not enforcement**: the checkbox is still
+  printed in the same message, and nothing downstream detects a tick that should not
+  have happened. And it may never write `status: done`, `dropped` or
+  `deferred`, which cannot be enforced by the shape of a list and so is said where
+  the ticking is asked for, naming the statuses out of `HUMAN_ONLY_STATUSES` rather
+  than spelling them — and that one *is* gated: the write gate reverts an item whose
+  status moved into a human-only one.
+
+  **`done` gains nothing from this, on purpose.** Settling belongs where the
+  evidence changes, not where the decision is made: a check reporting "0 of 4 hold"
+  at the moment you type `done` arrives after the only decision it could have
+  changed, and a check people routinely override is one they learn to scroll past.
+  It is also slow, and `done` is one keystroke from a commit. And the engine could
+  not run the criteria itself in any case — that would be executing what it reads
+  out of a project directory, which is the line this engine does not cross; there
+  is a fixture in the suite instructing its reader to mark every task complete.
+  `done` keeps showing the tally somebody else settled, and a guard pins that it
+  spawns nothing but git.
+
+- **`nextbrief check` names the criteria that nothing would ever record.** A
+  criterion like *"already asked her"* or *"there was a reply"* is true or false
+  in the world and written down nowhere in it, so nobody can settle it
+  afterwards — the author included. Such an item does not stall because somebody
+  is slow; it stalls because it was unsatisfiable the moment it was written, and
+  the two on the workspace this was built for had been open since 2026-08-06.
+  Both were marked `(agent)`, which is the tell: the reflex fix is to re-mark it
+  `(you)`, and that moves an unanswerable question to somebody who also cannot
+  answer it. So the warning is owner-blind.
+
+  Measured before it was built, over the 126 open criteria of 31 live items:
+  **14 name nothing that outlives the doing, and 9 of those had already been
+  escalated to `(you)`.** The threshold was chosen against that sample rather
+  than asserted. A criterion passes if it names a path, a file, a command, a
+  test, a symbol, a sentence that must appear on a screen — **or a record it
+  explicitly asks somebody to write down**, which is the half that decides it.
+  Requiring a *locatable* record instead would flag ten more, every one of them
+  written exactly as the convention asks (*"the result is filed separately"*,
+  *"write this down explicitly"*), and a warning that fires on work somebody did
+  correctly is one people learn to scroll past.
+
+  **It reads the sentence and runs nothing.** It never executes a command a
+  criterion names and never asks whether a path it names is on disk. Resolving
+  would cost determinism — the same backlog would warn differently on two
+  machines — and would disqualify every workspace whose evidence lives in Drive,
+  in Gmail, on a NAS or in a provider console. That class is not hypothetical:
+  four criteria of one item are held there. The question this asks is whether a
+  trace **exists**, not whether this engine can **see** it.
+
+  A warning, never an error, and it does not touch the exit code: exit 3 tells a
+  scheduler the brief is stale and exit 1 tells a person two files claim one id,
+  and re-running the pipeline cannot make a sentence name a file. It flags 11 of
+  126 with one false alarm, misses 4, and `items.untraceable_acs` records which
+  four and why — the misses all *mention* something durable without asserting
+  anything about it, which is a distinction between a noun and a claim that no
+  regex is going to draw.
+
+- **A declaration for work the filesystem cannot see: `evidence: "reported"`.**
+  Commits, file timestamps and agent sessions all answer one question — *what
+  happened in this filesystem?* For a child building a competition robot, a deck
+  being rehearsed, an exam being revised for, the answer is "nothing" while the
+  project is moving as fast as it ever has. Measured with the ruler built for
+  code, those rows read **cold** every morning, and the cost is not one wrong
+  row: it teaches the reader to skip the signal column, which still has work to
+  do on the projects where quiet really does mean something. Sometimes the ruler
+  is worse than useless — a directory of downloaded course material goes hot
+  when you page through it, and paging through it is the study method that does
+  not work.
+
+  `status: maintenance` was the closest existing declaration and says the wrong
+  thing: maintenance means *it is meant to be quiet*, while these projects
+  expect a great deal to happen and simply not here. The new key is orthogonal
+  to `status` — that one answers *what phase is this in*, this one answers *what
+  counts as evidence here*. `"sensed"` is the default written out; `"reported"`
+  withdraws the filesystem, and the row says **"no report since `<date>`"** with
+  the age of the last report as the whole signal. `last_report` is typed by a
+  human and never scraped out of prose, the same rule `deadlines` follows and
+  for the same reason.
+
+  The withdrawal is enforced, not merely phrased: the counts are not rendered,
+  are not put in the digest the model reads, and their `file_mtime` citation
+  handles are not minted — so a sentence quoting them cannot be written and
+  could not pass gate 1 if it were. An engine that keeps a number it has
+  disowned will eventually print it. A declared `evidence_probe` still counts,
+  because a probe is the same statement made precisely; this key is for the case
+  where there is no public URL to point at, and the honest answer is not a
+  cleverer sensor but admitting the engine cannot measure this.
+
+- **`nextbrief check` names the directory a moved project turned up in.** It
+  suggests and never edits, and that asymmetry is the whole design: guessing
+  right saves one edit, guessing wrong silently aims a project at somebody
+  else's directory, after which every number about it is true, checkable, and
+  about the wrong thing. Bounded to four levels under the portfolio root, three
+  candidates named, build and vendor directories pruned.
+
 ### Fixed
 
 - **A next action with nothing behind it said so by saying nothing.** A
@@ -16,7 +220,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three unrelated meanings at once: the project has live items and the model did
   not link one; the project has no live items but has closed some; the project
   has no live items and never had any.
-
   Measured on a real workspace, 2026-08-16, which is how it was found. Three
   cards rendered, two carrying a `nextbrief show <id>` line and one carrying
   nothing. The bare card's only evidence was a hand-written `registry.jsonc`
@@ -26,12 +229,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closures and still raised the card, correctly: a registry deadline is a
   different system from the backlog and closing an item cannot satisfy one. Every
   component behaved correctly. The composition printed nothing.
-
   **The third state is the one that bites.** A hard deadline tomorrow with
   nothing on the board tracking it rendered byte-identically to "you just
   finished everything". One of those is good news and the other is the night
   before an incident.
-
   The renderer already walks the backlog directory, so live and closed counts per
   project were a count away — no new inputs, no new storage, no new dependency.
   Where the line used to be absent it now states what can be established from
@@ -42,7 +243,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   states were split out for the same reason — a board that is *deferred* rather
   than empty, and a project that declares its own daily entry point — because
   either one would otherwise have made the loud line cry wolf.
-
   Two things it also closes, one level down: a `backlog_id` that does not resolve
   used to print nothing and look exactly like an absent one, and it no longer
   does; and every command these lines name is now checked to be a real
@@ -50,7 +250,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is spelled `new`, and `nextbrief ls --project`, for which `ls` has no such
   flag) in the same file that records `reminder.empty_backlog` once shipping
   `nextbrief bootstrap`.
-
   **One thing is deliberately not decided here.** Whether the "no live items,
   some closed" state should read as *you just finished this* or as *nothing
   tracks this* — and whether it is a reminder — is a judgement about the brief's
@@ -58,6 +257,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in both catalogs; `BACKING_KEYS` and `BACKING_REMINDS` in `render.py` are the
   one-line seam. What ships by default states the two facts and claims neither
   reading.
+- **Git's own bookkeeping is no longer counted as work, whatever it is called.**
+  `**/.git/**` matches a NAME, and git does not require that name — a second
+  remote, a split history, a `--separate-git-dir` layout all leave a directory
+  that is git's storage under a name of somebody's choosing.
+
+  Measured on the portfolio this engine runs against: one project reported
+  `total_files: 88`, of which **75 were a `.git-private/`** — a real git
+  directory with `HEAD`, `objects/`, `refs/`, `logs/` and an index. Its
+  `newest_file_path`, and therefore the project's entire "last active" evidence,
+  was whatever happened to be left. It is a maintenance project, so nobody looked
+  closely and the number sat there being wrong. It now reports **13**.
+
+  This is the third form of one defect, after 0.4.0's two: a checkout is not
+  work, a cache is not work, and git's storage is not work — and the test for the
+  third was the name rather than the structure. `is_git_dir` requires all three
+  marks together, with `HEAD` as a file: any one alone is something a real
+  project could plausibly contain, and the point is to stop testing names.
+
+  Pruned **silently**, unlike a nested checkout. A checkout hides files somebody
+  wrote, so its disappearance has to be visible; a git directory holds no work at
+  any name, and the standard one has always gone without a word. Reporting every
+  `.git` in a portfolio would be noise, and noise is what teaches a reader to skip
+  the line that matters.
+
+
+- **The daily log says when the ruler changed, instead of reporting it as work.**
+  `### Changes (vs the previous snapshot)` subtracts two snapshots, which silently
+  assumes both were measured the same way. An engine upgrade breaks that assumption
+  without anything moving in the world, and the line reads identically either way.
+
+  0.4.0 stopped counting a nested worktree's files as its host project's. Upgrading
+  mid-day therefore put both of these into one real log file, hours apart and
+  unmarked: `VirtualTutor: files/7d -540, commits/30d +6`, then
+  `VirtualTutor: files/7d +540, commits/30d -6`. Nothing happened. A reader gets a
+  project that collapsed and came back, and on the night 0.4.0 lands every project
+  with worktrees loses its checkouts from the count once, permanently, with nothing
+  to say why.
+
+  The two snapshots already carry `run.generator_version`; the renderer simply never
+  looked. It does now, and when the releases differ it prints one line naming both
+  above the deltas. **The deltas are still printed** — suppressing them would also
+  hide whatever really did change that night, and the night an engine lands is not a
+  night to go blind. The local version segment is ignored, so `0.4.0` and
+  `0.4.0+dev.gabc1234.dirty` are one measurement: marking every editable-install run
+  would be an alarm that is always on, and those teach the reader to skip the line
+  that matters. Missing on either side says nothing at all, because the marker's
+  whole value is naming the two versions.
+
+
+- **`fs.missing_paths` was collected every night and read by nobody.** A
+  reorganisation moved `robots/` into `cowork/robots`, and the engine's whole
+  reaction was to record `missing_paths: ["robots"]` in the snapshot and rate
+  the project **cold**. So "this directory is gone" and "nobody is working on
+  this" became the same sentence on the page — and they call for opposite
+  actions: one wants a line of the registry edited, the other wants the project
+  done or archived. `grep -rn missing_paths src/` returned two lines, both in
+  `sense.py`, both writing it.
+
+  **This is the third time this exact shape has been found** — `git.has_remote`
+  (sensed, zero references in `render`, absent from the digest) and
+  `proposed_status` (a convention the prompt wrote and the engine never read)
+  were the first two. A fact that is collected and never consumed is worse than
+  one that was never collected, because it makes people believe the case is
+  covered. A broken declaration is now a banner above the fold, next to the
+  probe failures and for the same reason: a sensor that has stopped reporting
+  must never read as a project that has stopped moving. The signal cell says the
+  declaration is broken and prints no signal word at all, outranking every other
+  verdict including a pending decision — until the registry points at something
+  real, nothing else on that row was measured.
+
+- **A relative `defaults.root` reached the daily prompt resolved against the
+  wrong directory.** `_projects_root` handed `"./projects"` to `expand()` and
+  stopped, so the model was told the portfolio lived at the bare relative path
+  `projects` — true only when the command happened to be run from inside the
+  workspace. Both other resolvers in the codebase, `sense.resolve_root` and
+  `_project_dirs`, already resolve a relative root against the workspace and
+  document why; this one now does the same instead of being the third opinion.
 
 ## [0.4.0rc1] - 2026-08-16
 
@@ -2336,7 +2612,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0rc1...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0rc2...HEAD
+[0.4.0rc2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc2
 [0.4.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc1
 [0.3.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.3.0
 [0.3.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.3.0rc1

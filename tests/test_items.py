@@ -1890,11 +1890,14 @@ class WhoCanSayThisIsDone(TempCase):
 class WarningAboutCriteriaNobodyCanAnswer(TempCase):
     """`check` says when an item's criteria are shaped wrong.
 
-    Two shapes, both measured rather than invented. More than two criteria
+    Three shapes, all measured rather than invented. More than two criteria
     needing a person is a problem with the item -- across the three items that
-    jammed, 20 criteria and 2 that genuinely needed the author. And a criterion
+    jammed, 20 criteria and 2 that genuinely needed the author. A criterion
     with no marker at all is one nobody has classified, which is why `done` still
-    has to ask about it.
+    has to ask about it. And a criterion that names nothing anybody could look at
+    afterwards is not waiting on anyone at all: 14 of the 126 open criteria in
+    the workspace this was measured against, 2026-08-18, on the shape of
+    "已经开口问了" -- true or false in the world, and recorded nowhere in it.
 
     One line per rule, however large the backlog, and that is the load-bearing
     part: the obvious shape -- one line per item -- would print twenty-odd
@@ -1912,15 +1915,16 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
 
     def test_an_item_with_no_markers_is_reported_once(self):
         write_backlog_item(self.ws, "NA-0005",
-                           body=_acceptance((False, "it works"), (False, "it is fast")))
+                           body=_acceptance((False, "`exporter.py` writes one file per crate"),
+                                            (False, "the export finishes inside `make bench`")))
         got = "\n".join(self._warnings())
         self.assertIn("NA-0005", got)
         self.assertIn("no (agent)/(you) marker", got)
 
     def test_a_fully_marked_item_is_not_reported(self):
         write_backlog_item(self.ws, "NA-0005",
-                           body=_acceptance((False, "(agent) it works"),
-                                            (True, "(you) it reads right")))
+                           body=_acceptance((False, "(agent) `exporter.py` writes one file per crate"),
+                                            (True, "(you) the sample in `docs/export.md` reads right")))
         self.assertEqual(self._warnings(), [])
 
     def test_a_criterion_the_design_moved_past_does_not_count_against_you(self):
@@ -1938,21 +1942,23 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
         write_backlog_item(self.ws, "NA-0005",
                            body=_acceptance((cli.AC_DROPPED, "(you) retired one"),
                                             (cli.AC_DROPPED, "(you) retired two"),
-                                            (False, "(you) still open"),
-                                            (False, "(agent) checkable")))
+                                            (False, "(you) the sample in `docs/export.md` reads right"),
+                                            (False, "(agent) `exporter.py` writes one file per crate")))
         self.assertEqual(self._warnings(), [])
 
     def test_too_many_criteria_on_a_person_is_reported_with_the_count(self):
         write_backlog_item(self.ws, "NA-0005",
-                           body=_acceptance((False, "(you) one"), (False, "(you) two"),
-                                            (False, "(you) three")))
+                           body=_acceptance((False, "(you) `docs/export.md` reads right"),
+                                            (False, "(you) `docs/import.md` reads right"),
+                                            (False, "(you) `docs/bench.md` reads right")))
         got = "\n".join(self._warnings())
         self.assertIn("NA-0005 (3)", got)
         self.assertIn("more than 2", got)
 
     def test_exactly_two_is_not_too_many(self):
         write_backlog_item(self.ws, "NA-0005",
-                           body=_acceptance((False, "(you) one"), (False, "(you) two")))
+                           body=_acceptance((False, "(you) `docs/export.md` reads right"),
+                                            (False, "(you) `docs/import.md` reads right")))
         self.assertEqual(self._warnings(), [])
 
     def test_one_line_per_rule_however_many_items_are_wrong(self):
@@ -1960,11 +1966,65 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
         naive shape would already be unreadable."""
         for n in range(12):
             write_backlog_item(self.ws, "NA-00%02d" % (n + 10),
-                               body=_acceptance((False, "unmarked and open")))
+                               body=_acceptance((False, "unmarked, open, and it names `exporter.py`")))
         got = self._warnings()
         self.assertEqual(len(got), 1, got)
         self.assertIn("12 open item(s)", got[0])
         self.assertIn("(+9)", got[0], "the ids were not capped: %s" % got[0])
+
+    def test_a_criterion_that_names_nothing_is_reported_with_the_count(self):
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "(agent) `exporter.py` writes one file"),
+                                            (False, "(agent) already asked her"),
+                                            (False, "(agent) there was a reply")))
+        got = "\n".join(self._warnings())
+        self.assertIn("NA-0005 (2)", got)
+        self.assertIn("name nothing anyone could look at", got)
+
+    def test_a_criterion_that_names_a_file_is_not_reported(self):
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "(agent) `assets/` holds the three chosen images"),
+                                            (False, "(agent) asked her, and the date is in NOTES")))
+        self.assertEqual(self._warnings(), [])
+
+    def test_marking_it_yours_does_not_make_it_answerable(self):
+        """★ The whole product claim, in one assertion. ★
+
+        The reflex this warning exists to interrupt is re-marking an
+        unanswerable criterion `(you)` and calling it triaged. Nothing about the
+        criterion changed: the author cannot tell whether "already asked her" is
+        true either, because the world holds no record of it. An escalation that
+        moves a question to somebody who also cannot answer it is not an
+        escalation, and the warning has to be owner-blind or it teaches exactly
+        that move.
+        """
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "(you) already asked her")))
+        self.assertIn("name nothing", "\n".join(self._warnings()))
+
+    def test_a_ticked_criterion_is_never_flagged(self):
+        """It has been settled. Warning about it is a complaint about history."""
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((True, "(agent) already asked her"),
+                                            (cli.AC_DROPPED, "(agent) there was a reply"),
+                                            (False, "(agent) `exporter.py` writes one file")))
+        self.assertEqual(self._warnings(), [])
+
+    def test_a_wrapped_criterion_is_read_whole(self):
+        """★ Watched red before it was trusted. ★
+
+        Ten of the 142 criteria measured on 2026-08-18 wrap onto a second line,
+        and four of those put the only checkable half there. Reading the
+        checkbox line alone flags a criterion that is written correctly, which
+        is the one failure this warning cannot afford.
+        """
+        write_backlog_item(self.ws, "NA-0005", body="\n".join([
+            items.AC_BEGIN,
+            "- [ ] #1 (agent) asked her, and the answer came back the same day,",
+            "      with the date written into NOTES",
+            items.AC_END,
+        ]))
+        self.assertEqual(self._warnings(), [])
 
     def test_a_closed_item_is_never_warned_about(self):
         """True, permanent and impossible to act on, which is the definition of
@@ -1991,6 +2051,82 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
         code, _out, err = capture(cli.main, ["--workspace", str(ws), "check"])
         self.assertEqual(code, 0, "the warning changed the exit code")
         self.assertIn("no (agent)/(you) marker", err)
+
+
+class TheCriteriaLintNeverRunsWhatItReads(TempCase):
+    """★ It reads sentences. It runs nothing, and it resolves nothing. ★
+
+    This is the criterion NA-0063 asked for, and it guards the one place where
+    the temptation is strongest. A lint about acceptance criteria is one
+    `subprocess` call away from answering the question it is really being asked
+    -- "does `pytest -k export` actually pass" -- and answering it would turn
+    every item file in the workspace into a script, on a scan that runs over
+    sentences somebody else wrote. The engine's oldest rule is that it does not
+    execute what it reads.
+
+    Resolution is the same rule wearing softer clothes, and it is the mutation
+    somebody would reach for first: check that a named path is really on disk,
+    to stop the lint passing criteria that name files nobody ever created. It
+    would cost determinism (the same backlog would warn differently on two
+    machines), it would cost the workspaces whose evidence lives in Drive or a
+    provider console, and it would put a filesystem walk inside a text check.
+    So the question stays the weaker one: is there anything here a person could
+    go and look at.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace(with_git=False)
+
+    def _warnings(self):
+        return cli._criteria_warnings(Workspace(self.ws, self.ws, "test"), None)
+
+    def test_no_process_is_spawned_while_the_criteria_are_read(self):
+        write_backlog_item(self.ws, "NA-0005", body=_acceptance(
+            (False, "(agent) `pytest -k export` passes"),
+            (False, "(agent) `git status --porcelain` is empty"),
+            (False, "(agent) already asked her")))
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("the criteria lint spawned a process: %r" % (args,))
+
+        with mock.patch("subprocess.Popen", refuse), \
+                mock.patch("os.system", refuse), \
+                mock.patch("os.popen", refuse):
+            got = "\n".join(self._warnings())
+        # And the fixture reached the code: a whole-tree "nothing ran" assertion
+        # passes just as well when nothing could have run. Exactly one of the
+        # three criteria is flagged, so all three were read.
+        self.assertIn("NA-0005 (1)", got)
+        self.assertIn("name nothing anyone could look at", got)
+
+    def test_a_path_that_is_not_there_reads_the_same_as_one_that_is(self):
+        """The determinism half. Both items name a file; only one exists."""
+        (self.ws / "docs").mkdir(parents=True, exist_ok=True)
+        (self.ws / "docs" / "real.md").write_text("here\n", encoding="utf-8")
+        write_backlog_item(self.ws, "NA-0005",
+                           body=_acceptance((False, "(agent) `docs/real.md` says so")))
+        write_backlog_item(self.ws, "NA-0006",
+                           body=_acceptance((False, "(agent) `docs/ghost.md` says so")))
+        self.assertEqual(self._warnings(), [],
+                         "the lint resolved a path instead of reading a sentence")
+
+    def test_the_warning_never_moves_the_exit_code(self):
+        """★ A warning, never an error. ★
+
+        It is a judgement about a sentence made by a regex, wrong about roughly
+        one criterion in six. Exit 3 tells a scheduler the brief is out of date
+        and exit 1 tells a person two files claim one id; neither is true here,
+        and re-running the pipeline cannot make a sentence name a file.
+        """
+        ws = self.workspace("wsb", with_git=False)
+        write_backlog_item(ws, "NA-0005",
+                           body=_acceptance((False, "(agent) already asked her")))
+        code, _out, err = capture(cli.main, ["--workspace", str(ws), "v0", "--no-notify"])
+        self.assertEqual(code, 0, err)
+        code, _out, err = capture(cli.main, ["--workspace", str(ws), "check"])
+        self.assertEqual(code, 0, "the warning changed the exit code")
+        self.assertIn("name nothing anyone could look at", err)
 
 
 class TheClosedListSeparatesWhatMovedFromWhatWasDone(TempCase):

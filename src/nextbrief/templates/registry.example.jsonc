@@ -312,6 +312,72 @@
       "neglect_days": 60,          // dormant on purpose: do not nag about it monthly
       "automation_surface": [],
       "notes": "Uncommitted work sitting in the tree. This is the textbook 'stalled: no next step'."
+    },
+
+    {
+      "id": "kiln-certification",
+      "name": "Kiln operator certification",
+      "paths": ["learning/kiln-cert"],
+      "git": "none",
+      "status": "active",
+      "goal_one_line": "Pass the operator exam; the skill is the deliverable",
+      "horizon": "quarter",
+      "ice": { "impact": 3, "confidence": 3, "effort": 4 },
+
+      // ★ evidence -- what COUNTS as evidence here. Not the same axis as `status`.
+      //
+      // `status` says what phase a project is in. `maintenance` in particular
+      // says "it is meant to be quiet, do not warn me about the quiet". This
+      // says something different and orthogonal: a great deal is expected to
+      // happen here, and none of it on this disk.
+      //
+      // git, file timestamps and agent sessions all answer one question: what
+      // happened in this filesystem? For work like a course, a rehearsal, a
+      // child's build, an exam being studied for, the answer is "nothing" while
+      // the project is moving as fast as it ever has. Measured with the same
+      // ruler as a code repository, it reads "cold" every morning -- and the
+      // cost of that is not one wrong row. It teaches you to skip the signal
+      // column, which still has work to do on the projects where file silence
+      // really does mean something.
+      //
+      // Worse than useless, sometimes: this directory holds downloaded course
+      // material. Its mtimes say when you DOWNLOADED it, not whether you learnt
+      // anything -- so paging through the notes makes the project look hot, and
+      // that is exactly the study method that does not work.
+      //
+      //   "sensed"    the default, written out. Files really are the measure.
+      //   "reported"  they are not. A person has to say what happened.
+      //
+      // What the row then says is "no report since <date>", and how long it has
+      // been is the whole signal. Nothing is inferred from the filesystem: the
+      // counts are not shown, they are not handed to the model, and no sentence
+      // citing them can pass the evidence gate. That is the point -- an engine
+      // that keeps a number it has disowned will eventually print it.
+      //
+      // ⚠ This is NOT `evidence_probe`'s job and does not replace it. A probe is
+      //   for work that IS measurable, just not here: somebody can name a public,
+      //   credential-free URL that counts it. This is the honest answer when
+      //   there is no such URL -- a child's practice, a person's revision. The
+      //   answer there is not a cleverer sensor; it is admitting the engine
+      //   cannot measure it, and counting how long since somebody said so.
+      "evidence": {
+        "kind": "reported",
+
+        // ★ Typed by a human, every time. Never scraped out of prose, for the
+        //   same reason `deadlines` are not: a date lifted from a sentence is
+        //   the highest-hallucination field there is, and this one is what the
+        //   entire row is phrased around. Update it when you report -- that edit
+        //   IS the report.
+        "last_report": "2026-03-02",
+
+        // How long before the brief starts asking for one. Defaults to 14.
+        // A quarterly thing that genuinely reports monthly should say 30 rather
+        // than be nagged fortnightly into silence.
+        "cadence_days": 21
+      },
+
+      "automation_surface": [],
+      "notes": "[2026-03-02 reported] Two chapters done, practice exam at 61%. The directory holds downloaded material; its timestamps say when it was fetched, not what was learnt."
     }
 
   ],

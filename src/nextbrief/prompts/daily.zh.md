@@ -14,6 +14,9 @@
 
 1. **Read** `{workspace_root}/state/digest.json` —— **就这一个文件，你需要的全在里面**：每个项目的事实、
    合法引用句柄、非目标、deadline、未决决策、陈旧文档，加上**你还能动的**那些 backlog 条目的摘要与上限配置。
+   **先读 `digest.schema_version`。** 本提示词描述的是形状 `1`。若它是别的数字、或这个键不存在，
+   **停下来说出来**，不要往下读——对一个没见过的形状做「尽力而为的解读」，
+   正是一次 pass 自信地报错的方式，而那比什么都不报更贵。
    `digest.backlog[]` 里只有**还活着**的条目（open / in_progress / waiting / deferred）。已结项的不在里面，
    它们移到了 `digest.closed`，其中每一条都只有 `id` / `project` / `title` / `status` / `updated_date`，
    再无其他。已结项的条目没有任何判断留给你——你被要求做的唯一一个判断是 `proposed_status`，

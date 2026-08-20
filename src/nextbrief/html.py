@@ -268,10 +268,12 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
     a second opinion.
     """
     from .render import (  # imported late: render must not import us at module level
+        _named_paths,
         backing_command,
         backing_line,
         caps_of,
         classify,
+        declared_signal,
         gated_text,
         self_project_ids,
     )
@@ -347,6 +349,15 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
         if f.get("aged_days") is not None:
             line += " " + cat.t("brief.banner.probe_failed_aged", days=f["aged_days"])
         A("<div class=banner>%s</div>" % md_inline(line))
+    # Passed through from the Markdown renderer for the same reason, and it is
+    # the reason that matters most here: this is the page `nextbrief open`
+    # shows, so a declaration that broke and is announced only in BRIEF.md has
+    # not been announced to the person who reads the other one.
+    for b in notes.get("declaration_broken") or []:
+        A("<div class=banner>%s</div>" % md_inline(cat.t(
+            "html.banner.declaration_broken", project=b.get("name", ""),
+            paths=_named_paths(b.get("missing") or [], cat),
+            command="nextbrief check")))
 
     # ---------- do these first ----------
     nexts = (brief or {}).get("next_actions") or []
@@ -454,7 +465,10 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
         if pid in self_ids:
             continue
         ev = p.get("evidence") or {}
-        if pid in unrated_ids:
+        declared_sig = declared_signal(p, cat, ns="html")
+        if declared_sig:
+            sig, cls = declared_sig
+        elif pid in unrated_ids:
             sig, cls = cat.t("html.signal.unrated"), "dormant"
         elif pid in dec_ids:
             sig, cls = cat.t("html.signal.decision_pending"), "dec"
@@ -651,10 +665,28 @@ def render_html(snapshot, brief, backlog, cfg, reg, cat: Catalog,
 def _facts(p, cat: Catalog) -> str:
     """The evidence column. Same rule as the Markdown brief: name the kind of
     signal, never launder a file mtime into something that sounds like a commit."""
+    from .render import _named_paths, report_bits  # late, as everywhere else here
+
     bits = []
     g = (p.get("git") or [{}])[0]
     fs = p.get("fs") or {}
     changed = fs.get("changed") or {}
+    # Same order and the same two early exits as `render.evidence_phrase`: the
+    # broken declaration goes in front of any number, and a hand-reported
+    # project's numbers do not appear at all.
+    #
+    # NOT the same in one respect, and it is written down because the comment
+    # above used to claim otherwise: `render.evidence_phrase` follows
+    # `report_bits` with `probe_bits`, and this does not. `_facts` has never
+    # rendered a probe reading, so on an ordinary row it costs one bit of three
+    # -- but on a hand-reported row the probe is the ONLY surviving sensor, and
+    # losing it takes the whole of what the page could still check.
+    missing = fs.get("missing_paths") or []
+    if missing:
+        bits.append(cat.t("evidence.paths_missing", paths=_named_paths(missing, cat)))
+    if (p.get("reported") or {}).get("declared"):
+        bits.extend(report_bits(p, cat))
+        return cat.t("sep.dot").join(bits)
     if (g.get("commits_since") or {}).get("30"):
         bits.append(cat.t("evidence.commits_30d", count=g["commits_since"]["30"]))
     if g.get("last_commit"):
