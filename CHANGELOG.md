@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-20
+
+Everything the three candidates carried, plus one fix, listed below. Three
+candidates rather than the usual one, and the reason is worth writing down:
+each was cut because the previous one had shipped a claim that turned out not
+to be true.
+
+`rc1` folded git worktrees into their repository and stopped capping recorded
+refusals. `rc2` added `settle`, gave `digest.json` a `schema_version`, made the
+daily log say when the ruler changed, and taught the file walk that git's
+storage is not work under any name. `rc3` fixed what verifying `rc2` found: a
+lint that read English by a narrower path than Chinese and matched substrings,
+a declared probe that reached `BRIEF.md` and not `BRIEF.html` under a comment
+claiming otherwise, and three advertised bounds that survived direct mutation.
+
+The one change below came from `rc3` in turn — its new tests were the first
+thing in this project to fail only on Windows, which is also how it emerged
+that `rc3` had been tagged off a red `main`. The rule that followed is in
+CONTRIBUTING: nothing merges until CI is green, and nothing is tagged off a red
+`main`.
+
 ### Fixed
 
 - **A moved project's suggested path came back with the platform separator.**
@@ -24,7 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the answer and the run that gates the release was never opened. CONTRIBUTING
   now says nothing merges until CI is green and nothing is tagged off a red
   `main`, with the two commands that answer it.
-
 
 ## [0.4.0rc3] - 2026-08-20
 
@@ -2688,7 +2708,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0rc3...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0
 [0.4.0rc3]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc3
 [0.4.0rc2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc2
 [0.4.0rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc1
