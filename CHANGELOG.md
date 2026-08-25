@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1rc1] - 2026-08-25
+
+### Fixed
+
+- **A backlog item the run's cap held back could not be cited: the gate read the
+  citation as a fabrication and dropped the claim.** The evidence index was
+  augmented from the post-cap listing, so the id and both path spellings of a
+  held-back item were never minted. The digest is not capped —
+  `load_backlog_summary` hands stage 2 every active item — so the model was
+  shown an item it could honestly cite, and citing it cost the claim.
+
+  The miss was inconsistent, which is how it surfaced at all. Sensing mints
+  `file_mtime` handles for a project's eight most recently changed paths, so a
+  held-back item young enough to sit in that list still resolved while an older
+  sibling did not. Measured 2026-08-25 on a live workspace: NA-0066 and NA-0067
+  resolved that way; NA-0060, three days older and equally uncommitted, was
+  dropped from `next_actions`.
+
+  The index is minted from the pre-cap listing now. The cap holds an item off
+  the page for a run; it does not unwrite the file, and the cap's own rejection
+  row promises the file is untouched on disk. The minted kinds also gain
+  `doc_declared`, which is what the gate's own comment already says a backlog
+  entry is.
+
+- **A backlog citation from a nested or renamed workspace died as
+  `unresolvable_evidence`.** The projects-root spelling of the citation was
+  built from the workspace directory's basename, which is what the sensing stage
+  emits only when the workspace sits directly under the resolved root under an
+  unchanged name. A workspace at `<root>/team/pm`, or a copy named `pm-copy`,
+  minted a spelling nothing sensed ever uses — so the second of the two
+  spellings indexed a source that could never be cited, and an honest "already
+  on the list" claim resolved against neither.
+
+  It is derived from the workspace's path relative to the resolved root now.
+  Where no root-relative spelling exists — the workspace sits outside the root,
+  or the registry resolves no root at all — the basename is kept, which at worst
+  indexes one extra source nothing sensed can collide with.
+
 ## [0.4.0] - 2026-08-20
 
 Everything the three candidates carried, plus one fix, listed below. Three
@@ -2708,7 +2746,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.1rc1...HEAD
+[0.4.1rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.1rc1
 [0.4.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0
 [0.4.0rc3]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc3
 [0.4.0rc2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc2
