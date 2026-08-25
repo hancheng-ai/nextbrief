@@ -535,6 +535,24 @@
       "note": "What shipped for four releases: the formula's version was swept, its sha256 was not, and the README went on printing the command that downloads one and checks it against the other. Two edits because the defect is the pair. The guard stands down while the digest is current -- the tree's state from the release job's rejoining commit until the next bump -- so breaking only the README left it green for the honest reason through half of every release cycle, and watch-red reported a working guard as unwatched on a healthy tree. The provenance line is prefixed rather than overwritten so the anchor names no version of its own: this line is fenced off from the sweep, so any version written here would have to be re-anchored by hand every release."
     },
     {
+      "label": "the digest's stale phase written down as a fact",
+      "file": "README.md",
+      "old": "the digest goes stale at every release",
+      "new": "the digest belongs to an older release",
+      "select": "test_the_readmes_describe_the_digest_cycle_rather_than_one_phase_of_it",
+      "expect": "true in one phase",
+      "note": "The sentence that shipped twice: true while the digest was behind, false from each rejoin until the next bump, and the stale-digest guard above stands down for exactly that half of the cycle. The READMEs cannot change between the phases, so the phrase is forbidden in both. Anchored on the cycle wording it replaced, which is version-free and survives the sweep."
+    },
+    {
+      "label": "the digest's stale phase written down as a fact, Chinese page",
+      "file": "README.zh.md",
+      "old": "每次发版它都会先失配一次",
+      "new": "这个摘要属于更早的一个版本",
+      "select": "test_the_readmes_describe_the_digest_cycle_rather_than_one_phase_of_it",
+      "expect": "README.zh.md says",
+      "note": "The same sentence on the page PyPI does not render, held to the same rule: a translated pair drifts by exactly one of its halves being edited, so a guard that reads only the rendered file is a guard that gets translated away."
+    },
+    {
       "label": "a relative link back on the page PyPI renders",
       "file": "README.md",
       "old": "Apache 2.0. See [LICENSE](",

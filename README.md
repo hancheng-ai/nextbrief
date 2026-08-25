@@ -306,7 +306,7 @@ Homebrew Python upgrade — which retires the interpreter a pipx venv was built
 against — cannot break the nightly run. That interpreter is also tested on its
 own in CI, for the same reason.
 
-**4 · Homebrew, macOS** — *no tap yet, and the pinned build is not offered today*
+**4 · Homebrew, macOS** — *no tap yet, and only the `--HEAD` build is offered*
 
 ```sh
 git clone --depth 1 https://github.com/hancheng-ai/nextbrief
@@ -314,12 +314,16 @@ brew install --HEAD --build-from-source ./nextbrief/packaging/homebrew/nextbrief
 ```
 
 `--HEAD` builds from `main`. The formula's other path downloads the pinned
-`v0.4.1` sdist and checks it against a `sha256` in the stanza — and that digest
-belongs to an older release, because it can only be taken from an asset that
-does not exist until the tag is pushed. So that command would fail its checksum,
-and it is not printed here until the digest catches up. The formula says which
-release its digest came from, and a test refuses to let this section offer the
-pinned build while the two disagree.
+`v0.4.1` sdist and checks it against a `sha256` in the stanza — a digest that
+can only be taken from an asset that does not exist until the tag is pushed. So
+the digest goes stale at every release and is rejoined on `main` one commit
+later, by a pull request the release workflow opens itself. That cycle is why
+the pinned command is never printed here: a tagged tree always predates its own
+rejoin, so on a release page or on PyPI — pages that render the tagged tree —
+the command's checksum cannot match. The formula's `sha256-of:` line records
+which release the digest really came from, and tests hold both directions: this
+section may not offer the pinned build while that line and `version` disagree,
+and may not state one phase of the cycle as if it were permanent.
 
 The formula is version-controlled here, in
 [`packaging/homebrew/nextbrief.rb`](https://github.com/hancheng-ai/nextbrief/blob/v0.4.1/packaging/homebrew/nextbrief.rb), so it is

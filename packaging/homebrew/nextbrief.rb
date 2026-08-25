@@ -112,9 +112,12 @@ class Nextbrief < Formula
   # one check this line already had would have caught it. The release job reads
   # SHA256SUMS instead, where the digest is bare.
   #
-  # While the two disagree, the pinned install is not documented anywhere --
-  # tests/test_docs_consistency.py holds both ends of that, so restoring the
-  # command means fixing the digest first.
+  # The pinned install is not documented in the READMEs in either phase: a
+  # tagged tree always predates its own rejoin, so the released pages could
+  # only ever print a command that fails there. tests/test_docs_consistency.py
+  # holds both directions -- no pinned command in a README while the two lines
+  # here disagree, and no README prose asserting either phase of the cycle as
+  # a permanent fact.
   sha256 "f30af1da141e1b4b787c4c4523226d8094a241a141c3264bbc20c5ccd8548311"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"

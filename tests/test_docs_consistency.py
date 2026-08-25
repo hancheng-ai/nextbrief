@@ -174,16 +174,56 @@ class HomebrewFormula(unittest.TestCase):
     def test_the_readmes_do_not_offer_a_pinned_build_with_a_stale_digest(self):
         digest_version = self._digest_version()
         if digest_version == __version__:
-            return          # rejoined; the pinned command is honest again
+            return          # rejoined; the phase guard below keeps watching
         for path in (README, README_ZH):
             self.assertNotIn(
                 self.PINNED_INSTALL, read(path),
                 "%s offers `%s ...`, which downloads the %s sdist and checks it "
                 "against a digest taken from %s. That command fails. Either "
                 "update the formula's sha256 and its `sha256-of:` line to %s, "
-                "or keep documenting `--HEAD` until you can."
+                "or keep documenting only `--HEAD`, which checks no digest."
                 % (path.name, self.PINNED_INSTALL, __version__, digest_version,
                    __version__))
+
+    # The reverse direction, and it also shipped. While the digest was stale
+    # the READMEs' Homebrew paragraphs were true; each rejoin made them false
+    # and nothing noticed, because the guard above stands down the moment the
+    # versions agree. "That digest belongs to an older release ... would fail
+    # its checksum" survived the 0.4.0rc2 rejoin (f64ca4b) word for word and
+    # was still on both pages after 87b9408 rejoined the digest to 0.4.1 --
+    # the same defect twice, because only one of its two phases was policed.
+    #
+    # The digest is stale from every bump until its rejoin and current from
+    # the rejoin until the next bump, and the READMEs do not change between
+    # the phases. So the honest wording describes the cycle, and a sentence
+    # asserting either phase as a fact is forbidden in both phases: this list
+    # is checked unconditionally, unlike the guard above, and against both
+    # files, because a translated pair drifts by exactly one of them being
+    # edited.
+    ONE_PHASE_CLAIMS = (
+        "belongs to an older release",
+        "would fail its checksum",
+        "属于更早的一个版本",
+        "会校验失败",
+    )
+
+    def test_the_readmes_describe_the_digest_cycle_rather_than_one_phase_of_it(self):
+        for path in (README, README_ZH):
+            text = read(path)
+            for claim in self.ONE_PHASE_CLAIMS:
+                self.assertNotIn(
+                    claim, text,
+                    "%s says %r -- true in one phase of the digest cycle and "
+                    "false in the other, on a page that lives through both. "
+                    "Describe the cycle (stale at every bump, rejoined once "
+                    "the release asset exists) instead of asserting a "
+                    "snapshot of it." % (path.name, claim))
+            # A forbidden-phrase scan is satisfied by an empty file, so prove
+            # it read the right page: the `--HEAD` command is the one line
+            # this section always carries.
+            self.assertIn(
+                "brew install --HEAD --build-from-source", text,
+                "%s no longer documents the --HEAD build at all" % path.name)
 
     def test_exactly_one_line_records_where_the_digest_came_from(self):
         """`_digest_version` reads the first match and so does the release job.

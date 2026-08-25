@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Both READMEs went on asserting that the formula's pinned `brew install`
+  "would fail its checksum" after the release workflow had rejoined the
+  digest.** The digest is stale from every version bump until its rejoin and
+  current from then until the next bump; the Homebrew paragraphs asserted the
+  stale half as a permanent fact, and the guard on that section only polices
+  the other direction — offering the pinned command while stale — so the
+  sentence survived the 0.4.0rc2 and 0.4.1 rejoins unchanged. The paragraphs
+  now describe the cycle itself, and state the structural reason the pinned
+  command is never printed: a tagged tree always predates its own rejoin, so
+  the released pages could only ever carry a command that fails there. A new
+  docs-consistency guard forbids the one-phase sentences in both files,
+  unconditionally, with a watch-red mutation per file.
+
 ## [0.4.1] - 2026-08-25
 
 No code changes since `0.4.1rc1`. The candidate was cut to watch the two fixes
