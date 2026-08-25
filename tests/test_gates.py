@@ -18,11 +18,13 @@ import unittest
 
 from helpers import (
     TempCase,
+    base_registry,
     capture,
     git_commit_all,
     git_init,
     make_project_entry,
     make_snapshot,
+    make_workspace,
     read_jsonl,
     requires_git,
     write_backlog_item,
@@ -202,6 +204,62 @@ class EvidenceGate(GateCase):
         )
         self.assertEqual(self.render()[0], 0)
         self.assertIn("CITED already on the backlog", self.brief())
+
+
+class BacklogCitationSpelling(TempCase):
+    """The projects-root spelling of a backlog citation comes from the
+    workspace's *path* under the resolved root, not its directory name.
+
+    The two are the same string only when the workspace sits directly under the
+    root with an unchanged name, so the fixture deliberately breaks that
+    coincidence: the workspace lives at ``<root>/team/brief``, where the
+    basename derivation used to mint ``brief/backlog/...`` -- a spelling the
+    sensing stage never uses -- and the honest citation below died as
+    unresolvable_evidence.
+    """
+
+    def setUp(self):
+        super().setUp()
+        registry = base_registry()
+        # Resolved against the workspace root, two levels down from the
+        # projects root -- the inverse of the base fixture, whose root sits
+        # *inside* the workspace.
+        registry["defaults"]["root"] = "../.."
+        self.ws = make_workspace(self.tmp / "portfolio" / "team" / "brief",
+                                 registry=registry, with_git=False)
+        write_snapshot(self.ws, make_snapshot())
+        write_backlog_item(self.ws, "NA-0001", title="An item that exists")
+
+    def test_a_nested_workspace_is_citable_by_its_root_relative_path(self):
+        write_brief_json(
+            self.ws,
+            {
+                "next_actions": [
+                    {
+                        "title": "Split the tenancy report per tenant",
+                        "project": "orchard",
+                        "evidence": GOOD_EVIDENCE,
+                    },
+                    {
+                        "title": "CITED by the root-relative spelling",
+                        "project": "orchard",
+                        "evidence": [{"kind": "file_mtime",
+                                      "source": "team/brief/backlog/NA-0001.md"}],
+                    },
+                ]
+            },
+        )
+        code, _, err = capture(
+            render.main, ["--workspace", str(self.ws), "--no-notify"])
+        self.assertEqual(code, 0, err)
+        brief = (self.ws / "BRIEF.md").read_text(encoding="utf-8")
+        # The control claim proves the run rendered at all; the cited one is
+        # the regression.
+        self.assertIn("Split the tenancy report per tenant", brief)
+        self.assertIn("CITED by the root-relative spelling", brief)
+        rejected = read_jsonl(self.ws / "log" / "rejected.jsonl")
+        self.assertEqual(
+            [r for r in rejected if r["kind"] == "unresolvable_evidence"], [])
 
 
 class GatedMaps(GateCase):

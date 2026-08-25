@@ -60,7 +60,7 @@ from .items import (
 )
 from .jsonc import JSONCError, load_jsonc
 from .paths import Workspace, WorkspaceError, expand, resolve_workspace
-from .sense import status_of
+from .sense import SenseError, resolve_root, status_of
 
 __all__ = [
     "main", "classify", "render_brief", "declared_impact",
@@ -242,6 +242,29 @@ def self_project_ids(snap, reg=None, ws=None):
             except OSError:
                 continue
     return ids
+
+
+def workspace_root_spelling(ws: Workspace, reg) -> str:
+    """How the sensing stage spells this workspace under the projects root.
+
+    ``sense`` names files relative to the resolved ``defaults.root``, so a
+    workspace at ``<root>/team/pm`` appears in evidence sources as
+    ``team/pm/...``. The directory's basename is that same string only when the
+    workspace sits directly under the root with an unchanged name -- a copy
+    named ``pm-copy`` or a workspace one level deeper minted backlog citations
+    under a spelling the sensing stage never uses, and honest "already on the
+    list" claims died as unresolvable_evidence. When the workspace is not under
+    the root at all, or the registry cannot resolve one, no root-relative
+    spelling exists and the basename is kept: it indexes one extra source that
+    nothing sensed can collide with, exactly as before.
+    """
+    try:
+        rel = ws.root.resolve().relative_to(resolve_root(ws, reg).resolve())
+    except (SenseError, OSError, ValueError):
+        return ws.root.name
+    # `relative_to` of a path against itself is ".", whose parts are empty; a
+    # workspace that *is* the projects root has no second spelling to add.
+    return rel.as_posix() if rel.parts else ws.root.name
 
 
 # ---------------------------------------------------------------------------
@@ -3066,9 +3089,10 @@ def main(argv=None) -> int:
     # `top_changed_paths`. Measured 2026-08-25 on a live workspace: two of
     # three equally uncommitted, equally held-back items resolved that way,
     # and the third was dropped as fabrication.
+    root_spelling = workspace_root_spelling(ws, reg)
     for b in backlog_all:
         rel = ws.backlog.name + "/" + b["_file"]
-        for src in (rel, ws.root.name + "/" + rel, b.get("id")):
+        for src in (rel, root_spelling + "/" + rel, b.get("id")):
             if src:
                 index.setdefault(src, {"kinds": ["doc_declared", "file_mtime", "human"],
                                        "value": b.get("title")})
