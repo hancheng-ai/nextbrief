@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-25
+
+No code changes since `0.4.1rc1`. The candidate was cut to watch the two fixes
+under a released artifact rather than under a checkout, and that is what it
+bought. Installed from TestPyPI and pointed at the workspace the defects were
+found on, `0.4.1rc1` kept the `next_actions` row citing NA-0060 — an item the
+cap held back in that same run, `over_new_item_cap` in the rejection list to
+prove it — while `0.4.0` from PyPI, on the same snapshot and the same
+`brief.json`, recorded `unresolvable_evidence` for that citation and dropped the
+row off the page.
+
+The second fix has no live instance to show. This workspace sits directly under
+its projects root under its own name, so the basename and the root-relative
+spelling are the same string and the two versions cannot disagree there; it is
+verified by `tests/test_gates.py` and by nothing else, which is worth stating
+rather than implying.
+
 ## [0.4.1rc1] - 2026-08-25
 
 ### Fixed
@@ -2746,7 +2763,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.1rc1...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.1
 [0.4.1rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.1rc1
 [0.4.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0
 [0.4.0rc3]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0rc3
