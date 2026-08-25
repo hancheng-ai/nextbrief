@@ -3038,6 +3038,10 @@ def main(argv=None) -> int:
     # BRIEF.md and BRIEF.html from ever disagreeing about how many items there
     # are. The whole feature is this call plus `apply_new_item_cap` -- deleting
     # the two restores 0.3.0's behaviour exactly.
+    #
+    # The pre-cap listing is kept for gate 1's index below. The cap holds an
+    # item off the PAGE for a run; it does not unwrite the file.
+    backlog_all = backlog
     backlog, held_back = apply_new_item_cap(
         ws, backlog, cfg, gate, _as_of_date(snap), stamp, rejected, writing)
     if held_back:
@@ -3050,11 +3054,24 @@ def main(argv=None) -> int:
     # we add them here rather than let the evidence gate kill honest claims.
     # Both spellings are indexed: the path relative to the workspace and the one
     # relative to the projects root, which is how the sensing stage names files.
-    for b in backlog:
+    # An entry supports all three kinds at once: it is a file, a human
+    # statement, and a document with declared frontmatter.
+    #
+    # Minted from the PRE-CAP listing, and that is load-bearing. The digest
+    # hands stage 2 every active item -- `load_backlog_summary` never sees the
+    # cap -- so a claim about an item the cap is holding back this run is an
+    # honest claim about a file the cap's own rejection row promises is
+    # "untouched on disk". Minting from the capped list made such a citation
+    # resolve only when the file happened to sit in some project's
+    # `top_changed_paths`. Measured 2026-08-25 on a live workspace: two of
+    # three equally uncommitted, equally held-back items resolved that way,
+    # and the third was dropped as fabrication.
+    for b in backlog_all:
         rel = ws.backlog.name + "/" + b["_file"]
         for src in (rel, ws.root.name + "/" + rel, b.get("id")):
             if src:
-                index.setdefault(src, {"kinds": ["file_mtime", "human"], "value": b.get("title")})
+                index.setdefault(src, {"kinds": ["doc_declared", "file_mtime", "human"],
+                                       "value": b.get("title")})
     dropped = 0
     if brief and not isinstance(brief, dict):
         # A brief.json that parsed but is a list or a string is no more usable

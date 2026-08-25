@@ -1053,6 +1053,47 @@ class TheNewItemCapIsEnforcedByTheRendererToo(GateCase):
         self.assertEqual(self.runs()[-1]["deferred"], 4)
         self.assertIn("Deferred past the caps: 4", self.brief())
 
+    def test_a_held_back_item_is_still_citable_evidence(self):
+        """The cap holds an item off the page, not out of existence.
+
+        The digest hands the model every active item -- `load_backlog_summary`
+        never sees the cap -- so it can honestly write "this is already on the
+        list" about an entry the cap is holding back, and the cap's own
+        rejection row promises the file is untouched on disk. The evidence
+        index used to be minted from the capped list, so that citation resolved
+        only when the file happened to sit in some project's
+        `top_changed_paths`: on a live workspace, 2026-08-25, two of three
+        equally uncommitted held-back items resolved that way and the third
+        was dropped as fabrication.
+
+        All three spellings the renderer indexes are cited, because the id and
+        the paths are minted in the same loop and a fix that moved only one of
+        them would leave the prompt's own advice ("the id is equally valid")
+        pointing at the half that still fails.
+        """
+        self._new_items(6)          # cap keeps NA-0002/0003; NA-0004+ held back
+        write_brief_json(self.ws, {"next_actions": [
+            {"title": "BY-ID already on the backlog",
+             "project": "orchard",
+             "evidence": [{"kind": "human", "source": "NA-0007"}]},
+            {"title": "BY-WORKSPACE-PATH already on the backlog",
+             "project": "orchard",
+             "evidence": [{"kind": "doc_declared", "source": "backlog/NA-0006.md"}]},
+            {"title": "BY-ROOT-PATH already on the backlog",
+             "project": "orchard",
+             "evidence": [{"kind": "doc_declared", "source": "ws/backlog/NA-0005.md"}]},
+        ]})
+        code, _, err = self.render()
+        self.assertEqual(code, 0, err)
+        self.assertEqual([r["item"]["id"] for r in self._held()],
+                         ["NA-0004", "NA-0005", "NA-0006", "NA-0007"])
+        brief = self.brief()
+        self.assertIn("BY-ID already on the backlog", brief)
+        self.assertIn("BY-WORKSPACE-PATH already on the backlog", brief)
+        self.assertIn("BY-ROOT-PATH already on the backlog", brief)
+        self.assertEqual(
+            [r for r in self.rejected() if r["kind"] == "unresolvable_evidence"], [])
+
     def test_committing_an_entry_is_how_it_is_accepted(self):
         # "New" means "not in HEAD" -- the write-permission gate's own baseline.
         # This is the mechanism by which the cap is a daily budget rather than a
