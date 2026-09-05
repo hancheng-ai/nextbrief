@@ -241,6 +241,7 @@
   "cli.settle.no_marks": "Nothing marked. {id} is unchanged.",
   "cli.settle.not_open": "{id} is {status}. `settle` records a decision on an item that is still open; a criterion on a closed item belongs to `nextbrief done` or to the file itself.",
   "cli.settle.note_line": "**[{date}] {anchor} settled by hand (`nextbrief settle`)** -- {text}",
+  "cli.settle.note_line_bare": "**[{date}] settled by hand (`nextbrief settle`)** -- {text}",
   "cli.settle.note_prompt": "One line on why (Enter to skip): ",
   "cli.settle.note_saved": "Recorded in NOTES.",
   "cli.settle.nothing_open": "{id} has no open criteria -- nothing to settle.",

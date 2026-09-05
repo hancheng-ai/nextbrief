@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`settle <id> --note 'text'` with no `--set` printed "Recorded in NOTES."
+  and wrote nothing.** Every place the command could end up with no criterion
+  to mark -- no open criteria at all, off a terminal (which an unattended run
+  always is), or a real prompt where nothing was picked -- returned its own
+  clean "nothing happened" message without ever reading `args.note`, so the
+  text was accepted on the command line and never seen again. Seen twice,
+  2026-09-05, on a live workspace: two independent runs each exited 0 with an
+  empty `git diff`, and the note was appended by hand both times. `--note`
+  alone now writes one dated line to NOTES, unanchored to any criterion,
+  before any of those three places gets to decide there was nothing to do;
+  `--note` beside a mark that IS made, interactively or via `--set`, is
+  unchanged. Watched red first: a bare note off a terminal, with no open
+  criteria, and on a real terminal where the picker came back empty, plus a
+  test asserting the confirmation and the file agree.
+
 - **`settle <id> --set '#N=x: why' --note 'text'` dropped the note and said it
   had recorded it.** The `--set` path built its NOTES lines from the per-spec
   reasons alone and never read `--note`; then it printed "Recorded in NOTES."
