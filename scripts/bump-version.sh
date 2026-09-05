@@ -200,4 +200,8 @@ PY
 
 echo
 echo "Now:"
-echo "  git commit -am 'chore: release $NEW' && git tag v$NEW && git push --follow-tags"
+# The tag must be named in the push. This repository's release tags are
+# lightweight, and `git push --follow-tags` sends annotated tags only -- the
+# 0.4.2rc1 cut pushed main, printed no error, and left the tag (the release
+# workflow's only trigger) on the laptop.
+echo "  git commit -sam 'release: $NEW' && git tag v$NEW && git push origin main v$NEW"
