@@ -13,7 +13,7 @@ line in a prompt that a model may drift from, and becomes a property of the
 pipeline that drift cannot defeat.
 """
 
-__version__ = "0.4.2rc1"
+__version__ = "0.4.2"
 __all__ = ["__version__", "build_version"]
 
 

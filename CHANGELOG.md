@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-05
+
+No changes to the package since `0.4.2rc1`. The candidate was cut to watch the
+minting fix under a released artifact rather than under a checkout, and that is
+what it bought: installed from TestPyPI, `new` on a copy of `examples/workspace`
+wrote an empty criteria block, and `check` on that copy reported the item under
+the new rule -- one line, naming it. On the workspace the defect was found on,
+the new rule reported nothing, which is the zero measured before it was added.
+
+### Fixed
+
+- **`scripts/bump-version.sh` printed a push hint that skipped the tag.**
+  `git push --follow-tags` sends annotated tags only, and this repository's
+  release tags are lightweight, so following the hint pushed `main`, printed no
+  error, and left the tag -- the release workflow's only trigger -- on the
+  laptop. Observed on the `0.4.2rc1` cut. The hint now names the tag in the push.
+
 ## [0.4.2rc1] - 2026-09-05
 
 ### Fixed
@@ -2797,7 +2814,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.2rc1...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.2
 [0.4.2rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.2rc1
 [0.4.1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.1
 [0.4.1rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.1rc1
