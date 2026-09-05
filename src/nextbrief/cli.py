@@ -829,9 +829,9 @@ def _report_missing_paths(ws: Workspace, cat: Optional[Catalog]) -> None:
 
 
 def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
-    """Items whose acceptance criteria are shaped wrong, as at most three lines.
+    """Items whose acceptance criteria are shaped wrong, as at most four lines.
 
-    ★ Three lines total, however big the backlog. ★
+    ★ Four lines total, however big the backlog. ★
 
     One line per offending item is what this obviously wanted to be, and it is
     what would have killed it: every criterion written before the marker existed
@@ -843,6 +843,7 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
     Live items only. A closed item's criteria are history: the warning would be
     true, permanent, and impossible to act on, which is the same thing as noise.
     """
+    missing: List[str] = []
     unmarked: List[str] = []
     crowded: List[Tuple[str, int]] = []
     untraceable: List[Tuple[str, int]] = []
@@ -854,10 +855,18 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
             continue
         if not fm or not is_live(fm, today):
             continue
+        item_id = str(fm.get("id") or path.stem)
         lines = _ac_lines(body or "")
         if not lines:
+            # Nothing to judge the item by. This was silent until 2026-09-05,
+            # and could be: every item the engine minted carried its own title
+            # as criterion #1, so an empty item was one somebody had typed by
+            # hand. That line was a tautology and `_item_text` no longer writes
+            # it -- which makes "no criteria" the shape of every freshly minted
+            # item, and a shape nothing names is a fake criterion anyone could
+            # see swapped for a missing one nobody can.
+            missing.append(item_id)
             continue
-        item_id = str(fm.get("id") or path.stem)
         if any(_ac_owner(t) is None for _i, _m, t in lines):
             unmarked.append(item_id)
         # Reads the sentence. Runs nothing, opens nothing, resolves nothing --
@@ -882,6 +891,11 @@ def _criteria_warnings(ws: Workspace, cat: Optional[Catalog]) -> List[str]:
             crowded.append((item_id, yours))
 
     out: List[str] = []
+    if missing:
+        out.append(tr(cat, "cli.check.missing_criteria",
+                      "{n} open item(s) have no acceptance criteria at all, so "
+                      "nothing in the file can say when they are done: {ids}",
+                      n=len(missing), ids=_named(missing)))
     if unmarked:
         out.append(tr(cat, "cli.check.unmarked_criteria",
                       "{n} open item(s) have criteria with no ({agent})/({you}) "

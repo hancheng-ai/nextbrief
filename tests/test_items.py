@@ -164,6 +164,58 @@ class MintingIds(unittest.TestCase):
         self.assertEqual(items.next_item_id([], items.id_shape([])), "NA-0001")
 
 
+class AMintedItemDoesNotFakeACriterion(unittest.TestCase):
+    """★ A criterion that repeats the title is not a criterion. ★
+
+    Found on the real backlog on 2026-08-08 and still there on 2026-09-05: three
+    live items whose only acceptance criterion was their own title, verbatim.
+    `followup --promote` had written it, and `new` writes the same template.
+    Asked "is this done?", such an item answers "is the title true?" -- and a
+    title is always true, so nothing about the item can ever be judged complete.
+    Worse, it reads as an item somebody thought about, which is exactly what it
+    is not.
+
+    The minted block is empty instead. An empty pair of markers is an answer --
+    `WhenTheMarkersAreMissing` settled that a well-formed empty block reports
+    zero rather than falling back -- and zero is the honest count: nobody has
+    written a criterion yet. `check` names such items (see
+    `WarningAboutCriteriaNobodyCanAnswer`), and that is the half that makes an
+    empty block safe to write: without it the fix would turn a fake criterion
+    anyone can see into a missing one nobody can.
+    """
+
+    TITLE = "Write down the hotlink fix"
+
+    def _block(self, text):
+        """The lines between the markers. Both edges must be there: an empty
+        block is only an answer when it is a well-formed pair."""
+        lines = text.splitlines()
+        self.assertIn(items.AC_BEGIN, lines)
+        self.assertIn(items.AC_END, lines)
+        return lines[lines.index(items.AC_BEGIN) + 1:lines.index(items.AC_END)]
+
+    def _assert_no_faked_criterion(self, text):
+        # The title is still in the file. An assertion that it is absent from
+        # the block would pass just as well if the title had been lost entirely.
+        self.assertIn("title: %s" % self.TITLE, text)
+        block = self._block(text)
+        for line in block:
+            self.assertNotIn(self.TITLE, line,
+                             "the title was copied into the criteria: %r" % line)
+        self.assertEqual(block, [], "the minted block is not empty: %r" % block)
+        _fm, body = parse_frontmatter(text)
+        self.assertEqual(items.ac_lines(body), [])
+
+    def test_a_promoted_follow_up_gets_an_empty_block(self):
+        self._assert_no_faked_criterion(items.new_item_text(
+            "NA-0006", self.TITLE, "orchard", "NA-0005", "2026-03-01",
+            source_note="NA-0005-run-3-probes.md"))
+
+    def test_an_item_opened_by_hand_gets_an_empty_block(self):
+        self._assert_no_faked_criterion(items.blank_item_text(
+            "NA-0006", self.TITLE, "orchard", "2026-03-01"))
+
+
 class DeferRoundTrip(TempCase):
     """AC: one item goes the whole way -- parked, hidden, and back in the brief on
     the day it comes due."""
@@ -1890,7 +1942,7 @@ class WhoCanSayThisIsDone(TempCase):
 class WarningAboutCriteriaNobodyCanAnswer(TempCase):
     """`check` says when an item's criteria are shaped wrong.
 
-    Three shapes, all measured rather than invented. More than two criteria
+    Four shapes, all measured rather than invented. More than two criteria
     needing a person is a problem with the item -- across the three items that
     jammed, 20 criteria and 2 that genuinely needed the author. A criterion
     with no marker at all is one nobody has classified, which is why `done` still
@@ -1898,6 +1950,8 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
     afterwards is not waiting on anyone at all: 14 of the 126 open criteria in
     the workspace this was measured against, 2026-08-18, on the shape of
     "已经开口问了" -- true or false in the world, and recorded nowhere in it.
+    And an item with no criteria at all, which became a shape the engine mints
+    on 2026-09-05, when `_item_text` stopped writing the title as criterion #1.
 
     One line per rule, however large the backlog, and that is the load-bearing
     part: the obvious shape -- one line per item -- would print twenty-odd
@@ -2033,9 +2087,30 @@ class WarningAboutCriteriaNobodyCanAnswer(TempCase):
                            body=_acceptance((False, "unmarked"), (False, "also unmarked")))
         self.assertEqual(self._warnings(), [])
 
-    def test_an_item_with_no_criteria_at_all_is_not_warned_about(self):
+    def test_an_item_with_no_criteria_at_all_is_reported_once(self):
+        """Reversed on 2026-09-05, and what changed is upstream of this line.
+
+        Until then this asserted the opposite, and could afford to: nothing the
+        engine minted was ever empty, because `followup --promote` and `new`
+        wrote the item's own title as criterion #1. That line was a tautology --
+        see `AMintedItemDoesNotFakeACriterion` -- and it is gone, so a freshly
+        minted item now has zero criteria. Left silent, the fix would have turned
+        a fake criterion anyone can see into a missing one nobody can, which is
+        worse than the defect it replaced.
+
+        Measured before adding the line: 0 of 37 live items in the workspace this
+        was checked against on 2026-09-05, and 0 of 3 in `examples/`. The warning
+        says nothing about any backlog that exists today; it is for what gets
+        minted from now on.
+        """
         write_backlog_item(self.ws, "NA-0005", body="Nothing to verify here.")
-        self.assertEqual(self._warnings(), [])
+        # A closed item is history, here as for the other three rules.
+        write_backlog_item(self.ws, "NA-0006", status="done", body="Nothing here either.")
+        got = self._warnings()
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("NA-0005", got[0])
+        self.assertNotIn("NA-0006", got[0])
+        self.assertIn("no acceptance criteria", got[0])
 
     def test_check_prints_them_without_touching_its_exit_code(self):
         """★ Exit 3 means "out of date". ★
@@ -2482,6 +2557,23 @@ class FollowUpListing(TempCase):
         self.assertEqual(code, 0)
         self.assertIn("already", out)
         self.assertNotIn("About to create", out)
+
+    def test_the_promoted_item_carries_no_criterion_copied_from_its_title(self):
+        """The defect as it was found: NA-0034's only criterion was NA-0034's
+        title. End to end, because `AMintedItemDoesNotFakeACriterion` reads the
+        template and this reads the file `--promote` actually wrote -- and then
+        asks `check` about it, which is the net under the empty block."""
+        self._close_with("Write down the hotlink fix")
+        self._run("followup", "NA-0005", "--promote", "1")
+        path = next(self.ws.glob("backlog/NA-0006-*.md"))
+        fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        self.assertEqual(fm["title"], "Write down the hotlink fix")
+        self.assertEqual([t for _i, _m, t in items.ac_lines(body)], [])
+        # NA-0005 is closed, so the only live item is the one just minted.
+        got = cli._criteria_warnings(Workspace(self.ws, self.ws, "test"), None)
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("NA-0006", got[0])
+        self.assertIn("no acceptance criteria", got[0])
 
 
 class TheTraceLintReadsEnglishAsWellAsItReadsChinese(unittest.TestCase):

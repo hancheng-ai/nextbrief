@@ -110,6 +110,7 @@
   "cli.check.delivered_unticked_more": "另有 {n} 条 item 一格未勾，而工作区里有按它命名的文件。",
   "cli.check.duplicate_id": "有 {n} 个文件都声称 id 是 {id}，于是 `nextbrief done {id}` 会关掉它先撞上的那一个：",
   "cli.check.duplicate_id_fix": "先各给一个自己的 id（`nextbrief new` 会取下一个没人用的），再跑任何按 id 找条目的命令。",
+  "cli.check.missing_criteria": "有 {n} 条未结项的 item 一条验收标准都没有，于是文件里没有任何东西能说它做完了：{ids}",
   "cli.check.missing_path": "{n} 个项目声明的路径不存在，它们的数字量的是「目录没了」而不是「项目没动」：{ids}",
   "cli.check.missing_path_candidate": "  {pid}：`{missing}` 已不在；同名目录出现在 {candidates}。什么都没改——若确是它，请自行改 registry.jsonc 的 `paths`。",
   "cli.check.missing_path_nocandidate": "  {pid}：`{missing}` 已不在，且组合根下找不到同名目录。请改 registry.jsonc 的 `paths`，或把这个项目归档。",

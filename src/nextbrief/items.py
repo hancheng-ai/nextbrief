@@ -872,6 +872,15 @@ def _item_text(item_id: str, title: str, project: str, today: str,
     true on both paths: a person typed the sentence and typed the command that
     wrote it down. Automatic decay only ever withdraws the agent's own
     unconfirmed guesses, and this is neither.
+
+    The criteria block is written EMPTY. It used to carry the title as
+    criterion #1, and three items on a real backlog could never be closed
+    because of it: "is this done?" became "is the title true?", which it always
+    is. A well-formed empty block is read as zero criteria rather than as a
+    missing block (see :func:`ac_lines`), and `check` names every live item
+    that has none -- so the gap is visible, where the copied title only looked
+    filled in. Inventing a criterion here would be the same mistake as
+    inventing a provenance in :func:`blank_item_text`.
     """
     lines = [
         "---",
@@ -908,7 +917,6 @@ def _item_text(item_id: str, title: str, project: str, today: str,
         "<!-- SECTION:NEXT_ACTION:END -->",
         "",
         "<!-- AC:BEGIN -->",
-        "- [ ] #1 %s" % title,
         "<!-- AC:END -->",
         "",
         "<!-- SECTION:NOTES:BEGIN -->",

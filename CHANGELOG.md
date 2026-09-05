@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the released pages could only ever carry a command that fails there. A new
   docs-consistency guard forbids the one-phase sentences in both files,
   unconditionally, with a watch-red mutation per file.
+- **`followup --promote` and `new` no longer write the item's title as its
+  only acceptance criterion.** Found on a real backlog: three live items whose
+  criterion #1 was their own title, verbatim. That asks "is the title true?",
+  which it always is, so nothing about such an item can ever be judged done --
+  and it reads as an item somebody thought about, which is what it is not. The
+  minted block is now empty; a well-formed empty block already reads as zero
+  criteria rather than falling back to the whole body.
+
+### Added
+
+- **`check` warns about live items that have no acceptance criteria at all**,
+  one line however many there are, beside the three existing criteria rules.
+  Landed in the same change as the fix above and for its sake: on its own, that
+  fix would turn a fake criterion anyone can see into a missing one nobody can.
+  Measured before adding it: zero such items on the backlog this was checked
+  against and zero in `examples/`, so it says nothing about any workspace that
+  exists today.
 
 ## [0.4.1] - 2026-08-25
 

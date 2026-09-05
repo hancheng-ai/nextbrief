@@ -110,6 +110,7 @@
   "cli.check.delivered_unticked_more": "and {n} more item(s) with nothing ticked and a file named after them.",
   "cli.check.duplicate_id": "{n} files claim id {id}, so `nextbrief done {id}` would close whichever one it reached first:",
   "cli.check.duplicate_id_fix": "Give each of them an id of its own -- `nextbrief new` takes the next free one -- before running anything that addresses an item by id.",
+  "cli.check.missing_criteria": "{n} open item(s) have no acceptance criteria at all, so nothing in the file can say when they are done: {ids}",
   "cli.check.missing_path": "{n} project(s) declare a path that is not there, so their numbers are the absence of a directory rather than a quiet project: {ids}",
   "cli.check.missing_path_candidate": "  {pid}: `{missing}` is gone; a directory of that name is at {candidates}. Nothing has been changed -- edit `paths` in registry.jsonc if that is the one.",
   "cli.check.missing_path_nocandidate": "  {pid}: `{missing}` is gone, and no directory of that name was found under the portfolio root. Fix `paths` in registry.jsonc, or archive the project.",
