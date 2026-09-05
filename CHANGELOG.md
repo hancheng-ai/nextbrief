@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`settle <id> --set '#N=x: why' --note 'text'` dropped the note and said it
+  had recorded it.** The `--set` path built its NOTES lines from the per-spec
+  reasons alone and never read `--note`; then it printed "Recorded in NOTES."
+  because the spec reason had landed, so the file gained one line while the
+  confirmation spoke for two. Seen 2026-09-05 on a live workspace, and the
+  note had to be appended by hand. `--note` now lands beside `--set` in the
+  shape the interactive pass already used: once per marked criterion,
+  anchored to it, in addition to that criterion's own reason. The help text
+  had promised exactly this without a caveat.
+
 ## [0.4.2] - 2026-09-05
 
 No changes to the package since `0.4.2rc1`. The candidate was cut to watch the

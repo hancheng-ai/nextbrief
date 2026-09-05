@@ -4243,6 +4243,21 @@ def cmd_settle(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
             _err(tr(cat, "cli.settle.nothing_written", "Nothing was written."))
             return EXIT_FAIL
         updated = _apply_marks(original, marks)
+        # `--note` beside `--set` is the shared sentence for the batch, and it
+        # lands in ADDITION to each spec's own reason, not instead of it: the
+        # run that exposed this had both, and dropping either loses a thing the
+        # person typed on purpose. Written once per marked criterion, anchored
+        # to it, exactly as the interactive pass writes it, so the record never
+        # has to be untangled later. Until 0.4.1 this path never read the flag
+        # at all and then confirmed "Recorded in NOTES." from the spec reasons,
+        # which is the worse half: a note dropped silently is a note somebody
+        # believes was kept.
+        given = str(getattr(args, "note", None) or "").strip()
+        if given:
+            by_index = {i: t for i, _m, t in _ac_lines(original)}
+            for i in marks:
+                m = re.match(r"#\d+", by_index.get(i, "").strip())
+                notes.append((m.group(0) if m else "?", given))
         for anchor, why in notes:
             updated = append_note(updated, tr(
                 cat, "cli.settle.note_line",

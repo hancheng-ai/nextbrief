@@ -266,6 +266,68 @@ class SettleTakesTheDecisionAsAnArgument(TempCase):
         self.assertIn("#2", out + err)
         self.assertNotIn("nothing to settle", (out + err).lower())
 
+    # --- `--note` beside `--set` -------------------------------------------
+    #
+    # Observed 2026-09-05 on a live workspace, and confirmed against the released
+    # 0.4.1: `settle <id> --set '#1=x: why' --note 'text'` printed "Recorded in
+    # NOTES.", the file gained the `--set` line only, and the note had to be
+    # appended by hand. `--note` was read on the interactive path alone; the
+    # `--set` path built its NOTES lines from the per-spec reasons, never looked
+    # at `args.note`, and then confirmed from the wrong list. The help text
+    # promises the note "goes into NOTES beside the mark" with no caveat.
+    #
+    # The shape is the one the interactive pass already settled on: one line per
+    # marked criterion, anchored to it, so the record never has to be untangled.
+
+    def _notes_block(self):
+        text = self._text()
+        return text.split("<!-- SECTION:NOTES:BEGIN -->", 1)[1] \
+                   .split("<!-- SECTION:NOTES:END -->", 1)[0]
+
+    @staticmethod
+    def _confirmed(out):
+        return "Recorded in NOTES" in out or "已记进 NOTES" in out
+
+    def test_a_note_given_beside_set_lands_in_notes_beside_its_own_reason(self):
+        code, out, err = self._run("--set", "#1=x: ruled in conversation",
+                                   "--note", "ran the probe and saw 200")
+        self.assertEqual(code, 0, err)
+        block = self._notes_block()
+        lines = [ln for ln in block.splitlines() if "ran the probe and saw 200" in ln]
+        self.assertEqual(len(lines), 1, "--note was accepted and never written")
+        self.assertIn("#1", lines[0], "the note does not name the criterion it is about")
+        self.assertIn("ruled in conversation", block,
+                      "the spec's own reason was displaced by the note")
+        self.assertTrue(self._confirmed(out))
+
+    def test_the_confirmation_is_printed_only_for_a_note_that_landed(self):
+        """The half that made the defect silent.
+
+        The `--set` line had its own reason, so `notes` was non-empty and the
+        confirmation printed -- about the reason, while reading as if it were
+        about the note. Whatever the command says it recorded must be in the
+        file; the landing itself is guarded by the test above, this one guards
+        the claim.
+        """
+        _code, out, _err = self._run("--set", "#1=x: ruled in conversation",
+                                     "--note", "ran the probe and saw 200")
+        self.assertEqual(self._confirmed(out),
+                         "ran the probe and saw 200" in self._text(),
+                         "the confirmation and the file disagree about --note")
+
+    def test_a_note_with_no_per_spec_reason_is_written_per_criterion(self):
+        # Mirrors the interactive pass: one sentence for the batch is still
+        # written once per criterion, each line anchored to its own.
+        code, _out, err = self._run("--set", "#1=x", "--set", "#2=~",
+                                    "--note", "same call for both")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._marks(), ["x", "~", "x"])
+        anchored = [ln for ln in self._notes_block().splitlines()
+                    if "same call for both" in ln]
+        self.assertEqual(len(anchored), 2)
+        self.assertTrue(any("#1" in ln for ln in anchored))
+        self.assertTrue(any("#2" in ln for ln in anchored))
+
 
 
 class TheInteractivePassAsksPerCriterion(TempCase):
