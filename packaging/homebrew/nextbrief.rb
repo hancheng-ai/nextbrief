@@ -82,7 +82,7 @@ class Nextbrief < Formula
   # to be right, and everything around it has to protect itself by having
   # nothing version-shaped left to match.
   # <!-- bump-version:skip:begin -->
-  # sha256-of: 0.4.1
+  # sha256-of: 0.4.2
   # <!-- bump-version:skip:end -->
   #
   # Which release this digest was actually taken from, written down because it
@@ -118,7 +118,7 @@ class Nextbrief < Formula
   # holds both directions -- no pinned command in a README while the two lines
   # here disagree, and no README prose asserting either phase of the cycle as
   # a permanent fact.
-  sha256 "f30af1da141e1b4b787c4c4523226d8094a241a141c3264bbc20c5ccd8548311"
+  sha256 "552ab4e564e957308b74e50118fbaedbc99cd03b3ae8a9dc9f22520ededfbbbf"
   license "Apache-2.0"
   head "https://github.com/hancheng-ai/nextbrief.git", branch: "main"
 
