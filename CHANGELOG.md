@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2rc1] - 2026-09-05
+
 ### Fixed
 
 - **Both READMEs went on asserting that the formula's pinned `brew install`
@@ -2795,7 +2797,8 @@ Not features, but the reasons the code looks the way it does:
   path and returns nothing; external tools are optional. One bad document does
   not cost you the brief.
 
-[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/hancheng-ai/nextbrief/compare/v0.4.2rc1...HEAD
+[0.4.2rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.2rc1
 [0.4.1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.1
 [0.4.1rc1]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.1rc1
 [0.4.0]: https://github.com/hancheng-ai/nextbrief/releases/tag/v0.4.0
