@@ -241,6 +241,7 @@
   "cli.settle.no_marks": "什么都没标。{id} 没有变化。",
   "cli.settle.not_open": "{id} 已经是 {status}。`settle` 是给**还开着**的条目记决定的；已结项条目的验收项归 `nextbrief done`，或者直接改文件。",
   "cli.settle.note_line": "**【{date} {anchor} 手动定的（`nextbrief settle`）】** —— {text}",
+  "cli.settle.note_line_bare": "**【{date} 手动定的（`nextbrief settle`）】** —— {text}",
   "cli.settle.note_prompt": "一句话说明理由（直接回车跳过）：",
   "cli.settle.note_saved": "已记进 NOTES。",
   "cli.settle.nothing_open": "{id} 没有还开着的验收项——没有什么要定的。",

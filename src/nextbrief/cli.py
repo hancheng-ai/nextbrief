@@ -4221,19 +4221,48 @@ def cmd_settle(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
         return EXIT_FAIL
 
     open_rows = [(i, text) for i, mark, text in _ac_lines(original) if mark == AC_OPEN]
-    # `--set` is checked BEFORE this. A named criterion that is already marked
-    # deserves the refusal that says so and names it; bailing out here with
-    # "nothing to settle" answers a question nobody asked and hides which of the
-    # ones they named was the problem.
-    if not open_rows and not getattr(args, "set_criteria", None):
-        print(tr(cat, "cli.settle.nothing_open",
-                 "{id} has no open criteria -- nothing to settle.", id=args.item_id))
-        return EXIT_OK
 
     # A decision given as an argument needs no terminal, and that is the point:
     # it is the form that works in a pipe, in a script, and in a command drafted
     # after the conversation where the decision was actually made.
     specs = list(getattr(args, "set_criteria", None) or [])
+
+    # `--note` with no `--set` is read three times below -- once per place a
+    # mark could have absorbed it -- and each of those places used to end the
+    # run without ever looking at `args.note`: "no open criteria", off a
+    # terminal, and "nothing marked" all printed a clean exit and wrote
+    # nothing. `--note` promises one line in NOTES with no caveat about a
+    # criterion existing to carry it, so when none of those three places has
+    # anything to mark, THIS writes the line instead, unanchored, rather than
+    # let the text be accepted on the command line and never seen again.
+    # Seen twice, 2026-09-05, on a live workspace: two unattended runs each
+    # printed 0 and left `git diff` empty, and the note was appended by hand.
+    bare_note = "" if specs else str(getattr(args, "note", None) or "").strip()
+
+    def _write_bare_note() -> int:
+        updated = append_note(original, tr(
+            cat, "cli.settle.note_line_bare",
+            "**[{date}] settled by hand (`nextbrief settle`)** -- {text}",
+            date=dt.date.today().isoformat(), text=bare_note))
+        try:
+            write_text(ws, path, updated)
+        except OSError as exc:
+            _err("error: cannot write %s: %s" % (path, exc))
+            return EXIT_FAIL
+        print(tr(cat, "cli.settle.note_saved", "Recorded in NOTES."))
+        return EXIT_OK
+
+    # `--set` is checked BEFORE this. A named criterion that is already marked
+    # deserves the refusal that says so and names it; bailing out here with
+    # "nothing to settle" answers a question nobody asked and hides which of the
+    # ones they named was the problem.
+    if not open_rows and not specs:
+        if bare_note:
+            return _write_bare_note()
+        print(tr(cat, "cli.settle.nothing_open",
+                 "{id} has no open criteria -- nothing to settle.", id=args.item_id))
+        return EXIT_OK
+
     if specs:
         try:
             marks, notes = _parse_settle_sets(specs, _ac_lines(original),
@@ -4243,6 +4272,21 @@ def cmd_settle(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
             _err(tr(cat, "cli.settle.nothing_written", "Nothing was written."))
             return EXIT_FAIL
         updated = _apply_marks(original, marks)
+        # `--note` beside `--set` is the shared sentence for the batch, and it
+        # lands in ADDITION to each spec's own reason, not instead of it: the
+        # run that exposed this had both, and dropping either loses a thing the
+        # person typed on purpose. Written once per marked criterion, anchored
+        # to it, exactly as the interactive pass writes it, so the record never
+        # has to be untangled later. Until 0.4.1 this path never read the flag
+        # at all and then confirmed "Recorded in NOTES." from the spec reasons,
+        # which is the worse half: a note dropped silently is a note somebody
+        # believes was kept.
+        given = str(getattr(args, "note", None) or "").strip()
+        if given:
+            by_index = {i: t for i, _m, t in _ac_lines(original)}
+            for i in marks:
+                m = re.match(r"#\d+", by_index.get(i, "").strip())
+                notes.append((m.group(0) if m else "?", given))
         for anchor, why in notes:
             updated = append_note(updated, tr(
                 cat, "cli.settle.note_line",
@@ -4265,7 +4309,14 @@ def cmd_settle(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
     # on a prompt at 21:30 produces nothing and says nothing about it. `review`
     # refuses the same way and for the same reason, and saying what it WOULD have
     # asked is what makes the refusal a report rather than a shrug.
+    #
+    # This is where both live incidents actually ran: an unattended run is
+    # never at a terminal, so `--note` alone always landed here, was never
+    # read, and the refusal below -- accurate for a `--set` this run did not
+    # have -- was mistaken by the two chips that hit it for a done deal.
     if not sys.stdin.isatty():
+        if bare_note:
+            return _write_bare_note()
         print(tr(cat, "cli.settle.would_ask",
                  "Not a terminal, so nothing was asked and nothing was written. "
                  "{n} open criterion(s) would have been offered:", n=len(open_rows)))
@@ -4282,6 +4333,12 @@ def cmd_settle(ws: Workspace, args: argparse.Namespace, cat: Optional[Catalog]) 
                 "Nothing marked. {id} is unchanged.", id=args.item_id))
         return EXIT_FAIL
     if not picked and not dropped:
+        # A person at a real prompt who left every criterion alone still typed
+        # `--note`, and it means the same thing it means everywhere else in
+        # this function: one dated line, not attached to a mark that was never
+        # made.
+        if bare_note:
+            return _write_bare_note()
         print(tr(cat, "cli.settle.no_marks",
                  "Nothing marked. {id} is unchanged.", id=args.item_id))
         return EXIT_OK

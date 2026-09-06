@@ -266,6 +266,179 @@ class SettleTakesTheDecisionAsAnArgument(TempCase):
         self.assertIn("#2", out + err)
         self.assertNotIn("nothing to settle", (out + err).lower())
 
+    # --- `--note` beside `--set` -------------------------------------------
+    #
+    # Observed 2026-09-05 on a live workspace, and confirmed against the released
+    # 0.4.1: `settle <id> --set '#1=x: why' --note 'text'` printed "Recorded in
+    # NOTES.", the file gained the `--set` line only, and the note had to be
+    # appended by hand. `--note` was read on the interactive path alone; the
+    # `--set` path built its NOTES lines from the per-spec reasons, never looked
+    # at `args.note`, and then confirmed from the wrong list. The help text
+    # promises the note "goes into NOTES beside the mark" with no caveat.
+    #
+    # The shape is the one the interactive pass already settled on: one line per
+    # marked criterion, anchored to it, so the record never has to be untangled.
+
+    def _notes_block(self):
+        text = self._text()
+        return text.split("<!-- SECTION:NOTES:BEGIN -->", 1)[1] \
+                   .split("<!-- SECTION:NOTES:END -->", 1)[0]
+
+    @staticmethod
+    def _confirmed(out):
+        return "Recorded in NOTES" in out or "已记进 NOTES" in out
+
+    def test_a_note_given_beside_set_lands_in_notes_beside_its_own_reason(self):
+        code, out, err = self._run("--set", "#1=x: ruled in conversation",
+                                   "--note", "ran the probe and saw 200")
+        self.assertEqual(code, 0, err)
+        block = self._notes_block()
+        lines = [ln for ln in block.splitlines() if "ran the probe and saw 200" in ln]
+        self.assertEqual(len(lines), 1, "--note was accepted and never written")
+        self.assertIn("#1", lines[0], "the note does not name the criterion it is about")
+        self.assertIn("ruled in conversation", block,
+                      "the spec's own reason was displaced by the note")
+        self.assertTrue(self._confirmed(out))
+
+    def test_the_confirmation_is_printed_only_for_a_note_that_landed(self):
+        """The half that made the defect silent.
+
+        The `--set` line had its own reason, so `notes` was non-empty and the
+        confirmation printed -- about the reason, while reading as if it were
+        about the note. Whatever the command says it recorded must be in the
+        file; the landing itself is guarded by the test above, this one guards
+        the claim.
+        """
+        _code, out, _err = self._run("--set", "#1=x: ruled in conversation",
+                                     "--note", "ran the probe and saw 200")
+        self.assertEqual(self._confirmed(out),
+                         "ran the probe and saw 200" in self._text(),
+                         "the confirmation and the file disagree about --note")
+
+    def test_a_note_with_no_per_spec_reason_is_written_per_criterion(self):
+        # Mirrors the interactive pass: one sentence for the batch is still
+        # written once per criterion, each line anchored to its own.
+        code, _out, err = self._run("--set", "#1=x", "--set", "#2=~",
+                                    "--note", "same call for both")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._marks(), ["x", "~", "x"])
+        anchored = [ln for ln in self._notes_block().splitlines()
+                    if "same call for both" in ln]
+        self.assertEqual(len(anchored), 2)
+        self.assertTrue(any("#1" in ln for ln in anchored))
+        self.assertTrue(any("#2" in ln for ln in anchored))
+
+
+class ANoteWithNoSetIsNotDiscarded(TempCase):
+    """`settle <id> --note 'text'` with no `--set` used to write nothing.
+
+    Observed 2026-09-05, twice, on a live workspace: two independent runs of
+    `settle <id> --note "text"` each printed a happy exit and left `git diff`
+    empty. Neither run had `--set`, so the only path left was the interactive
+    one, and every branch on it assumed a criterion to hang the note off of --
+    the non-terminal refusal listed open criteria and wrote nothing itself, and
+    the picker only ever wrote a note beside a mark it had just made. Pick
+    nothing (or run off a terminal at all) and `args.note` was read nowhere:
+    the text was accepted on the command line and never seen again, on a run
+    that still exited 0.
+
+    The fix: `--note` with no `--set` needs no criterion and no terminal. It
+    is a plain request to leave one dated line in NOTES, so it is served
+    before the "nothing open" bail-out, the non-terminal refusal, and the
+    picker ever run -- and it never touches a criterion's mark.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ws = self.workspace()
+        write_backlog_item(self.ws, "NA-0001", body=BODY, status="open")
+
+    def _path(self):
+        return next(self.ws.glob("backlog/NA-0001*.md"))
+
+    def _text(self):
+        return self._path().read_text(encoding="utf-8")
+
+    def _marks(self):
+        return [ln.strip()[3] for ln in self._text().splitlines()
+                if ln.strip().startswith("- [")]
+
+    def _notes_block(self):
+        text = self._text()
+        return text.split("<!-- SECTION:NOTES:BEGIN -->", 1)[1] \
+                   .split("<!-- SECTION:NOTES:END -->", 1)[0]
+
+    @staticmethod
+    def _confirmed(out):
+        return "Recorded in NOTES" in out or "已记进 NOTES" in out
+
+    def _run_off_a_terminal(self, *argv):
+        def never(*_a, **_k):
+            raise AssertionError("asked for input with nobody at the keyboard")
+
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=False), \
+                mock.patch.object(cli, "_ask_ticks", side_effect=never):
+            return capture(cli.main, ["settle", "NA-0001",
+                                      "--workspace", str(self.ws)] + list(argv))
+
+    def test_a_bare_note_lands_as_one_dated_line_off_a_terminal(self):
+        code, out, err = self._run_off_a_terminal("--note", "ran the probe, diff was empty")
+        self.assertEqual(code, 0, err)
+        block = self._notes_block()
+        lines = [ln for ln in block.splitlines()
+                 if "ran the probe, diff was empty" in ln]
+        self.assertEqual(len(lines), 1, "--note was accepted and never written")
+        self.assertTrue(self._confirmed(out))
+        # Unanchored: it names no criterion, because it was never asked to.
+        self.assertNotRegex(lines[0], r"#\d",
+                            "a bare --note must not invent a criterion to anchor to")
+
+    def test_a_bare_note_needs_no_open_criteria(self):
+        # All three boxes settled already -- the "nothing open" bail-out would
+        # normally fire here, and used to, discarding the note along with it.
+        settled = BODY.replace("- [ ] #1 (you) decide the direction",
+                               "- [x] #1 (you) decide the direction") \
+                      .replace("- [ ] #2 (agent) prove it with a test",
+                               "- [x] #2 (agent) prove it with a test")
+        write_backlog_item(self.ws, "NA-0002", body=settled, status="open")
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=False):
+            code, out, err = capture(cli.main, ["settle", "NA-0002",
+                                                "--note", "no open criteria, still a note",
+                                                "--workspace", str(self.ws)])
+        self.assertEqual(code, 0, err)
+        path = next(self.ws.glob("backlog/NA-0002*.md"))
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("no open criteria, still a note", text)
+        self.assertTrue(self._confirmed(out))
+
+    def test_a_bare_note_marks_nothing(self):
+        before = self._marks()
+        code, _out, err = self._run_off_a_terminal("--note", "just a note")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._marks(), before, "a bare --note touched a criterion's mark")
+
+    def test_the_confirmation_is_printed_only_for_a_note_that_landed(self):
+        _code, out, _err = self._run_off_a_terminal("--note", "ran the probe, diff was empty")
+        self.assertEqual(self._confirmed(out),
+                         "ran the probe, diff was empty" in self._text(),
+                         "the confirmation and the file disagree about --note")
+
+    def test_a_bare_note_works_on_a_real_terminal_too_when_nothing_is_picked(self):
+        # The picker still runs on a real terminal -- `--note` beside actual
+        # picks stays attached per criterion (see `TheInteractivePassAsksPerCriterion`).
+        # This is the other half: the picker ran and came back with nothing, so
+        # the note falls back to the same unanchored line the non-terminal path
+        # writes, rather than being dropped the way "Nothing marked" used to
+        # drop it.
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), \
+                mock.patch.object(cli, "_ask_ticks", return_value=([], [])):
+            code, out, err = capture(cli.main, ["settle", "NA-0001",
+                                                "--note", "typed at a real prompt",
+                                                "--workspace", str(self.ws)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("typed at a real prompt", self._text())
+        self.assertTrue(self._confirmed(out))
+        self.assertEqual(self._marks(), [" ", " ", "x"], "nothing was picked; nothing should be marked")
 
 
 class TheInteractivePassAsksPerCriterion(TempCase):
